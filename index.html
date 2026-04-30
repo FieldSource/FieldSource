@@ -15,7 +15,6 @@
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:15px}
-
 header{background:var(--green-dark);padding:0 16px;display:flex;align-items:center;justify-content:space-between;height:56px;position:sticky;top:0;z-index:100}
 .logo-mark{display:flex;align-items:center;gap:10px}
 .logo-grass{width:32px;height:28px}
@@ -23,23 +22,24 @@ header{background:var(--green-dark);padding:0 16px;display:flex;align-items:cent
 .logo-sub{color:rgba(255,255,255,0.55);font-size:10px;font-weight:400;letter-spacing:0.5px;text-transform:uppercase}
 .header-add{background:var(--green-mid);color:#fff;border:none;border-radius:var(--radius-sm);padding:7px 14px;font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer}
 .header-add:active{transform:scale(0.97)}
-
 .view-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 16px;display:flex;overflow-x:auto;-ms-overflow-style:none;scrollbar-width:none}
 .view-bar::-webkit-scrollbar{display:none}
-.vtab{padding:12px 16px;font-size:13px;font-weight:500;color:var(--text-3);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;font-family:'DM Sans',sans-serif;transition:color .15s}
+.vtab{padding:12px 14px;font-size:13px;font-weight:500;color:var(--text-3);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;font-family:'DM Sans',sans-serif;transition:color .15s}
 .vtab.active{color:var(--green);border-bottom-color:var(--green);font-weight:600}
-
 .nav-row{display:flex;align-items:center;padding:10px 16px;gap:8px;background:var(--surface);border-bottom:1px solid var(--border)}
 .nav-btn{width:32px;height:32px;border-radius:var(--radius-sm);border:1px solid var(--border-2);background:none;color:var(--green);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .nav-btn:active{background:var(--green-light)}
 .period-label{flex:1;text-align:center;font-size:14px;font-weight:600;color:var(--text)}
-
 .legend{display:flex;gap:10px;padding:8px 16px;background:var(--bg);flex-wrap:wrap}
 .leg-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-2);white-space:nowrap}
 .leg-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
-
 main{padding:12px 16px 100px}
-
+/* STATUS */
+.s-upcoming{background:#f1f5f9;color:#475569;border-color:#cbd5e1}
+.s-inprog{background:#fef3c7;color:#92400e;border-color:#fcd34d}
+.s-touchup{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
+.s-complete{background:#dcfce7;color:#14532d;border-color:#86efac}
+/* WEEK */
 .week-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .week-grid{display:grid;grid-template-columns:repeat(7,minmax(110px,1fr));gap:8px;min-width:700px}
 .day-col{min-height:100px}
@@ -51,13 +51,9 @@ main{padding:12px 16px 100px}
 .chip-detail{opacity:0.8;margin-top:1px}
 .multi-day-bar{position:absolute;bottom:0;left:0;right:0;height:3px;border-radius:0 0 var(--radius-sm) var(--radius-sm);background:currentColor;opacity:0.35}
 .empty-col{font-size:11px;color:var(--text-3);text-align:center;padding:10px 0}
-
-/* STATUS COLORS — auto-derived */
-.s-upcoming{background:#f1f5f9;color:#475569;border-color:#cbd5e1}
-.s-inprog{background:#fef3c7;color:#92400e;border-color:#fcd34d}
-.s-touchup{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
-.s-complete{background:#dcfce7;color:#14532d;border-color:#86efac}
-
+.add-day-btn{width:100%;padding:5px 0;border:1.5px dashed var(--border-2);background:none;border-radius:var(--radius-sm);color:var(--text-3);font-size:16px;cursor:pointer;margin-top:2px;transition:all .15s;display:flex;align-items:center;justify-content:center;line-height:1}
+.add-day-btn:hover{border-color:var(--green-mid);color:var(--green);background:var(--green-light)}
+/* MONTH */
 .month-wrap{overflow-x:auto}
 .month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--border);border-radius:var(--radius);overflow:hidden;min-width:320px}
 .dow-header{background:var(--green-dark);color:rgba(255,255,255,0.8);font-size:11px;font-weight:600;text-align:center;padding:7px 2px;letter-spacing:0.3px}
@@ -66,7 +62,7 @@ main{padding:12px 16px 100px}
 .m-num{font-size:11px;color:var(--text-3);margin-bottom:3px;font-family:'DM Mono',monospace}
 .m-num.today-num{color:var(--green);font-weight:600}
 .month-chip{font-size:10px;padding:2px 4px;border-radius:3px;margin-bottom:2px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
-
+/* LIST */
 .list-section{margin-bottom:20px}
 .list-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-3);margin-bottom:8px;padding-left:2px}
 .job-row{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:10px;transition:border-color .15s}
@@ -75,10 +71,25 @@ main{padding:12px 16px 100px}
 .job-row-client{font-size:14px;font-weight:600;color:var(--text)}
 .job-row-detail{font-size:12px;color:var(--text-2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .status-badge{font-size:11px;font-weight:500;padding:3px 9px;border-radius:99px;white-space:nowrap;flex-shrink:0}
-
 .empty-state{text-align:center;padding:48px 24px;color:var(--text-3)}
 .empty-state p{font-size:14px}
-
+/* EQUIPMENT VIEW */
+.equip-view-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.equip-view-grid{display:grid;gap:8px;min-width:700px}
+.equip-section-title{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin:16px 0 8px;padding-left:2px}
+.equip-row{display:grid;grid-template-columns:160px repeat(7,minmax(90px,1fr));gap:1px;background:var(--border);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:4px}
+.equip-row-header{display:grid;grid-template-columns:160px repeat(7,minmax(90px,1fr));gap:1px;background:var(--border);border-radius:var(--radius-sm) var(--radius-sm) 0 0;overflow:hidden;margin-bottom:1px}
+.equip-name-cell{background:var(--surface);padding:8px 10px;font-size:11px;font-weight:600;color:var(--text-2);display:flex;align-items:center;line-height:1.3}
+.equip-name-cell.header{background:var(--green-dark);color:rgba(255,255,255,0.9);font-weight:600}
+.equip-day-cell{background:var(--surface);padding:5px 4px;min-height:48px;font-size:10px;line-height:1.3}
+.equip-day-cell.header{background:var(--green-dark);color:rgba(255,255,255,0.8);font-weight:600;text-align:center;font-size:10px;display:flex;align-items:center;justify-content:center;min-height:32px}
+.equip-day-cell.today-col{background:#f0fdf4}
+.equip-job-tag{display:block;padding:2px 4px;border-radius:3px;margin-bottom:2px;font-size:10px;font-weight:500;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.equip-free{color:var(--text-3);font-size:10px;padding:2px 4px}
+/* CONFLICT */
+.conflict-warning{background:#fee2e2;border:1.5px solid #fca5a5;border-radius:var(--radius-sm);padding:8px 10px;margin-top:6px;font-size:11px;color:#991b1b;font-weight:500}
+.sel-opt.conflict{border-color:#ef4444!important;background:#fee2e2!important;color:#991b1b!important}
+.sel-opt.conflict::after{content:' ⚠';font-size:10px}
 /* MODAL */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;display:flex;align-items:flex-end;justify-content:center;animation:fadeIn .2s ease}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -87,19 +98,12 @@ main{padding:12px 16px 100px}
 .sheet-handle{width:36px;height:4px;background:var(--border-2);border-radius:2px;margin:0 auto 18px}
 .sheet-title{font-size:17px;font-weight:600;color:var(--text);margin-bottom:4px}
 .sheet-subtitle{font-size:12px;color:var(--text-3);margin-bottom:18px}
-
 .form-group{margin-bottom:14px}
 .form-label{font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:5px;display:block;text-transform:uppercase;letter-spacing:0.4px}
-.form-group input[type="text"],
-.form-group input[type="date"],
-.form-group input[type="number"],
-.form-group select{width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:15px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);-webkit-appearance:none;appearance:none;outline:none}
+.form-group input[type="text"],.form-group input[type="date"],.form-group input[type="number"],.form-group select{width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:15px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);-webkit-appearance:none;appearance:none;outline:none}
 .form-group input:focus,.form-group select:focus{border-color:var(--green);background:#fff}
-
 .date-row{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end}
 .date-sep{font-size:12px;color:var(--text-3);text-align:center;padding-bottom:10px}
-
-/* TOUCH UP TOGGLE */
 .touchup-toggle{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg);border:1.5px solid var(--border-2);border-radius:var(--radius-sm);cursor:pointer;transition:all .15s;user-select:none}
 .touchup-toggle.on{background:#fee2e2;border-color:#fca5a5}
 .toggle-track{width:40px;height:22px;border-radius:11px;background:#cbd5e1;position:relative;flex-shrink:0;transition:background .2s}
@@ -108,13 +112,9 @@ main{padding:12px 16px 100px}
 .touchup-toggle.on .toggle-thumb{transform:translateX(18px)}
 .toggle-label{font-size:13px;font-weight:500;color:var(--text-2)}
 .touchup-toggle.on .toggle-label{color:#991b1b;font-weight:600}
-
-/* MULTI-SELECT GRIDS */
 .crew-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
 .sel-opt{padding:8px 6px;border-radius:var(--radius-sm);border:1.5px solid var(--border-2);font-size:12px;font-weight:500;cursor:pointer;text-align:center;transition:all .15s;background:var(--bg);color:var(--text-2);user-select:none;line-height:1.3}
 .sel-opt.picked{background:var(--green-light);color:var(--green-dark);border-color:var(--green);font-weight:600}
-
-/* EQUIPMENT */
 .equip-tabs{display:flex;gap:4px;margin-bottom:8px;overflow-x:auto;-ms-overflow-style:none;scrollbar-width:none}
 .equip-tabs::-webkit-scrollbar{display:none}
 .etab{padding:5px 12px;border-radius:99px;border:1px solid var(--border-2);background:var(--bg);font-size:12px;font-weight:500;color:var(--text-2);cursor:pointer;white-space:nowrap;font-family:'DM Sans',sans-serif;flex-shrink:0;transition:all .15s}
@@ -126,30 +126,23 @@ main{padding:12px 16px 100px}
 .equip-tag{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--green-light);color:var(--green-dark);border-radius:99px;font-size:11px;font-weight:500;border:1px solid var(--green-mid)}
 .equip-tag-x{cursor:pointer;font-size:14px;line-height:1;opacity:0.7}
 .equip-tag-x:hover{opacity:1}
-
 .sheet-actions{display:flex;gap:8px;margin-top:20px}
 .btn-save{flex:1;padding:13px;background:var(--green);color:#fff;border:none;border-radius:var(--radius);font-size:15px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer}
 .btn-save:active{background:var(--green-dark)}
 .btn-cancel{padding:13px 18px;background:var(--bg);color:var(--text-2);border:1px solid var(--border-2);border-radius:var(--radius);font-size:15px;font-family:'DM Sans',sans-serif;cursor:pointer}
 .btn-delete{padding:13px 14px;background:none;color:#dc2626;border:1px solid #fca5a5;border-radius:var(--radius);font-size:13px;font-family:'DM Sans',sans-serif;cursor:pointer}
-
 .stats-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;text-align:center}
 .stat-num{font-size:22px;font-weight:600;font-family:'DM Mono',monospace;color:var(--green-dark);line-height:1;margin-bottom:3px}
 .stat-label{font-size:10px;color:var(--text-3);font-weight:500;text-transform:uppercase;letter-spacing:0.4px}
-
 .filter-row{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;-ms-overflow-style:none;scrollbar-width:none}
 .filter-row::-webkit-scrollbar{display:none}
 .filter-chip{padding:5px 12px;border-radius:99px;border:1px solid var(--border-2);background:var(--surface);font-size:12px;font-weight:500;color:var(--text-2);cursor:pointer;white-space:nowrap;font-family:'DM Sans',sans-serif;transition:all .15s;flex-shrink:0}
 .filter-chip.active{background:var(--green);color:#fff;border-color:var(--green)}
 .duration-badge{font-size:10px;background:rgba(0,0,0,0.12);color:inherit;border-radius:3px;padding:1px 4px;margin-left:3px;font-weight:600}
-.add-day-btn{width:100%;padding:5px 0;border:1.5px dashed var(--border-2);background:none;border-radius:var(--radius-sm);color:var(--text-3);font-size:16px;cursor:pointer;margin-top:2px;transition:all .15s;display:flex;align-items:center;justify-content:center;line-height:1}
-.add-day-btn:hover{border-color:var(--green-mid);color:var(--green);background:var(--green-light)}
-.add-day-btn:active{transform:scale(0.97)}
 </style>
 </head>
 <body>
-
 <header>
   <div class="logo-mark">
     <svg class="logo-grass" viewBox="0 0 40 36" fill="none">
@@ -170,6 +163,7 @@ main{padding:12px 16px 100px}
   <button class="vtab" onclick="setView('next')">Next week</button>
   <button class="vtab" onclick="setView('month')">Month</button>
   <button class="vtab" onclick="setView('list')">All jobs</button>
+  <button class="vtab" onclick="setView('equipment')">Equipment</button>
 </div>
 
 <div class="nav-row">
@@ -178,7 +172,7 @@ main{padding:12px 16px 100px}
   <button class="nav-btn" onclick="navFwd()">&#8594;</button>
 </div>
 
-<div class="legend">
+<div class="legend" id="legend-bar">
   <div class="leg-item"><div class="leg-dot s-upcoming"></div>Upcoming</div>
   <div class="leg-item"><div class="leg-dot s-inprog"></div>In progress</div>
   <div class="leg-item"><div class="leg-dot s-touchup"></div>Touch up needed</div>
@@ -189,7 +183,7 @@ main{padding:12px 16px 100px}
 <div id="modal-root"></div>
 
 <script>
-const CLIENTS=['Reynoldsburg Schools','City of Bexley','Mt Gilead Schools','Ohio Premier','Logan Elm','Meadowbrook','Kenton','Fairbanks','North Union','Sharon'];
+const CLIENTS=['Adena','Canal Winchester','Centerville-Washington','Chillicothe','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
 const SERVICES=['Mowing','Aeration','Fertilization','Topdressing','Irrigation check','Shockwave','Seeding'];
 const CREW=['Dan Sr','Dan Jr','Brandon','Greg','Matt','Wes','Intern','Penlin'];
 const EQUIPMENT={
@@ -199,12 +193,16 @@ const EQUIPMENT={
   'Hand Tools':['Stihl Backpack Blower #1','Stihl Backpack Blower #2','Stihl Backpack Blower #3','Stihl Combi','Stihl String Trimmer #1','Stihl String Trimmer #2','Little Wonder Pro Edger','Jumping Jack Tamper','MQ Plate Compactor','Ryan Sod Cutter','Dewalt Hammer Drill','Stihl RB 400','Honda EU 2200i','Husqvarna Trimmer','Billy Goat Sod Cutter','Mi-T-M GH-3003','Stihl ST 500i']
 };
 const EQUIP_CATS=Object.keys(EQUIPMENT);
+const ALL_EQUIP=[...EQUIPMENT.Trailers,...EQUIPMENT.Attachments,...EQUIPMENT.Specialty,...EQUIPMENT['Hand Tools']];
 const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const DOW_SHORT=['Su','Mo','Tu','We','Th','Fr','Sa'];
 const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const STATUS_COLORS={upcoming:'#f1f5f9',inprog:'#fef3c7',touchup:'#fee2e2',complete:'#dcfce7'};
 
 let jobs=JSON.parse(localStorage.getItem('fs_jobs')||'[]');
 let view='week',offset=0,editId=null,crewFilter='All';
 let pickedCrew=[],pickedEquip=[],touchUpOn=false,activeEquipTab=EQUIP_CATS[0];
+let equipOffset=0; // separate week offset for equipment view
 
 function save(){localStorage.setItem('fs_jobs',JSON.stringify(jobs))}
 function today(){const d=new Date();d.setHours(0,0,0,0);return d}
@@ -214,13 +212,12 @@ function fmtShort(s){return parseISO(s).toLocaleDateString('en-US',{month:'short
 function addDays(d,n){const r=new Date(d);r.setDate(r.getDate()+n);return r}
 function weekStart(d,off){const dt=new Date(d);dt.setDate(dt.getDate()-dt.getDay()+(off*7));dt.setHours(0,0,0,0);return dt}
 
-// AUTO STATUS: derived from dates, manual touchup flag overrides
 function getStatus(j){
   if(j.touchUp) return 'touchup';
-  const todayStr=isoDate(today());
+  const ts=isoDate(today());
   const end=isoDate(addDays(parseISO(j.startDate),(parseInt(j.duration)||1)-1));
-  if(todayStr<j.startDate) return 'upcoming';
-  if(todayStr>end) return 'complete';
+  if(ts<j.startDate) return 'upcoming';
+  if(ts>end) return 'complete';
   return 'inprog';
 }
 function statusMeta(key){
@@ -231,7 +228,6 @@ function statusMeta(key){
     complete:{label:'Complete',cls:'s-complete'}
   }[key]||{label:'Upcoming',cls:'s-upcoming'};
 }
-
 function jobDates(j){
   const start=parseISO(j.startDate);
   const days=Math.max(1,parseInt(j.duration)||1);
@@ -245,17 +241,49 @@ function filteredJobs(){
 }
 function jobsForDate(ds){return filteredJobs().filter(j=>jobDates(j).includes(ds))}
 
+// Returns all jobs (not filtered) that use a specific piece of equipment on a specific date
+function jobsUsingEquipOnDate(equipName, ds){
+  return jobs.filter(j=>(j.equip||[]).includes(equipName) && jobDates(j).includes(ds));
+}
+
+// Check if a trailer has a conflict with the current job being edited
+function trailerConflictJob(trailerName, startDate, duration, excludeId){
+  const dates=[];
+  const start=parseISO(startDate);
+  const days=Math.max(1,parseInt(duration)||1);
+  for(let i=0;i<days;i++) dates.push(isoDate(addDays(start,i)));
+  for(const j of jobs){
+    if(j.id===excludeId) continue;
+    if(!(j.equip||[]).includes(trailerName)) continue;
+    const jDates=jobDates(j);
+    if(dates.some(d=>jDates.includes(d))) return j;
+  }
+  return null;
+}
+
 function setView(v){
-  view=v;offset=0;
+  view=v;
+  if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.vtab')[{week:0,next:1,month:2,list:3}[v]].classList.add('active');
+  document.querySelectorAll('.vtab')[{week:0,next:1,month:2,list:3,equipment:4}[v]].classList.add('active');
+  // Hide legend on equipment view
+  document.getElementById('legend-bar').style.display=v==='equipment'?'none':'flex';
   render();
 }
-function navBack(){offset--;render()}
-function navFwd(){offset++;render()}
+function navBack(){
+  if(view==='equipment') equipOffset--;
+  else offset--;
+  render();
+}
+function navFwd(){
+  if(view==='equipment') equipOffset++;
+  else offset++;
+  render();
+}
 function render(){
   if(view==='week'||view==='next') renderWeek();
   else if(view==='month') renderMonth();
+  else if(view==='equipment') renderEquipment();
   else renderList();
 }
 
@@ -316,13 +344,72 @@ function renderMonth(){
   document.getElementById('main-content').innerHTML=crewFilterBar()+statsBar()+html;
 }
 
+function renderEquipment(){
+  const ws=weekStart(today(),equipOffset);
+  const days=Array.from({length:7},(_,i)=>{const d=new Date(ws);d.setDate(d.getDate()+i);return d});
+  const todayStr=isoDate(today());
+  document.getElementById('period-label').textContent=
+    days[0].toLocaleDateString('en-US',{month:'short',day:'numeric'})+' – '+
+    days[6].toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+
+  // Only show equipment that has at least one job this week OR is a trailer (always show trailers)
+  function equipUsedThisWeek(name){
+    return days.some(d=>jobsUsingEquipOnDate(name,isoDate(d)).length>0);
+  }
+
+  let html='<div class="equip-view-scroll"><div style="min-width:700px">';
+
+  // Header row
+  html+=`<div class="equip-row-header">
+    <div class="equip-name-cell header">Equipment</div>
+    ${days.map(d=>{
+      const ds=isoDate(d);
+      return `<div class="equip-day-cell header${ds===todayStr?' today-col':''}">${DOW_SHORT[d.getDay()]}<br>${d.getMonth()+1}/${d.getDate()}</div>`;
+    }).join('')}
+  </div>`;
+
+  // Render each category
+  EQUIP_CATS.forEach(cat=>{
+    const items=EQUIPMENT[cat];
+    // For trailers always show; for others only show if used this week
+    const visibleItems=cat==='Trailers'?items:items.filter(e=>equipUsedThisWeek(e));
+    if(!visibleItems.length) return;
+
+    html+=`<div class="equip-section-title">${cat}</div>`;
+    visibleItems.forEach(equip=>{
+      html+=`<div class="equip-row">
+        <div class="equip-name-cell" title="${equip}">${equip.length>22?equip.slice(0,22)+'…':equip}</div>`;
+      days.forEach(d=>{
+        const ds=isoDate(d);
+        const usedBy=jobsUsingEquipOnDate(equip,ds);
+        const isToday=ds===todayStr;
+        html+=`<div class="equip-day-cell${isToday?' today-col':''}">`;
+        if(usedBy.length){
+          usedBy.forEach(j=>{
+            const st=statusMeta(getStatus(j));
+            const color=STATUS_COLORS[getStatus(j)]||'#f1f5f9';
+            html+=`<span class="equip-job-tag" style="background:${color}" onclick="openModal('${j.id}')" title="${j.client} — ${j.service}">${j.client.split(' ')[0].slice(0,10)}</span>`;
+          });
+        } else {
+          html+=`<span class="equip-free">—</span>`;
+        }
+        html+='</div>';
+      });
+      html+='</div>';
+    });
+  });
+
+  html+=`<div style="font-size:11px;color:var(--text-3);margin-top:12px;padding-left:2px">Attachments, Specialty, and Hand Tools only shown when in use this week. Trailers always visible.</div>`;
+  html+='</div></div>';
+  document.getElementById('main-content').innerHTML=html;
+}
+
 function renderList(){
   document.getElementById('period-label').textContent='All jobs';
   const fj=filteredJobs();
   const sorted=[...fj].sort((a,b)=>a.startDate.localeCompare(b.startDate));
   const byStatus={upcoming:[],inprog:[],touchup:[],complete:[]};
   sorted.forEach(j=>{const s=getStatus(j);byStatus[s].push(j)});
-
   function section(label,items){
     if(!items.length) return '';
     let h=`<div class="list-section"><div class="list-label">${label}</div>`;
@@ -345,12 +432,8 @@ function renderList(){
     h+='</div>';
     return h;
   }
-
   let html=crewFilterBar()+statsBar();
-  html+=section('In progress',byStatus.inprog);
-  html+=section('Touch up needed',byStatus.touchup);
-  html+=section('Upcoming',byStatus.upcoming);
-  html+=section('Complete',byStatus.complete.slice(-15).reverse());
+  html+=section('In progress',byStatus.inprog)+section('Touch up needed',byStatus.touchup)+section('Upcoming',byStatus.upcoming)+section('Complete',byStatus.complete.slice(-15).reverse());
   if(!fj.length) html+=`<div class="empty-state"><p>No jobs yet.<br>Tap + Add job to get started.</p></div>`;
   document.getElementById('main-content').innerHTML=html;
 }
@@ -369,7 +452,6 @@ function statsBar(){
     <div class="stat-card"><div class="stat-num">${done.length}</div><div class="stat-label">Done</div></div>
   </div>`;
 }
-
 function crewFilterBar(){
   return `<div class="filter-row">${['All',...CREW].map(c=>
     `<button class="filter-chip${crewFilter===c?' active':''}" onclick="setCrew('${c}')">${c}</button>`
@@ -377,7 +459,7 @@ function crewFilterBar(){
 }
 function setCrew(c){crewFilter=c;render()}
 
-function openModal(id=null, defaultDate=null){
+function openModal(id=null,defaultDate=null){
   editId=id;
   const job=id?jobs.find(j=>j.id===id):null;
   pickedCrew=job?[...(job.crew||[])]:[];
@@ -388,27 +470,23 @@ function openModal(id=null, defaultDate=null){
   const dur=job?job.duration:1;
   const startVal=job?job.startDate:(defaultDate||todayStr);
   const endVal=job&&parseInt(job.duration)>1?isoDate(addDays(parseISO(job.startDate),parseInt(job.duration)-1)):startVal;
-
-  // Show auto status if editing
   let statusHint='';
   if(job){
     const st=statusMeta(getStatus(job));
     statusHint=`<div style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;font-size:12px;font-weight:500;margin-bottom:14px" class="${st.cls}">${st.label} — set automatically by date</div>`;
   }
-
   document.getElementById('modal-root').innerHTML=`<div class="modal-overlay" onclick="maybeClose(event)">
     <div class="modal-sheet">
       <div class="sheet-handle"></div>
       <div class="sheet-title">${job?'Edit job':'Schedule a job'}</div>
       <div class="sheet-subtitle">Status is set automatically based on the job dates.</div>
       ${statusHint}
-
       <div class="form-group">
         <label class="form-label">Client</label>
         <select id="f-client" onchange="handleClientChange(this.value)" style="margin-bottom:6px">
           <option value="">— pick a client —</option>
-          ${CLIENTS.map(c=>`<option value="${c}" ${job&&job.client===c?' selected':''}>${c}</option>`).join('')}
-          <option value="__custom__" ${job&&job.client&&!CLIENTS.includes(job.client)?' selected':''}>Other (type below)</option>
+          ${CLIENTS.map(c=>`<option value="${c}" ${job&&job.client===c?'selected':''}>${c}</option>`).join('')}
+          <option value="__custom__" ${job&&job.client&&!CLIENTS.includes(job.client)?'selected':''}>Other (type below)</option>
         </select>
         <input type="text" id="f-client-custom" placeholder="Type a custom client..." value="${job&&job.client&&!CLIENTS.includes(job.client)?job.client:''}" style="display:${job&&job.client&&!CLIENTS.includes(job.client)?'block':'none'}">
       </div>
@@ -420,32 +498,30 @@ function openModal(id=null, defaultDate=null){
         <label class="form-label">Service</label>
         <select id="f-service" onchange="handleServiceChange(this.value)" style="margin-bottom:6px">
           <option value="">— pick a service —</option>
-          ${SERVICES.map(s=>`<option value="${s}" ${job&&job.service===s?' selected':''}>` + s + `</option>`).join('')}
-          <option value="__custom__" ${job&&job.service&&!SERVICES.includes(job.service)?' selected':''}>Other (type below)</option>
+          ${SERVICES.map(s=>`<option value="${s}" ${job&&job.service===s?'selected':''}>${s}</option>`).join('')}
+          <option value="__custom__" ${job&&job.service&&!SERVICES.includes(job.service)?'selected':''}>Other (type below)</option>
         </select>
         <input type="text" id="f-service-custom" placeholder="Type a custom service..." value="${job&&job.service&&!SERVICES.includes(job.service)?job.service:''}" style="display:${job&&job.service&&!SERVICES.includes(job.service)?'block':'none'}">
       </div>
-
       <div class="form-group">
         <label class="form-label">Start &amp; end date</label>
         <div class="date-row">
           <div>
             <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Start</div>
-            <input type="date" id="f-start" value="${startVal}" onchange="updateEndDate()">
+            <input type="date" id="f-start" value="${startVal}" onchange="updateEndDate();refreshEquipConflicts()">
           </div>
           <div class="date-sep">→</div>
           <div>
             <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">End</div>
-            <input type="date" id="f-end" value="${endVal}" onchange="updateDuration()">
+            <input type="date" id="f-end" value="${endVal}" onchange="updateDuration();refreshEquipConflicts()">
           </div>
         </div>
         <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
           <label style="font-size:12px;color:var(--text-2)">Duration:</label>
-          <input type="number" id="f-duration" value="${dur}" min="1" max="60" style="width:64px" onchange="updateEndFromDuration()">
+          <input type="number" id="f-duration" value="${dur}" min="1" max="60" style="width:64px" onchange="updateEndFromDuration();refreshEquipConflicts()">
           <span style="font-size:12px;color:var(--text-3)">day(s)</span>
         </div>
       </div>
-
       <div class="form-group">
         <label class="form-label">Touch up needed</label>
         <div class="touchup-toggle${touchUpOn?' on':''}" id="touchup-toggle" onclick="toggleTouchUp()">
@@ -453,24 +529,21 @@ function openModal(id=null, defaultDate=null){
           <span class="toggle-label">${touchUpOn?'Yes — touch up needed':'No touch up needed'}</span>
         </div>
       </div>
-
       <div class="form-group">
         <label class="form-label">Crew — tap to select multiple</label>
         <div class="crew-grid" id="crew-grid">${buildCrewGrid()}</div>
       </div>
-
       <div class="form-group">
         <label class="form-label">Equipment — tap to select</label>
         <div class="equip-tabs" id="equip-tabs">${buildEquipTabs()}</div>
         <div class="equip-grid" id="equip-grid">${buildEquipGrid()}</div>
+        <div id="conflict-warnings"></div>
         <div id="equip-selected">${buildEquipSelected()}</div>
       </div>
-
       <div class="form-group">
         <label class="form-label">Notes</label>
         <input type="text" id="f-notes" placeholder="Conditions, special instructions..." value="${job&&job.notes?job.notes:''}">
       </div>
-
       <div class="sheet-actions">
         ${job?`<button class="btn-delete" onclick="deleteJob('${id}')">Remove</button>`:''}
         <button class="btn-cancel" onclick="closeModal()">Cancel</button>
@@ -478,26 +551,54 @@ function openModal(id=null, defaultDate=null){
       </div>
     </div>
   </div>`;
+  refreshEquipConflicts();
 }
 
-function toggleTouchUp(){
-  touchUpOn=!touchUpOn;
-  const el=document.getElementById('touchup-toggle');
-  if(!el) return;
-  el.classList.toggle('on',touchUpOn);
-  el.querySelector('.toggle-label').textContent=touchUpOn?'Yes — touch up needed':'No touch up needed';
+function getModalDates(){
+  const start=document.getElementById('f-start')?document.getElementById('f-start').value:'';
+  const dur=document.getElementById('f-duration')?parseInt(document.getElementById('f-duration').value)||1:1;
+  return {start,dur};
+}
+
+function refreshEquipConflicts(){
+  const {start,dur}=getModalDates();
+  const g=document.getElementById('equip-grid');
+  const w=document.getElementById('conflict-warnings');
+  if(!g||!w||!start) return;
+  g.innerHTML=buildEquipGrid();
+  // Check trailers for conflicts
+  let warnings='';
+  EQUIPMENT.Trailers.forEach(t=>{
+    if(!pickedEquip.includes(t)) return;
+    const conflict=trailerConflictJob(t,start,dur,editId);
+    if(conflict){
+      warnings+=`<div class="conflict-warning">⚠ <strong>${t}</strong> is already assigned to ${conflict.client} (${fmtShort(conflict.startDate)}${parseInt(conflict.duration)>1?' – '+fmtShort(isoDate(addDays(parseISO(conflict.startDate),parseInt(conflict.duration)-1))):''}).</div>`;
+    }
+  });
+  w.innerHTML=warnings;
 }
 
 function buildCrewGrid(){
-  return CREW.map(c=>`<div class="sel-opt${pickedCrew.includes(c)?' picked':''}" onclick="toggleCrew('${c}')" id="copt-${c.replace(/ /g,'_')}">${c}</div>`).join('');
+  return CREW.map(c=>`<div class="sel-opt${pickedCrew.includes(c)?' picked':''}" onclick="toggleCrew('${c}')">${c}</div>`).join('');
 }
 function buildEquipTabs(){
   return EQUIP_CATS.map(cat=>`<button class="etab${activeEquipTab===cat?' active':''}" onclick="setEquipTab('${cat}')">${cat}</button>`).join('');
 }
 function buildEquipGrid(){
+  const {start,dur}=getModalDates();
   return EQUIPMENT[activeEquipTab].map(e=>{
     const safe=e.replace(/'/g,"\\'");
-    return `<div class="sel-opt${pickedEquip.includes(e)?' picked':''}" onclick="toggleEquip('${safe}')" id="eopt-${e.replace(/[^a-zA-Z0-9]/g,'_')}" style="font-size:11px;padding:7px 6px">${e}</div>`;
+    const isPicked=pickedEquip.includes(e);
+    // Only check trailer conflicts
+    let isConflict=false;
+    if(EQUIPMENT.Trailers.includes(e)&&start&&!isPicked){
+      isConflict=!!trailerConflictJob(e,start,dur,editId);
+    }
+    // If picked trailer, check conflict too (for warning color)
+    if(EQUIPMENT.Trailers.includes(e)&&start&&isPicked){
+      isConflict=!!trailerConflictJob(e,start,dur,editId);
+    }
+    return `<div class="sel-opt${isPicked?' picked':''}${isConflict?' conflict':''}" onclick="toggleEquip('${safe}')" style="font-size:11px;padding:7px 6px">${e}</div>`;
   }).join('');
 }
 function buildEquipSelected(){
@@ -519,38 +620,42 @@ function toggleEquip(name){
   const g=document.getElementById('equip-grid'),s=document.getElementById('equip-selected');
   if(g) g.innerHTML=buildEquipGrid();
   if(s) s.innerHTML=buildEquipSelected();
+  refreshEquipConflicts();
 }
 function toggleCrew(name){
   pickedCrew=pickedCrew.includes(name)?pickedCrew.filter(c=>c!==name):[...pickedCrew,name];
   const g=document.getElementById('crew-grid');
   if(g) g.innerHTML=buildCrewGrid();
 }
+function toggleTouchUp(){
+  touchUpOn=!touchUpOn;
+  const el=document.getElementById('touchup-toggle');
+  if(!el) return;
+  el.classList.toggle('on',touchUpOn);
+  el.querySelector('.toggle-label').textContent=touchUpOn?'Yes — touch up needed':'No touch up needed';
+}
 function handleClientChange(val){
-  const custom=document.getElementById("f-client-custom");
-  if(!custom) return;
-  custom.style.display=val==="__custom__"?"block":"none";
-  if(val==="__custom__") custom.focus();
+  const c=document.getElementById('f-client-custom');
+  if(!c) return;
+  c.style.display=val==='__custom__'?'block':'none';
+  if(val==='__custom__') c.focus();
 }
 function getClientValue(){
-  const sel=document.getElementById("f-client");
-  if(!sel) return "";
-  if(sel.value==="__custom__"){
-    return (document.getElementById("f-client-custom").value||"").trim();
-  }
+  const sel=document.getElementById('f-client');
+  if(!sel) return '';
+  if(sel.value==='__custom__') return (document.getElementById('f-client-custom').value||'').trim();
   return sel.value;
 }
 function handleServiceChange(val){
-  const custom=document.getElementById("f-service-custom");
-  if(!custom) return;
-  custom.style.display=val==="__custom__"?"block":"none";
-  if(val==="__custom__") custom.focus();
+  const c=document.getElementById('f-service-custom');
+  if(!c) return;
+  c.style.display=val==='__custom__'?'block':'none';
+  if(val==='__custom__') c.focus();
 }
 function getServiceValue(){
-  const sel=document.getElementById("f-service");
-  if(!sel) return "";
-  if(sel.value==="__custom__"){
-    return (document.getElementById("f-service-custom").value||"").trim();
-  }
+  const sel=document.getElementById('f-service');
+  if(!sel) return '';
+  if(sel.value==='__custom__') return (document.getElementById('f-service-custom').value||'').trim();
   return sel.value;
 }
 function updateEndDate(){
@@ -588,8 +693,7 @@ function deleteJob(id){
   jobs=jobs.filter(j=>j.id!==id);
   save();closeModal();render();
 }
-
-// Migrate old data
+// Migrate
 jobs=jobs.map(j=>{
   if(j.date&&!j.startDate){j.startDate=j.date;delete j.date}
   if(!j.duration) j.duration=1;

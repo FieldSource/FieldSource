@@ -200,12 +200,122 @@ const DOW_SHORT=['Su','Mo','Tu','We','Th','Fr','Sa'];
 const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
 const STATUS_COLORS={upcoming:'#f1f5f9',inprog:'#fef3c7',touchup:'#fee2e2',complete:'#dcfce7'};
 
-let jobs=JSON.parse(localStorage.getItem('fs_jobs')||'[]');
+// ── SUPABASE CONFIG ──────────────────────────────────────────
+const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_UQP8csYThYpd51LEOZOFsQ_ds2lQRkk';
+
+async function sbFetch(method, path, body=null){
+  const opts = {
+    method,
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_KEY,
+      'Content-Type': 'application/json',
+      'Prefer': method==='POST'?'return=representation':'',
+    }
+  };
+  if(body) opts.body = JSON.stringify(body);
+  const res = await fetch(SUPABASE_URL + path, opts);
+  if(!res.ok){ const t=await res.text(); throw new Error(t); }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+async function loadJobs(){
+  showLoading(true);
+  try {
+    const data = await sbFetch('GET', '/rest/v1/jobs?select=*&order=created_at.asc');
+    jobs = (data||[]).map(row => ({
+      id: String(row.id),
+      client: row.client||'',
+      field: row.field||'',
+      service: row.service||'',
+      startDate: row.start_date||'',
+      duration: row.duration||1,
+      crew: row.crew||[],
+      equip: row.equip||[],
+      touchUp: row.touch_up||false,
+      notes: row.notes||''
+    }));
+  } catch(e) {
+    console.error('Load error', e);
+    jobs = JSON.parse(localStorage.getItem('fs_jobs')||'[]');
+  }
+  showLoading(false);
+  render();
+}
+
+function showLoading(on){
+  let el = document.getElementById('loading-bar');
+  if(!el){
+    el = document.createElement('div');
+    el.id='loading-bar';
+    el.style.cssText='position:fixed;top:56px;left:0;right:0;height:3px;background:var(--green-mid);z-index:999;transition:opacity .3s';
+    document.body.appendChild(el);
+  }
+  el.style.opacity = on ? '1' : '0';
+}
+
+let jobs = [];
+
+function save(){
+  // Jobs are saved to Supabase, keep local as fallback cache
+  localStorage.setItem('fs_jobs', JSON.stringify(jobs));
+}
+
+async function dbSaveJob(data, id=null){
+  const row = {
+    client: data.client,
+    field: data.field,
+    service: data.service,
+    start_date: data.startDate,
+    duration: data.duration,
+    crew: data.crew,
+    equip: data.equip,
+    touch_up: data.touchUp,
+    notes: data.notes
+  };
+  if(id){
+    // Update existing — id is the numeric DB id
+    await sbFetch('PATCH', `/rest/v1/jobs?id=eq.${id}`, row);
+  } else {
+    const result = await sbFetch('POST', '/rest/v1/jobs', row);
+    return result && result[0] ? String(result[0].id) : null;
+  }
+}
+
+async function dbDeleteJob(id){
+  await sbFetch('DELETE', `/rest/v1/jobs?id=eq.${id}`);
+}
+
+// ── POLLING for real-time updates (every 10s) ─────────────────
+let pollTimer = null;
+function startPolling(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async ()=>{
+    try{
+      const data = await sbFetch('GET', '/rest/v1/jobs?select=*&order=created_at.asc');
+      jobs = (data||[]).map(row => ({
+        id: String(row.id),
+        client: row.client||'',
+        field: row.field||'',
+        service: row.service||'',
+        startDate: row.start_date||'',
+        duration: row.duration||1,
+        crew: row.crew||[],
+        equip: row.equip||[],
+        touchUp: row.touch_up||false,
+        notes: row.notes||''
+      }));
+      save();
+      render();
+    } catch(e){ console.warn('Poll error', e); }
+  }, 10000);
+}
+
 let view='week',offset=0,editId=null,crewFilter='All';
 let pickedCrew=[],pickedEquip=[],touchUpOn=false,activeEquipTab=EQUIP_CATS[0];
-let equipOffset=0; // separate week offset for equipment view
-
-function save(){localStorage.setItem('fs_jobs',JSON.stringify(jobs))}
+let equipOffset=0;
 function today(){const d=new Date();d.setHours(0,0,0,0);return d}
 function isoDate(d){return d.toISOString().slice(0,10)}
 function parseISO(s){const[y,m,d]=s.split('-').map(Number);return new Date(y,m-1,d)}
@@ -678,7 +788,7 @@ function closeModal(){
   document.getElementById('modal-root').innerHTML='';
   editId=null;pickedCrew=[];pickedEquip=[];touchUpOn=false;activeEquipTab=EQUIP_CATS[0];
 }
-function saveJob(){
+async function saveJob(){
   const client=getClientValue();
   const field=document.getElementById('f-field').value.trim();
   const service=getServiceValue();
@@ -687,28 +797,36 @@ function saveJob(){
   const notes=document.getElementById('f-notes').value.trim();
   if(!startDate){alert('Please pick a start date.');return}
   const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes};
-  if(editId) Object.assign(jobs.find(j=>j.id===editId),data);
-  else jobs.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2),...data});
-  save();closeModal();render();
+  const btn=document.querySelector('.btn-save');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  try{
+    if(editId){
+      await dbSaveJob(data, editId);
+      Object.assign(jobs.find(j=>j.id===editId),{...data,id:editId});
+    } else {
+      const newId=await dbSaveJob(data);
+      if(newId) jobs.push({...data,id:newId});
+    }
+    save();closeModal();render();
+  } catch(e){
+    alert('Error saving job. Check your connection.');
+    console.error(e);
+    if(btn){btn.disabled=false;btn.textContent='Save job';}
+  }
 }
-function deleteJob(id){
+async function deleteJob(id){
   if(!confirm('Remove this job?')) return;
-  jobs=jobs.filter(j=>j.id!==id);
-  save();closeModal();render();
+  try{
+    await dbDeleteJob(id);
+    jobs=jobs.filter(j=>j.id!==id);
+    save();closeModal();render();
+  } catch(e){
+    alert('Error removing job.');
+    console.error(e);
+  }
 }
-// Migrate
-jobs=jobs.map(j=>{
-  if(j.date&&!j.startDate){j.startDate=j.date;delete j.date}
-  if(!j.duration) j.duration=1;
-  if(typeof j.crew==='string') j.crew=j.crew?[j.crew]:[];
-  if(!j.crew) j.crew=[];
-  if(!j.equip) j.equip=[];
-  if(j.touchUp===undefined) j.touchUp=false;
-  delete j.status;
-  return j;
-});
-save();
-render();
+// Init: load from Supabase then start polling
+loadJobs().then(()=>startPolling());
 </script>
 </body>
 </html>

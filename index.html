@@ -146,11 +146,6 @@ main{padding:12px 16px 100px}
 <body>
 <header>
   <div class="logo-mark">
-    <svg class="logo-grass" viewBox="0 0 40 36" fill="none">
-      <path d="M20 34 C20 34 8 28 4 18 C2 12 6 6 10 8 C10 8 8 14 12 18 C12 18 10 10 16 8 C16 8 14 16 18 22 C18 22 17 14 20 10 C23 14 22 22 22 22 C26 16 24 8 24 8 C30 10 28 18 28 18 C32 14 30 8 30 8 C34 6 38 12 36 18 C32 28 20 34 20 34Z" fill="#5aaa4a"/>
-      <path d="M20 34 C20 34 10 30 6 20 C18 16 22 22 22 22 C22 22 26 16 34 20 C30 30 20 34 20 34Z" fill="#3a8c2f"/>
-      <rect x="16" y="30" width="8" height="6" rx="1" fill="#2a6a22"/>
-    </svg>
     <div>
       <div class="logo-text">Field Source</div>
       <div class="logo-sub">Prepare to play</div>
@@ -186,7 +181,7 @@ main{padding:12px 16px 100px}
 <script>
 const CLIENTS=['Adena','Canal Winchester','Centerville-Washington','Chillicothe','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
 const SERVICES=['Mowing','Aeration','Fertilization','Topdressing','Irrigation check','Shockwave','Seeding','Sodding'];
-const CREW=['Dan Sr','Dan Jr','Brandon','Greg','Matt','Wes','Intern','Penlin'];
+const CREW=['Dan Sr','Dan Jr','Brandon','BMoore','Greg','Matt','Wes','Intern','Penlin'];
 const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN'],
   Attachments:['Toro ProForce Blower #1','Toro ProForce Blower #2','Buffalo Blower #1','Buffalo Blower #2','Agrimetal 3500 Blower','LitterKat','Redexim VT-1500','Greens Groomer #1','Greens Groomer #2','Turfco Topdresser #1','Turfco Topdresser #2','2021 Woodbay FDS 6000 Dethatcher','Vredo Overseeder DZ5','Imants Shockwave 2.1','Turfco Torrent 2','2025 Snow Dogg','Level Best'],
@@ -273,7 +268,8 @@ async function dbSaveJob(data, id=null){
     crew: data.crew,
     equip: data.equip,
     touch_up: data.touchUp,
-    notes: data.notes
+    notes: data.notes,
+    include_weekends: data.includeWeekends||false
   };
   if(id){
     // Update existing — id is the numeric DB id
@@ -305,7 +301,8 @@ function startPolling(){
         crew: row.crew||[],
         equip: row.equip||[],
         touchUp: row.touch_up||false,
-        notes: row.notes||''
+        notes: row.notes||'',
+        includeWeekends: row.include_weekends||false
       }));
       save();
       render();
@@ -343,7 +340,22 @@ function jobDates(j){
   const start=parseISO(j.startDate);
   const days=Math.max(1,parseInt(j.duration)||1);
   const dates=[];
-  for(let i=0;i<days;i++) dates.push(isoDate(addDays(start,i)));
+  if(j.includeWeekends){
+    // Include all days
+    for(let i=0;i<days;i++) dates.push(isoDate(addDays(start,i)));
+  } else {
+    // Skip weekends — count only M-F
+    let d=new Date(start);
+    let counted=0;
+    while(counted<days){
+      const dow=d.getDay();
+      if(dow!==0&&dow!==6){
+        dates.push(isoDate(d));
+        counted++;
+      }
+      d=addDays(d,1);
+    }
+  }
   return dates;
 }
 function filteredJobs(){
@@ -635,7 +647,13 @@ function openModal(id=null,defaultDate=null){
         <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
           <label style="font-size:12px;color:var(--text-2)">Duration:</label>
           <input type="number" id="f-duration" value="${dur}" min="1" max="60" style="width:64px" onchange="updateEndFromDuration();refreshEquipConflicts()">
-          <span style="font-size:12px;color:var(--text-3)">day(s)</span>
+          <span style="font-size:12px;color:var(--text-3)">weekday(s)</span>
+        </div>
+        <div style="margin-top:8px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text-2)">
+            <input type="checkbox" id="f-weekends" ${job&&job.includeWeekends?'checked':''} style="width:16px;height:16px;accent-color:var(--green)">
+            Include weekends
+          </label>
         </div>
       </div>
       <div class="form-group">
@@ -799,7 +817,8 @@ async function saveJob(){
   const duration=parseInt(document.getElementById('f-duration').value)||1;
   const notes=document.getElementById('f-notes').value.trim();
   if(!startDate){alert('Please pick a start date.');return}
-  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes};
+  const includeWeekends=document.getElementById('f-weekends')?document.getElementById('f-weekends').checked:false;
+  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,includeWeekends};
   const btn=document.querySelector('.btn-save');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   try{

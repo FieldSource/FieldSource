@@ -185,12 +185,12 @@ main{padding:12px 16px 100px}
 
 <script>
 const CLIENTS=['Adena','Canal Winchester','Centerville-Washington','Chillicothe','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
-const SERVICES=['Mowing','Aeration','Fertilization','Topdressing','Irrigation check','Shockwave','Seeding'];
+const SERVICES=['Mowing','Aeration','Fertilization','Topdressing','Irrigation check','Shockwave','Seeding','Sodding'];
 const CREW=['Dan Sr','Dan Jr','Brandon','Greg','Matt','Wes','Intern','Penlin'];
 const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN'],
   Attachments:['Toro ProForce Blower #1','Toro ProForce Blower #2','Buffalo Blower #1','Buffalo Blower #2','Agrimetal 3500 Blower','LitterKat','Redexim VT-1500','Greens Groomer #1','Greens Groomer #2','Turfco Topdresser #1','Turfco Topdresser #2','2021 Woodbay FDS 6000 Dethatcher','Vredo Overseeder DZ5','Imants Shockwave 2.1','Turfco Torrent 2','2025 Snow Dogg','Level Best'],
-  Specialty:['ABI Force','F/S Spray Rig','Smithco Spray Star 2000','2024 John Deere 4066R','Wacker Neuson Roller','Steel Green SG52','Drones','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift'],
+  Specialty:['ABI Force','F/S Spray Rig','Smithco Spray Star 2000','2024 John Deere 4066R','Wacker Neuson Roller','Steel Green SG52','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift'],
   'Hand Tools':['Stihl Backpack Blower #1','Stihl Backpack Blower #2','Stihl Backpack Blower #3','Stihl Combi','Stihl String Trimmer #1','Stihl String Trimmer #2','Little Wonder Pro Edger','Jumping Jack Tamper','MQ Plate Compactor','Ryan Sod Cutter','Dewalt Hammer Drill','Stihl RB 400','Honda EU 2200i','Husqvarna Trimmer','Billy Goat Sod Cutter','Mi-T-M GH-3003','Stihl ST 500i']
 };
 const EQUIP_CATS=Object.keys(EQUIPMENT);
@@ -357,7 +357,7 @@ function jobsUsingEquipOnDate(equipName, ds){
   return jobs.filter(j=>(j.equip||[]).includes(equipName) && jobDates(j).includes(ds));
 }
 
-// Check if a trailer has a conflict with the current job being edited
+// Check if a trailer or specialty item has a conflict with the current job being edited
 function trailerConflictJob(trailerName, startDate, duration, excludeId){
   const dates=[];
   const start=parseISO(startDate);
@@ -417,10 +417,13 @@ function renderWeek(){
       const crew=(j.crew||[]).slice(0,2).join(', ')+(((j.crew||[]).length>2)?` +${(j.crew||[]).length-2}`:'');
       const eCount=(j.equip||[]).length;
       const trailers=(j.equip||[]).filter(e=>EQUIPMENT.Trailers.includes(e));
+      const specialty=(j.equip||[]).filter(e=>EQUIPMENT.Specialty.includes(e));
+      const chipEquip=[...trailers,...specialty];
+      function shortName(n){return n.replace(' Landscape','').replace(' Enclosed','').replace('2025','').replace('2024','').replace('2010','').replace('2021','').replace('2004','').replace('Ingersoll Rand ','').replace('Wacker Neuson ','').replace('Smithco ','').trim()}
       html+=`<div class="job-chip ${st.cls}" onclick="openModal('${j.id}')">
         <div class="chip-client">${j.client.split(' ')[0]}${dur>1?`<span class="duration-badge">${dur}d</span>`:''}</div>
         <div class="chip-detail">${j.service}${j.field?' · '+j.field:''}<br>${crew||'Unassigned'}</div>
-        ${trailers.length?`<div class="chip-trailers">${trailers.map(t=>t.replace(' Landscape','').replace(' Enclosed','').replace('2025','').replace('2024','').replace('2010','').trim()).join(', ')}</div>`:''}
+        ${chipEquip.length?`<div class="chip-trailers">${chipEquip.map(t=>shortName(t)).join(', ')}</div>`:''}
         ${dur>1?'<div class="multi-day-bar"></div>':''}
       </div>`;
     });
@@ -679,9 +682,9 @@ function refreshEquipConflicts(){
   const w=document.getElementById('conflict-warnings');
   if(!g||!w||!start) return;
   g.innerHTML=buildEquipGrid();
-  // Check trailers for conflicts
+  // Check trailers and specialty for conflicts
   let warnings='';
-  EQUIPMENT.Trailers.forEach(t=>{
+  [...EQUIPMENT.Trailers,...EQUIPMENT.Specialty].forEach(t=>{
     if(!pickedEquip.includes(t)) return;
     const conflict=trailerConflictJob(t,start,dur,editId);
     if(conflict){

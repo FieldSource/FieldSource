@@ -178,7 +178,9 @@ main{padding:12px 16px 100px}
 .issue-toggle.on .toggle-track{background:#ef4444}
 .issue-toggle.on .toggle-thumb{transform:translateX(18px)}
 .issue-toggle.on .toggle-label{color:#991b1b;font-weight:600}
-.matt-only-note{font-size:11px;color:var(--text-3);font-style:italic;margin-top:6px}
+.fab{position:fixed;bottom:28px;right:20px;background:var(--green);color:#fff;border:none;border-radius:99px;padding:14px 22px;font-size:15px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;box-shadow:0 4px 16px rgba(58,140,47,0.4);z-index:150;display:none}
+.fab.visible{display:block}
+.fab:active{background:var(--green-dark);transform:scale(0.97)}
 </style>
 </head>
 <body>
@@ -189,7 +191,10 @@ main{padding:12px 16px 100px}
       <div class="logo-sub">Prepare to play</div>
     </div>
   </div>
-  <button class="header-add" id="header-action-btn" onclick="openModal()">+ Add job</button>
+  <div style="display:flex;gap:8px">
+    <button class="header-add" onclick="openReportModal()">+ File report</button>
+    <button class="header-add" onclick="openModal()">+ Add job</button>
+  </div>
 </header>
 
 <div class="view-bar">
@@ -547,23 +552,6 @@ function setView(v){
   const hideNav = v==='reports'||v==='workorders';
   document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
   document.querySelector('.nav-row').style.display=hideNav?'none':'flex';
-  // Swap header button
-  const btn=document.getElementById('header-action-btn');
-  if(btn){
-    if(v==='reports'){
-      btn.textContent='+ File report';
-      btn.setAttribute('onclick','openReportModal()');
-      btn.style.display='';
-    } else if(v==='workorders'){
-      btn.textContent='';
-      btn.setAttribute('onclick','');
-      btn.style.display='none';
-    } else {
-      btn.textContent='+ Add job';
-      btn.setAttribute('onclick','openModal()');
-      btn.style.display='';
-    }
-  }
   render();
 }
 function navBack(){
@@ -1072,7 +1060,7 @@ function openReportModal(){
       </div>
       <div class="form-group">
         <label class="form-label">Field / location</label>
-        <input type="text" id="r-field" placeholder="e.g. Soccer field 1, Baseball diamond" value="${job&&job.field?job.field:''}">
+        <input type="text" id="r-field" placeholder="e.g. Soccer field 1, Baseball diamond" value="">
       </div>
       <div class="form-group">
         <label class="form-label">Report date</label>

@@ -1049,14 +1049,8 @@ function renderReports(){
 }
 function setReportSite(c){ reportSiteFilter=c; renderReports(); }
 
-function openReportModal(jobId=null){
-  const job = jobId ? jobs.find(j=>j.id===jobId) : null;
+function openReportModal(){
   const todayStr = isoDate(today());
-  // Build job selector options — active jobs
-  const activeJobs = jobs.filter(j=>{ const s=getStatus(j); return s==='inprog'||s==='upcoming'; });
-  const jobOpts = `<option value="">— no linked job —</option>`+activeJobs.map(j=>
-    `<option value="${j.id}" ${job&&job.id===jobId?'selected':''}>${j.client}${j.field?' · '+j.field:''} (${fmtShort(j.startDate)})</option>`
-  ).join('');
 
   document.getElementById('modal-root').innerHTML=`<div class="modal-overlay" onclick="maybeClose(event)">
     <div class="modal-sheet">
@@ -1064,16 +1058,10 @@ function openReportModal(jobId=null){
       <div class="sheet-title">File daily report</div>
       <div class="sheet-subtitle">Log what happened on site today.</div>
       <div class="form-group">
-        <label class="form-label">Link to a job (optional)</label>
-        <select id="r-job" onchange="handleReportJobChange(this.value)">
-          ${jobOpts}
-        </select>
-      </div>
-      <div class="form-group">
         <label class="form-label">Site / client</label>
         <select id="r-client">
           <option value="">— pick a site —</option>
-          ${CLIENTS.map(c=>`<option value="${c}" ${job&&job.client===c?'selected':''}>${c}</option>`).join('')}
+          ${CLIENTS.map(c=>`<option value="${c}">${c}</option>`).join('')}
           <option value="__custom__">Other</option>
         </select>
         <input type="text" id="r-client-custom" placeholder="Type site name..." style="display:none;margin-top:6px">
@@ -1142,12 +1130,8 @@ function openReportModal(jobId=null){
     </div>
   </div>`;
   // pre-fill if job linked
-  if(job){
-    const sel=document.getElementById('r-client');
-    if(sel) sel.value=job.client;
-  }
   activeEquipTab='Trucks';
-  pickedEquip=job?[...(job.equip||[])]:[];
+  pickedEquip=[];
   reportIssueOn=false;
 }
 
@@ -1158,17 +1142,6 @@ function toggleReportIssue(){
   const sec=document.getElementById('r-issue-section');
   if(tog){ tog.classList.toggle('on',reportIssueOn); tog.querySelector('.toggle-label').textContent=reportIssueOn?'Yes — flag an issue':'No issue — all good'; }
   if(sec) sec.style.display=reportIssueOn?'block':'none';
-}
-function handleReportJobChange(jobId){
-  if(!jobId) return;
-  const job=jobs.find(j=>j.id===jobId);
-  if(!job) return;
-  const cs=document.getElementById('r-client'); if(cs) cs.value=job.client;
-  const fd=document.getElementById('r-field'); if(fd) fd.value=job.field||'';
-  pickedEquip=[...(job.equip||[])];
-  const g=document.getElementById('r-equip-grid'),s=document.getElementById('r-equip-selected');
-  if(g) g.innerHTML=buildReportEquipGrid();
-  if(s) s.innerHTML=buildReportEquipSelected();
 }
 function buildReportEquipGrid(){
   const src=REPORT_EQUIPMENT[activeEquipTab]||[];
@@ -1218,7 +1191,7 @@ async function saveReport(){
   const equipUsed=[...pickedEquip];
   const hasIssue=reportIssueOn;
   const issueNotes=hasIssue?(document.getElementById('r-issue-notes').value||'').trim():'';
-  const jobId=(document.getElementById('r-job').value||'');
+  const jobId='';
   if(!client){alert('Please select a site.');return;}
   if(!reportDate){alert('Please pick a date.');return;}
   if(!filedBy){alert('Please select who is filing this.');return;}

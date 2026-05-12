@@ -661,8 +661,9 @@ function renderEquipment(){
   // Render each category
   EQUIP_CATS.forEach(cat=>{
     const items=EQUIPMENT[cat];
-    // For trailers always show; for others only show if used this week
-    const visibleItems=cat==='Trailers'?items:items.filter(e=>equipUsedThisWeek(e));
+    // Only show Trailers and Specialty in the equipment calendar
+    if(cat!=='Trailers'&&cat!=='Specialty') return;
+    const visibleItems=items;
     if(!visibleItems.length) return;
 
     html+=`<div class="equip-section-title">${cat}</div>`;
@@ -689,7 +690,7 @@ function renderEquipment(){
     });
   });
 
-  html+=`<div style="font-size:11px;color:var(--text-3);margin-top:12px;padding-left:2px">Trailers always visible. Specialty, Attachments, and Hand Tools only shown when in use this week.</div>`;
+  html+=`<div style="font-size:11px;color:var(--text-3);margin-top:12px;padding-left:2px">Trailers and Specialty always visible. Attachments and Hand Tools are tracked for conflicts in scheduling but not shown here.</div>`;
   html+='</div></div>';
   document.getElementById('main-content').innerHTML=html;
 }
@@ -864,7 +865,7 @@ function refreshEquipConflicts(){
   g.innerHTML=buildEquipGrid();
   // Check trailers and specialty for conflicts
   let warnings='';
-  [...EQUIPMENT.Trailers,...EQUIPMENT.Specialty].forEach(t=>{
+  [...EQUIPMENT.Trailers,...EQUIPMENT.Specialty,...EQUIPMENT.Attachments,...EQUIPMENT['Hand Tools']].forEach(t=>{
     if(!pickedEquip.includes(t)) return;
     const conflict=trailerConflictJob(t,start,dur,editId);
     if(conflict){
@@ -885,13 +886,12 @@ function buildEquipGrid(){
   return EQUIPMENT[activeEquipTab].map(e=>{
     const safe=e.replace(/'/g,"\\'");
     const isPicked=pickedEquip.includes(e);
-    // Check trailer and specialty conflicts
+    // Check conflicts across all equipment categories
     let isConflict=false;
-    const isConflictable=EQUIPMENT.Trailers.includes(e)||EQUIPMENT.Specialty.includes(e);
-    if(isConflictable&&start&&!isPicked){
+    if(start&&!isPicked){
       isConflict=!!trailerConflictJob(e,start,dur,editId);
     }
-    if(isConflictable&&start&&isPicked){
+    if(start&&isPicked){
       isConflict=!!trailerConflictJob(e,start,dur,editId);
     }
     return `<div class="sel-opt${isPicked?' picked':''}${isConflict?' conflict':''}" onclick="toggleEquip('${safe}')" style="font-size:11px;padding:7px 6px">${e}</div>`;

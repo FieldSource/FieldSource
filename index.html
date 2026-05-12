@@ -141,6 +141,43 @@ main{padding:12px 16px 100px}
 .filter-chip.active{background:var(--green);color:#fff;border-color:var(--green)}
 .duration-badge{font-size:10px;background:rgba(0,0,0,0.12);color:inherit;border-radius:3px;padding:1px 4px;margin-left:3px;font-weight:600}
 .chip-trailers{font-size:10px;margin-top:2px;padding:1px 4px;background:rgba(0,0,0,0.1);border-radius:3px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* REPORTS */
+.report-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:8px;cursor:pointer;transition:border-color .15s}
+.report-card:active{border-color:var(--border-2);background:var(--accent)}
+.report-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px}
+.report-card-title{font-size:14px;font-weight:600;color:var(--text)}
+.report-card-meta{font-size:11px;color:var(--text-3);margin-top:2px}
+.report-issue-flag{font-size:11px;font-weight:600;color:#991b1b;background:#fee2e2;border:1px solid #fca5a5;border-radius:99px;padding:2px 8px;white-space:nowrap;flex-shrink:0}
+.report-detail-row{font-size:12px;color:var(--text-2);margin-top:4px;display:flex;gap:6px;flex-wrap:wrap}
+.report-pill{background:var(--accent);border:1px solid var(--border);border-radius:99px;padding:2px 8px;font-size:11px;color:var(--text-2)}
+/* WORK ORDERS */
+.wo-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:8px;cursor:pointer;transition:border-color .15s}
+.wo-card.wo-open{border-left:3px solid #ef4444}
+.wo-card.wo-scheduled{border-left:3px solid #f59e0b}
+.wo-card.wo-resolved{border-left:3px solid #22c55e;opacity:0.7}
+.wo-card:active{border-color:var(--border-2);background:var(--accent)}
+.wo-card-header{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px}
+.wo-card-title{font-size:14px;font-weight:600;color:var(--text)}
+.wo-card-meta{font-size:11px;color:var(--text-3);margin-top:2px}
+.wo-status-badge{font-size:11px;font-weight:600;border-radius:99px;padding:2px 10px;white-space:nowrap;flex-shrink:0}
+.wo-status-open{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+.wo-status-scheduled{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
+.wo-status-resolved{background:#dcfce7;color:#14532d;border:1px solid #86efac}
+.wo-issue-text{font-size:13px;color:var(--text-2);margin-top:6px;line-height:1.4}
+.wo-schedule-info{font-size:12px;color:var(--green-dark);background:var(--green-light);border-radius:var(--radius-sm);padding:6px 10px;margin-top:8px;font-weight:500}
+.section-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.site-filter-row{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px;-ms-overflow-style:none;scrollbar-width:none}
+.site-filter-row::-webkit-scrollbar{display:none}
+.site-chip{padding:5px 12px;border-radius:99px;border:1px solid var(--border-2);background:var(--surface);font-size:12px;font-weight:500;color:var(--text-2);cursor:pointer;white-space:nowrap;font-family:'DM Sans',sans-serif;transition:all .15s;flex-shrink:0}
+.site-chip.active{background:var(--green);color:#fff;border-color:var(--green)}
+.form-group textarea{width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:15px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);outline:none;resize:vertical;min-height:72px}
+.form-group textarea:focus{border-color:var(--green);background:#fff}
+.issue-toggle{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg);border:1.5px solid var(--border-2);border-radius:var(--radius-sm);cursor:pointer;transition:all .15s;user-select:none}
+.issue-toggle.on{background:#fee2e2;border-color:#fca5a5}
+.issue-toggle.on .toggle-track{background:#ef4444}
+.issue-toggle.on .toggle-thumb{transform:translateX(18px)}
+.issue-toggle.on .toggle-label{color:#991b1b;font-weight:600}
+.matt-only-note{font-size:11px;color:var(--text-3);font-style:italic;margin-top:6px}
 </style>
 </head>
 <body>
@@ -160,6 +197,8 @@ main{padding:12px 16px 100px}
   <button class="vtab" onclick="setView('month')">Month</button>
   <button class="vtab" onclick="setView('list')">All jobs</button>
   <button class="vtab" onclick="setView('equipment')">Equipment</button>
+  <button class="vtab" onclick="setView('reports')">Daily Reports</button>
+  <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
 </div>
 
 <div class="nav-row">
@@ -179,7 +218,7 @@ main{padding:12px 16px 100px}
 <div id="modal-root"></div>
 
 <script>
-const CLIENTS=['Adena','Canal Winchester','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus City Schools','Columbus Crew','Columbus School for Girls','Elgin','Fairbanks','Grove City','Indian Hills','Jackson Center Schools','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','Unioto','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
+const CLIENTS=['Adena','Canal Winchester','Centerville-Washington','Chillicothe','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
 const SERVICES=['Mowing','Aeration','Fertilization','Topdressing','Irrigation check','Shockwave','Seeding','Sodding'];
 const CREW=['Dan Sr','Dan Jr','Brandon','BMoore','Greg','Matt','Wes','Intern','Penlin'];
 const EQUIPMENT={
@@ -252,6 +291,101 @@ function showLoading(on){
 }
 
 let jobs = [];
+let reports = [];
+let workOrders = [];
+let reportSiteFilter = 'All';
+let woSiteFilter = 'All';
+let woStatusFilter = 'open';
+
+// ── REPORTS DB ───────────────────────────────────────────────
+async function loadReports(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/field_reports?select=*&order=report_date.desc,created_at.desc');
+    reports = (data||[]).map(row => ({
+      id: String(row.id),
+      jobId: String(row.job_id||''),
+      client: row.client||'',
+      field: row.field||'',
+      reportDate: row.report_date||'',
+      filedBy: row.filed_by||'',
+      timeIn: row.time_in||'',
+      timeOut: row.time_out||'',
+      workDone: row.work_done||'',
+      productsUsed: row.products_used||'',
+      equipUsed: row.equip_used||[],
+      hasIssue: row.has_issue||false,
+      issueNotes: row.issue_notes||'',
+      createdAt: row.created_at||''
+    }));
+  } catch(e) {
+    console.warn('Could not load reports — table may not exist yet', e);
+    reports = [];
+  }
+}
+async function dbSaveReport(data){
+  const row = {
+    job_id: data.jobId||null,
+    client: data.client,
+    field: data.field,
+    report_date: data.reportDate,
+    filed_by: data.filedBy,
+    time_in: data.timeIn,
+    time_out: data.timeOut,
+    work_done: data.workDone,
+    products_used: data.productsUsed,
+    equip_used: data.equipUsed,
+    has_issue: data.hasIssue,
+    issue_notes: data.issueNotes
+  };
+  const result = await sbFetch('POST', '/rest/v1/field_reports', row);
+  return result && result[0] ? String(result[0].id) : null;
+}
+
+// ── WORK ORDERS DB ────────────────────────────────────────────
+async function loadWorkOrders(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/work_orders?select=*&order=created_at.desc');
+    workOrders = (data||[]).map(row => ({
+      id: String(row.id),
+      reportId: String(row.report_id||''),
+      client: row.client||'',
+      field: row.field||'',
+      issueNotes: row.issue_notes||'',
+      status: row.status||'open',
+      scheduledDate: row.scheduled_date||'',
+      scheduledCrew: row.scheduled_crew||[],
+      createdAt: row.created_at||''
+    }));
+    updateWoBadge();
+  } catch(e) {
+    console.warn('Could not load work orders — table may not exist yet', e);
+    workOrders = [];
+  }
+}
+async function dbSaveWorkOrder(data, id=null){
+  const row = {
+    report_id: data.reportId||null,
+    client: data.client,
+    field: data.field,
+    issue_notes: data.issueNotes,
+    status: data.status,
+    scheduled_date: data.scheduledDate||null,
+    scheduled_crew: data.scheduledCrew||[]
+  };
+  if(id){
+    await sbFetch('PATCH', `/rest/v1/work_orders?id=eq.${id}`, row);
+  } else {
+    const result = await sbFetch('POST', '/rest/v1/work_orders', row);
+    return result && result[0] ? String(result[0].id) : null;
+  }
+}
+function updateWoBadge(){
+  const open = workOrders.filter(w=>w.status==='open').length;
+  const badge = document.getElementById('wo-badge');
+  if(!badge) return;
+  if(open>0){ badge.textContent=open; badge.style.display='inline'; }
+  else { badge.style.display='none'; }
+}
 
 function save(){
   // Jobs are saved to Supabase, keep local as fallback cache
@@ -388,9 +522,12 @@ function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.vtab')[{week:0,next:1,month:2,list:3,equipment:4}[v]].classList.add('active');
-  // Hide legend on equipment view
-  document.getElementById('legend-bar').style.display=v==='equipment'?'none':'flex';
+  const idx={week:0,next:1,month:2,list:3,equipment:4,reports:5,workorders:6};
+  document.querySelectorAll('.vtab')[idx[v]].classList.add('active');
+  // Hide legend and nav on reports/workorders views
+  const hideNav = v==='reports'||v==='workorders';
+  document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
+  document.querySelector('.nav-row').style.display=hideNav?'none':'flex';
   render();
 }
 function navBack(){
@@ -407,6 +544,8 @@ function render(){
   if(view==='week'||view==='next') renderWeek();
   else if(view==='month') renderMonth();
   else if(view==='equipment') renderEquipment();
+  else if(view==='reports') renderReports();
+  else if(view==='workorders') renderWorkOrders();
   else renderList();
 }
 
@@ -847,8 +986,406 @@ async function deleteJob(id){
     console.error(e);
   }
 }
+// ── REPORTS VIEW ──────────────────────────────────────────────
+function renderReports(){
+  const allClients = ['All', ...new Set(reports.map(r=>r.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
+  const filtered = reportSiteFilter==='All' ? reports : reports.filter(r=>r.client===reportSiteFilter);
+
+  let html = `<div class="site-filter-row">${allClients.map(c=>
+    `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${c.replace(/'/g,"\\'")}'">${c}</button>`
+  ).join('')}</div>`;
+
+  html += `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+    <button class="header-add" onclick="openReportModal()" style="font-size:13px">+ File report</button>
+  </div>`;
+
+  if(!filtered.length){
+    html += `<div class="empty-state"><p>No daily reports yet.<br>Tap "+ File report" to submit one.</p></div>`;
+  } else {
+    filtered.forEach(r=>{
+      const issueFlag = r.hasIssue ? `<span class="report-issue-flag">⚠ Issue flagged</span>` : '';
+      const equipList = (r.equipUsed||[]).length ? (r.equipUsed||[]).join(', ') : '';
+      html += `<div class="report-card" onclick="openReportDetail('${r.id}')">
+        <div class="report-card-header">
+          <div>
+            <div class="report-card-title">${r.client}${r.field?' · '+r.field:''}</div>
+            <div class="report-card-meta">${r.reportDate} · Filed by ${r.filedBy}${r.timeIn&&r.timeOut?' · '+r.timeIn+'–'+r.timeOut:''}</div>
+          </div>
+          ${issueFlag}
+        </div>
+        ${r.workDone?`<div class="wo-issue-text">${r.workDone}</div>`:''}
+        <div class="report-detail-row">
+          ${r.productsUsed?`<span class="report-pill">🧪 ${r.productsUsed}</span>`:''}
+          ${equipList?`<span class="report-pill">🔧 ${equipList}</span>`:''}
+        </div>
+        ${r.hasIssue&&r.issueNotes?`<div style="font-size:12px;color:#991b1b;margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:var(--radius-sm)">⚠ ${r.issueNotes}</div>`:''}
+      </div>`;
+    });
+  }
+  document.getElementById('main-content').innerHTML = html;
+}
+function setReportSite(c){ reportSiteFilter=c; renderReports(); }
+
+function openReportModal(jobId=null){
+  const job = jobId ? jobs.find(j=>j.id===jobId) : null;
+  const todayStr = isoDate(today());
+  // Build job selector options — active jobs
+  const activeJobs = jobs.filter(j=>{ const s=getStatus(j); return s==='inprog'||s==='upcoming'; });
+  const jobOpts = `<option value="">— no linked job —</option>`+activeJobs.map(j=>
+    `<option value="${j.id}" ${job&&job.id===jobId?'selected':''}>${j.client}${j.field?' · '+j.field:''} (${fmtShort(j.startDate)})</option>`
+  ).join('');
+
+  document.getElementById('modal-root').innerHTML=`<div class="modal-overlay" onclick="maybeClose(event)">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">File daily report</div>
+      <div class="sheet-subtitle">Log what happened on site today.</div>
+      <div class="form-group">
+        <label class="form-label">Link to a job (optional)</label>
+        <select id="r-job" onchange="handleReportJobChange(this.value)">
+          ${jobOpts}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Site / client</label>
+        <select id="r-client">
+          <option value="">— pick a site —</option>
+          ${CLIENTS.map(c=>`<option value="${c}" ${job&&job.client===c?'selected':''}>${c}</option>`).join('')}
+          <option value="__custom__">Other</option>
+        </select>
+        <input type="text" id="r-client-custom" placeholder="Type site name..." style="display:none;margin-top:6px">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Field / location</label>
+        <input type="text" id="r-field" placeholder="e.g. Soccer field 1, Baseball diamond" value="${job&&job.field?job.field:''}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Report date</label>
+        <input type="date" id="r-date" value="${todayStr}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Filed by</label>
+        <select id="r-filedby">
+          <option value="">— select —</option>
+          ${CREW.map(c=>`<option value="${c}">${c}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Time on site</label>
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end">
+          <div>
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Arrived</div>
+            <input type="text" id="r-timein" placeholder="e.g. 7:30 AM">
+          </div>
+          <div class="date-sep">→</div>
+          <div>
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Left</div>
+            <input type="text" id="r-timeout" placeholder="e.g. 3:00 PM">
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Work done</label>
+        <textarea id="r-workdone" placeholder="Describe what was completed on site..."></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Products used</label>
+        <input type="text" id="r-products" placeholder="e.g. Dimension, 19-0-6, Subdue...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Equipment used</label>
+        <div class="equip-tabs" id="r-equip-tabs">${buildEquipTabs().replace(/setEquipTab/g,'setEquipTabReport')}</div>
+        <div class="equip-grid" id="r-equip-grid">${buildReportEquipGrid()}</div>
+        <div id="r-equip-selected">${buildReportEquipSelected()}</div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Issue to flag?</label>
+        <div class="issue-toggle" id="r-issue-toggle" onclick="toggleReportIssue()">
+          <div class="toggle-track"><div class="toggle-thumb"></div></div>
+          <span class="toggle-label">No issue — all good</span>
+        </div>
+      </div>
+      <div id="r-issue-section" style="display:none">
+        <div class="form-group">
+          <label class="form-label">Describe the issue</label>
+          <textarea id="r-issue-notes" placeholder="What did you find? What needs attention?"></textarea>
+        </div>
+        <div style="font-size:12px;color:#991b1b;background:#fee2e2;border-radius:var(--radius-sm);padding:8px 10px;margin-bottom:14px">A work order will be created automatically and sent to Matt for scheduling.</div>
+      </div>
+      <div class="sheet-actions">
+        <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+        <button class="btn-save" onclick="saveReport()">Submit report</button>
+      </div>
+    </div>
+  </div>`;
+  // pre-fill if job linked
+  if(job){
+    const sel=document.getElementById('r-client');
+    if(sel) sel.value=job.client;
+  }
+  activeEquipTab=EQUIP_CATS[0];
+  pickedEquip=job?[...(job.equip||[])]:[];
+  reportIssueOn=false;
+}
+
+let reportIssueOn=false;
+function toggleReportIssue(){
+  reportIssueOn=!reportIssueOn;
+  const tog=document.getElementById('r-issue-toggle');
+  const sec=document.getElementById('r-issue-section');
+  if(tog){ tog.classList.toggle('on',reportIssueOn); tog.querySelector('.toggle-label').textContent=reportIssueOn?'Yes — flag an issue':'No issue — all good'; }
+  if(sec) sec.style.display=reportIssueOn?'block':'none';
+}
+function handleReportJobChange(jobId){
+  if(!jobId) return;
+  const job=jobs.find(j=>j.id===jobId);
+  if(!job) return;
+  const cs=document.getElementById('r-client'); if(cs) cs.value=job.client;
+  const fd=document.getElementById('r-field'); if(fd) fd.value=job.field||'';
+  pickedEquip=[...(job.equip||[])];
+  const g=document.getElementById('r-equip-grid'),s=document.getElementById('r-equip-selected');
+  if(g) g.innerHTML=buildReportEquipGrid();
+  if(s) s.innerHTML=buildReportEquipSelected();
+}
+function buildReportEquipGrid(){
+  return EQUIPMENT[activeEquipTab].map(e=>{
+    const safe=e.replace(/'/g,"\\'");
+    const isPicked=pickedEquip.includes(e);
+    return `<div class="sel-opt${isPicked?' picked':''}" onclick="toggleReportEquip('${safe}')" style="font-size:11px;padding:7px 6px">${e}</div>`;
+  }).join('');
+}
+function buildReportEquipSelected(){
+  if(!pickedEquip.length) return '<div style="font-size:11px;color:var(--text-3);margin-top:6px">No equipment selected</div>';
+  return `<div class="equip-selected-list">${pickedEquip.map(e=>{
+    const safe=e.replace(/'/g,"\\'");
+    return `<div class="equip-tag">${e}<span class="equip-tag-x" onclick="toggleReportEquip('${safe}')">×</span></div>`;
+  }).join('')}</div>`;
+}
+function toggleReportEquip(name){
+  pickedEquip=pickedEquip.includes(name)?pickedEquip.filter(e=>e!==name):[...pickedEquip,name];
+  const g=document.getElementById('r-equip-grid'),s=document.getElementById('r-equip-selected');
+  if(g) g.innerHTML=buildReportEquipGrid();
+  if(s) s.innerHTML=buildReportEquipSelected();
+}
+function setEquipTabReport(cat){
+  activeEquipTab=cat;
+  const t=document.getElementById('r-equip-tabs'),g=document.getElementById('r-equip-grid');
+  if(t) t.innerHTML=buildEquipTabs().replace(/onclick="setEquipTab/g,'onclick="setEquipTabReport');
+  if(g) g.innerHTML=buildReportEquipGrid();
+}
+function getRClientValue(){
+  const sel=document.getElementById('r-client');
+  if(!sel) return '';
+  if(sel.value==='__custom__') return (document.getElementById('r-client-custom').value||'').trim();
+  return sel.value;
+}
+async function saveReport(){
+  const client=getRClientValue();
+  const field=(document.getElementById('r-field').value||'').trim();
+  const reportDate=document.getElementById('r-date').value;
+  const filedBy=document.getElementById('r-filedby').value;
+  const timeIn=(document.getElementById('r-timein').value||'').trim();
+  const timeOut=(document.getElementById('r-timeout').value||'').trim();
+  const workDone=(document.getElementById('r-workdone').value||'').trim();
+  const productsUsed=(document.getElementById('r-products').value||'').trim();
+  const equipUsed=[...pickedEquip];
+  const hasIssue=reportIssueOn;
+  const issueNotes=hasIssue?(document.getElementById('r-issue-notes').value||'').trim():'';
+  const jobId=(document.getElementById('r-job').value||'');
+  if(!client){alert('Please select a site.');return;}
+  if(!reportDate){alert('Please pick a date.');return;}
+  if(!filedBy){alert('Please select who is filing this.');return;}
+  const btn=document.querySelector('.btn-save');
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  try{
+    const data={jobId,client,field,reportDate,filedBy,timeIn,timeOut,workDone,productsUsed,equipUsed,hasIssue,issueNotes};
+    const newId=await dbSaveReport(data);
+    if(newId) reports.unshift({...data,id:newId,createdAt:new Date().toISOString()});
+    // Create work order if issue flagged
+    if(hasIssue&&issueNotes){
+      const woData={reportId:newId||'',client,field,issueNotes,status:'open',scheduledDate:'',scheduledCrew:[]};
+      const woId=await dbSaveWorkOrder(woData);
+      if(woId) workOrders.unshift({...woData,id:woId,createdAt:new Date().toISOString()});
+      updateWoBadge();
+    }
+    closeModal();
+    renderReports();
+  } catch(e){
+    alert('Error saving report. Check your connection.');
+    console.error(e);
+    if(btn){btn.disabled=false;btn.textContent='Submit report';}
+  }
+}
+
+function openReportDetail(id){
+  const r=reports.find(x=>x.id===id);
+  if(!r) return;
+  const linkedWo=workOrders.find(w=>w.reportId===id);
+  const equipList=(r.equipUsed||[]).join(', ')||'—';
+  document.getElementById('modal-root').innerHTML=`<div class="modal-overlay" onclick="maybeClose(event)">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">${r.client}${r.field?' · '+r.field:''}</div>
+      <div class="sheet-subtitle">${r.reportDate} · Filed by ${r.filedBy}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+        <div style="background:var(--bg);border-radius:var(--radius-sm);padding:10px;border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px">Time on site</div>
+          <div style="font-size:14px;font-weight:600">${r.timeIn&&r.timeOut?r.timeIn+' – '+r.timeOut:'—'}</div>
+        </div>
+        <div style="background:var(--bg);border-radius:var(--radius-sm);padding:10px;border:1px solid var(--border)">
+          <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px">Status</div>
+          <div style="font-size:14px;font-weight:600">${r.hasIssue?'<span style="color:#991b1b">⚠ Issue flagged</span>':'✓ All good'}</div>
+        </div>
+      </div>
+      ${r.workDone?`<div class="form-group"><div class="form-label">Work done</div><div style="font-size:13px;color:var(--text-2);line-height:1.5">${r.workDone}</div></div>`:''}
+      ${r.productsUsed?`<div class="form-group"><div class="form-label">Products used</div><div style="font-size:13px;color:var(--text-2)">${r.productsUsed}</div></div>`:''}
+      <div class="form-group"><div class="form-label">Equipment used</div><div style="font-size:13px;color:var(--text-2)">${equipList}</div></div>
+      ${r.hasIssue&&r.issueNotes?`<div style="background:#fee2e2;border:1.5px solid #fca5a5;border-radius:var(--radius-sm);padding:12px;margin-bottom:14px"><div style="font-size:11px;font-weight:600;color:#991b1b;margin-bottom:4px">ISSUE FLAGGED</div><div style="font-size:13px;color:#7f1d1d">${r.issueNotes}</div></div>`:''}
+      ${linkedWo?`<div style="background:var(--green-light);border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:10px;margin-bottom:14px"><div style="font-size:11px;font-weight:600;color:var(--green-dark)">WORK ORDER CREATED</div><div style="font-size:12px;color:var(--text-2);margin-top:2px">Status: ${linkedWo.status.toUpperCase()}${linkedWo.scheduledDate?' · Scheduled '+linkedWo.scheduledDate:''}</div></div>`:''}
+      <div class="sheet-actions">
+        <button class="btn-cancel" onclick="closeModal()">Close</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── WORK ORDERS VIEW ──────────────────────────────────────────
+function renderWorkOrders(){
+  const allClients = ['All', ...new Set(workOrders.map(w=>w.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
+  const byStatus = woStatusFilter==='all' ? workOrders : workOrders.filter(w=>w.status===woStatusFilter);
+  const filtered = woSiteFilter==='All' ? byStatus : byStatus.filter(w=>w.client===woSiteFilter);
+
+  const openCount=workOrders.filter(w=>w.status==='open').length;
+  const schedCount=workOrders.filter(w=>w.status==='scheduled').length;
+  const resolvedCount=workOrders.filter(w=>w.status==='resolved').length;
+
+  let html=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
+    <div class="stat-card" style="cursor:pointer;border-color:${woStatusFilter==='open'?'#ef4444':'var(--border)'}" onclick="setWoStatus('open')"><div class="stat-num" style="color:#dc2626">${openCount}</div><div class="stat-label">Open</div></div>
+    <div class="stat-card" style="cursor:pointer;border-color:${woStatusFilter==='scheduled'?'#f59e0b':'var(--border)'}" onclick="setWoStatus('scheduled')"><div class="stat-num" style="color:#d97706">${schedCount}</div><div class="stat-label">Scheduled</div></div>
+    <div class="stat-card" style="cursor:pointer;border-color:${woStatusFilter==='resolved'?'#22c55e':'var(--border)'}" onclick="setWoStatus('resolved')"><div class="stat-num" style="color:#16a34a">${resolvedCount}</div><div class="stat-label">Resolved</div></div>
+  </div>`;
+
+  html += `<div class="site-filter-row">${allClients.map(c=>
+    `<button class="site-chip${woSiteFilter===c?' active':''}" onclick="setWoSite('${c.replace(/'/g,"\\'")}'">${c}</button>`
+  ).join('')}</div>`;
+
+  if(!filtered.length){
+    const labels={open:'No open work orders.',scheduled:'No scheduled work orders.',resolved:'No resolved work orders.',all:'No work orders yet.'};
+    html+=`<div class="empty-state"><p>${labels[woStatusFilter]||'No work orders.'}</p></div>`;
+  } else {
+    filtered.forEach(w=>{
+      const stLabel={open:'Open',scheduled:'Scheduled',resolved:'Resolved'}[w.status]||w.status;
+      const stCls={open:'wo-status-open',scheduled:'wo-status-scheduled',resolved:'wo-status-resolved'}[w.status]||'wo-status-open';
+      html+=`<div class="wo-card wo-${w.status}" onclick="openWoModal('${w.id}')">
+        <div class="wo-card-header">
+          <div>
+            <div class="wo-card-title">${w.client}${w.field?' · '+w.field:''}</div>
+            <div class="wo-card-meta">Created ${w.createdAt?w.createdAt.slice(0,10):''}</div>
+          </div>
+          <span class="wo-status-badge ${stCls}">${stLabel}</span>
+        </div>
+        <div class="wo-issue-text">${w.issueNotes}</div>
+        ${w.status==='scheduled'&&w.scheduledDate?`<div class="wo-schedule-info">📅 Scheduled for ${w.scheduledDate}${(w.scheduledCrew||[]).length?' · '+(w.scheduledCrew||[]).join(', '):''}</div>`:''}
+      </div>`;
+    });
+  }
+  document.getElementById('main-content').innerHTML=html;
+}
+function setWoSite(c){ woSiteFilter=c; renderWorkOrders(); }
+function setWoStatus(s){ woStatusFilter=s; renderWorkOrders(); }
+
+function openWoModal(id){
+  const w=workOrders.find(x=>x.id===id);
+  if(!w) return;
+  const canSchedule=w.status==='open';
+  const canResolve=w.status==='scheduled'||w.status==='open';
+  const isMatt=true; // Matt-only gate — in future tie to login
+  document.getElementById('modal-root').innerHTML=`<div class="modal-overlay" onclick="maybeClose(event)">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Work Order</div>
+      <div class="sheet-subtitle">${w.client}${w.field?' · '+w.field:''}</div>
+      <div style="background:#fee2e2;border:1.5px solid #fca5a5;border-radius:var(--radius-sm);padding:12px;margin-bottom:16px">
+        <div style="font-size:11px;font-weight:600;color:#991b1b;margin-bottom:4px">ISSUE</div>
+        <div style="font-size:13px;color:#7f1d1d;line-height:1.5">${w.issueNotes}</div>
+      </div>
+      ${w.status==='scheduled'&&w.scheduledDate?`<div class="wo-schedule-info" style="margin-bottom:16px">📅 Currently scheduled: ${w.scheduledDate}${(w.scheduledCrew||[]).length?' · '+(w.scheduledCrew||[]).join(', '):''}</div>`:''}
+      ${canSchedule&&isMatt?`
+      <div class="form-group">
+        <label class="form-label">Schedule this work order</label>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:6px">Scheduling will add this to the main job calendar automatically.</div>
+        <input type="date" id="wo-date" value="${w.scheduledDate||isoDate(today())}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Assign crew</label>
+        <div class="crew-grid" id="wo-crew-grid">${buildWoCrewGrid(w.scheduledCrew||[])}</div>
+      </div>
+      <p class="matt-only-note">Only Matt can schedule and resolve work orders.</p>
+      `:''}
+      <div class="sheet-actions">
+        ${w.status==='resolved'?'':`<button class="btn-delete" onclick="resolveWo('${w.id}')">Mark resolved</button>`}
+        <button class="btn-cancel" onclick="closeModal()">Close</button>
+        ${canSchedule&&isMatt?`<button class="btn-save" onclick="scheduleWo('${w.id}')">Schedule</button>`:''}
+      </div>
+    </div>
+  </div>`;
+  woPicked=w.scheduledCrew?[...w.scheduledCrew]:[];
+}
+
+let woPicked=[];
+function buildWoCrewGrid(pre){
+  woPicked=pre||woPicked||[];
+  return CREW.map(c=>`<div class="sel-opt${woPicked.includes(c)?' picked':''}" onclick="toggleWoCrew('${c}')">${c}</div>`).join('');
+}
+function toggleWoCrew(name){
+  woPicked=woPicked.includes(name)?woPicked.filter(c=>c!==name):[...woPicked,name];
+  const g=document.getElementById('wo-crew-grid');
+  if(g) g.innerHTML=buildWoCrewGrid(woPicked);
+}
+async function scheduleWo(id){
+  const w=workOrders.find(x=>x.id===id);
+  if(!w) return;
+  const scheduledDate=document.getElementById('wo-date').value;
+  if(!scheduledDate){alert('Pick a date to schedule.');return;}
+  const scheduledCrew=[...woPicked];
+  const btn=document.querySelector('.btn-save');
+  if(btn){btn.disabled=true;btn.textContent='Scheduling...';}
+  try{
+    const updated={...w,status:'scheduled',scheduledDate,scheduledCrew};
+    await dbSaveWorkOrder(updated,id);
+    Object.assign(w,{status:'scheduled',scheduledDate,scheduledCrew});
+    // Auto-add to jobs calendar
+    const newJob={
+      client:w.client,field:w.field,service:'Work Order',
+      startDate:scheduledDate,duration:1,crew:scheduledCrew,equip:[],
+      touchUp:false,notes:'Work order: '+w.issueNotes.slice(0,80),includeWeekends:false
+    };
+    const newId=await dbSaveJob(newJob);
+    if(newId) jobs.push({...newJob,id:newId});
+    save();
+    updateWoBadge();
+    closeModal();
+    renderWorkOrders();
+  } catch(e){
+    alert('Error scheduling work order.');console.error(e);
+    if(btn){btn.disabled=false;btn.textContent='Schedule';}
+  }
+}
+async function resolveWo(id){
+  if(!confirm('Mark this work order as resolved?')) return;
+  const w=workOrders.find(x=>x.id===id);
+  if(!w) return;
+  try{
+    await dbSaveWorkOrder({...w,status:'resolved'},id);
+    w.status='resolved';
+    updateWoBadge();
+    closeModal();
+    renderWorkOrders();
+  } catch(e){ alert('Error resolving work order.'); console.error(e); }
+}
+
 // Init: load from Supabase then start polling
-loadJobs().then(()=>startPolling());
+loadJobs().then(()=>{ loadReports(); loadWorkOrders(); startPolling(); });
 </script>
 </body>
 </html>

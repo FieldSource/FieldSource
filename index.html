@@ -1171,6 +1171,74 @@ function getRClientValue(){
   if(sel.value==='__custom__') return (document.getElementById('r-client-custom').value||'').trim();
   return sel.value;
 }
+// ── GOOGLE SHEETS SYNC ───────────────────────────────────────
+const SHEETS_CONFIG = {
+  spreadsheetId: '1NMXln62txfxFKGOhv-o_lsnYcDCohTfLzfTXpwEq2SM',
+  sheetName: 'Sheet1',
+  clientEmail: 'fieldsource-sheets@field-source-496217.iam.gserviceaccount.com',
+  privateKey: `-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQC78or+mh9wirMT\n57cKnk+riiD9vOkUzcev4eFvw/UpyGkjA8HJntmd6qTk6gy555vl2z6DalPCOKjx\neNYlHLfgzlHSnmldX45oh29JNFVu7HoGz73H0DW8acr4BzsEzd7x5Lgy2nt68+sk\nrOtkwePk0UML2fYRu7jlgsrwgLd+JjiqljF7Zf4zWD0Bn9+MEfd6Nr87+4eZ/jPV\n6UTmBq/nRMnWVRCrZlsT25tCRippudD3rzMRejLZLf+W/eLppqD+j+t5xBl2y5EY\nXSrkX0S5/cpNTrLrmKKudGyn8r527TD3Bbo7+CgB+EgW+XgeNo96X2S7oA14FVhC\n51dHGaahAgMBAAECggEAQP73omSaSsksdM3FNx7YXnI+RoF1+YPQcrqiw4v41KJB\n+aHq+la82yeyLpfiHshB2ZOgYsH6hUgi5J7tL5hm3o97LGMr/OZ20R9FFQPMJ7gP\n2xssflU6wBW142BcwKSRXQXDzZJQ8Yw43U4PeaCztwXHMeoGdst8faJlnBZnXnAx\nfaXWHyiYCYBgFWc34s1cI7zYwv1pdr9g+x9KoqfGApaeGcAe4gXT9hV3xySNfyZv\nJK7hXpW0pDf5ycqfnEJkCMAfxcdHI5QDojQWTKtHyriEoq8ZL1FDmVIPm1ckhQAg\n/5lQI9OMKnSkQ/8l6Qh0Gn0vsqtLaPXQIcY7KXaeoQKBgQDlBtOPcIdaKPmbsrwW\nTXvAVmtb7jf3aIQgtTE6tuAHuNJPUGFAZvQ1T3CcY7prx+1wa4BKgcxDsL4kTMda\nqbzoSk53pWUdMYNVxRkET9hg7YJsPnvBmXb2fQnGZjkshrZtdJtUH0qcHazLIj8w\nhlB69gE6DYkvJ20vSJUNs+6wGwKBgQDSFSyWPSBYHIcveaO/u8V8zDiWLihEsVTw\nOB6310pX0lB+fr5Pp+IKV8joURP15IhaRvywM/iJv5Ajj4/58I0YdDs2IovXMHaB\nvRXJ285RKUgjd1Uc5Nq0S+toNNEoE2c4n6rUv9U3VYLlOnMkWXnbX8GKvPcsKRBW\nQS9Z7yNH8wKBgQC++GU6SxOh217fNDdfxXY2GBlnS4kBVPYvq8aD9e9yoOtE1Xpy\nUCa7uSTmUsYkj03umsUb24VuwBacgCUO9VAexa8OVyysHhgsUbAdh1Ke6A0Do0pg\nUU4AFJ0tARoVhbLiLARFLd5xtNDbhQ/5r1W2YiD9vkGwvwhtD/GxvmJ+FwKBgQDI\nZ7aO42TVaPF00n7oyoEMGezpJsL3NIsoVQDIszGSMWjkIpf9eNNitndLVvzJluaT\n6B/pHsq67OjdY3gfH+AZMdfCPpZUA0EpZm1AkNRyDAVq/81LsO0JDVtVnvzfVBMl\nqvrV1OHa1VH2xhlM1aYvJVuFs9m+YLXa8nfvPPbVDQKBgQDDFFUrJNoy3omg7UTC\nW1EFn8va2Zkt8nZzQhcpLpPjSgYiXJqhiod628oCj8y2NJQcjiTMg+XacUZjz/YP\nCE1JkFF7gowYA3203SxzN8UvNNSBo+qw3jtx/mjttqbf0Xm8q7hlDsnud29bxUZk\nOOeUuhLzyABzOwEiPuGUQj3ceg==\n-----END PRIVATE KEY-----\n`
+};
+
+async function getGoogleToken(){
+  const now=Math.floor(Date.now()/1000);
+  const header=btoa(JSON.stringify({alg:'RS256',typ:'JWT'}));
+  const claim=btoa(JSON.stringify({
+    iss:SHEETS_CONFIG.clientEmail,
+    scope:'https://www.googleapis.com/auth/spreadsheets',
+    aud:'https://oauth2.googleapis.com/token',
+    exp:now+3600,iat:now
+  }));
+  const sigInput=`${header}.${claim}`;
+  // Import the private key for signing
+  const pemKey=SHEETS_CONFIG.privateKey.replace(/-----BEGIN PRIVATE KEY-----|-----END PRIVATE KEY-----|\n/g,'');
+  const binaryKey=Uint8Array.from(atob(pemKey),c=>c.charCodeAt(0));
+  const cryptoKey=await crypto.subtle.importKey(
+    'pkcs8',binaryKey.buffer,{name:'RSASSA-PKCS1-v1_5',hash:'SHA-256'},false,['sign']
+  );
+  const signature=await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',cryptoKey,
+    new TextEncoder().encode(sigInput)
+  );
+  const sig=btoa(String.fromCharCode(...new Uint8Array(signature)));
+  const jwt=`${sigInput}.${sig}`;
+  const resp=await fetch('https://oauth2.googleapis.com/token',{
+    method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:`grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`
+  });
+  const data=await resp.json();
+  return data.access_token;
+}
+
+async function appendToSheet(data){
+  try{
+    const token=await getGoogleToken();
+    const row=[
+      data.reportDate,
+      data.client,
+      data.field||'',
+      data.filedBy,
+      data.timeIn||'',
+      data.timeOut||'',
+      data.workDone||'',
+      data.productsUsed||'',
+      (data.equipUsed||[]).join(', '),
+      data.hasIssue?'Yes':'No',
+      data.issueNotes||''
+    ];
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEETS_CONFIG.spreadsheetId}/values/${SHEETS_CONFIG.sheetName}!A1:K1:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+      {
+        method:'POST',
+        headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'},
+        body:JSON.stringify({values:[row]})
+      }
+    );
+  } catch(e){
+    console.warn('Google Sheets sync failed (report still saved to Supabase):',e);
+  }
+}
+
 async function saveReport(){
   const client=getRClientValue();
   const field=(document.getElementById('r-field').value||'').trim();
@@ -1193,6 +1261,8 @@ async function saveReport(){
     const data={jobId,client,field,reportDate,filedBy,timeIn,timeOut,workDone,productsUsed,equipUsed,hasIssue,issueNotes};
     const newId=await dbSaveReport(data);
     if(newId) reports.unshift({...data,id:newId,createdAt:new Date().toISOString()});
+    // Sync to Google Sheets (non-blocking — Supabase is the source of truth)
+    appendToSheet(data);
     // Create work order if issue flagged
     if(hasIssue&&issueNotes){
       const woData={reportId:newId||'',client,field,issueNotes,status:'open',scheduledDate:'',scheduledCrew:[]};

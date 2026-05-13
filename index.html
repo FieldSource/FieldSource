@@ -48,6 +48,8 @@ main{padding:12px 16px 100px}
 .day-header.today{background:rgba(42,106,34,0.15);color:var(--green-dark);border-color:var(--green-dark)}
 .job-chip{font-size:11px;padding:5px 7px;border-radius:var(--radius-sm);margin-bottom:5px;cursor:pointer;border:1px solid transparent;line-height:1.35;position:relative;transition:opacity .15s}
 .job-chip:active{opacity:0.7}
+.job-chip.dragging{opacity:0.4;cursor:grabbing}
+.day-col.drag-over{background:rgba(42,106,34,0.08);border-radius:var(--radius-sm);outline:2px dashed var(--green);outline-offset:-2px}
 .chip-client{font-weight:600}
 .chip-detail{opacity:0.8;margin-top:1px}
 .multi-day-bar{position:absolute;bottom:0;left:0;right:0;height:3px;border-radius:0 0 var(--radius-sm) var(--radius-sm);background:currentColor;opacity:0.35}
@@ -181,22 +183,64 @@ main{padding:12px 16px 100px}
 .fab{position:fixed;bottom:28px;right:20px;background:var(--green);color:#fff;border:none;border-radius:99px;padding:14px 22px;font-size:15px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;box-shadow:0 4px 16px rgba(58,140,47,0.4);z-index:150;display:none}
 .fab.visible{display:block}
 .fab:active{background:var(--green-dark);transform:scale(0.97)}
+/* LOGIN SCREEN */
+.login-screen{position:fixed;inset:0;background:var(--bg);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:36px 32px;width:100%;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,0.08)}
+.login-logo{text-align:center;margin-bottom:28px}
+.login-logo-text{font-size:22px;font-weight:700;color:var(--green-dark);letter-spacing:-0.5px}
+.login-logo-sub{font-size:12px;color:var(--text-3);margin-top:2px}
+.login-field{margin-bottom:16px}
+.login-label{font-size:12px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;display:block}
+.login-input{width:100%;padding:12px 14px;border:1.5px solid var(--border-2);border-radius:var(--radius-sm);font-size:15px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);outline:none;box-sizing:border-box}
+.login-input:focus{border-color:var(--green);background:#fff}
+.login-btn{width:100%;padding:14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:15px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:8px}
+.login-btn:active{background:var(--green-dark)}
+.login-btn:disabled{opacity:0.6;cursor:not-allowed}
+.login-error{font-size:13px;color:#dc2626;margin-top:10px;text-align:center;min-height:20px}
+.logout-btn{font-size:12px;color:var(--text-3);background:none;border:1px solid var(--border);border-radius:99px;padding:4px 12px;cursor:pointer;font-family:'DM Sans',sans-serif}
+.logout-btn:active{background:var(--bg)}
+.user-chip{font-size:12px;color:var(--text-2);display:flex;align-items:center;gap:8px}
 </style>
 </head>
 <body>
-<header>
+<!-- LOGIN SCREEN -->
+<div class="login-screen" id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-text">Field Source</div>
+      <div class="login-logo-sub">Prepare to play</div>
+    </div>
+    <div class="login-field">
+      <label class="login-label">Email</label>
+      <input class="login-input" type="email" id="login-email" placeholder="you@fieldsourceohio.com" autocomplete="email">
+    </div>
+    <div class="login-field">
+      <label class="login-label">Password</label>
+      <input class="login-input" type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="login-btn" id="login-btn" onclick="doLogin()">Sign in</button>
+    <div class="login-error" id="login-error"></div>
+  </div>
+</div>
+
+<header id="main-header" style="display:none">
   <div class="logo-mark">
     <div>
       <div class="logo-text">Field Source</div>
       <div class="logo-sub">Prepare to play</div>
     </div>
   </div>
-  <div style="display:flex;gap:8px">
+  <div style="display:flex;gap:8px;align-items:center">
+    <div class="user-chip">
+      <span id="header-user-name"></span>
+      <button class="logout-btn" onclick="doLogout()">Sign out</button>
+    </div>
     <button class="header-add" onclick="openReportModal()">+ File report</button>
-    <button class="header-add" onclick="openModal()">+ Add job</button>
+    <button class="header-add" id="add-job-btn" onclick="openModal()">+ Add job</button>
   </div>
 </header>
 
+<div id="app-body" style="display:none">
 <div class="view-bar">
   <div class="view-bar-row">
     <button class="vtab active" onclick="setView('week')">This week</button>
@@ -226,6 +270,7 @@ main{padding:12px 16px 100px}
 
 <main id="main-content"></main>
 <div id="modal-root"></div>
+</div><!-- end app-body -->
 
 <script>
 const CLIENTS=['Adena','Canal Winchester','Centerville-Washington','Chillicothe','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
@@ -584,17 +629,21 @@ function renderWeek(){
     days[0].toLocaleDateString('en-US',{month:'short',day:'numeric'})+' – '+
     days[6].toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const todayStr=isoDate(today());
+  const canDrag=isAdmin; // admins only
   let html='<div class="week-scroll"><div class="week-grid">';
   days.forEach((d,i)=>{
     const ds=isoDate(d);
     const dayJobs=jobsForDate(ds);
-    html+=`<div class="day-col"><div class="day-header${ds===todayStr?' today':''}">${DOW[i]}<br><strong>${d.getDate()}</strong></div>`;
+    html+=`<div class="day-col" id="daycol-${ds}"
+      ondragover="handleDragOver(event,'${ds}')"
+      ondragleave="handleDragLeave(event,'${ds}')"
+      ondrop="handleDrop(event,'${ds}')">
+      <div class="day-header${ds===todayStr?' today':''}">${DOW[i]}<br><strong>${d.getDate()}</strong></div>`;
     if(!dayJobs.length) html+=`<div class="empty-col">—</div>`;
     dayJobs.forEach(j=>{
       const st=statusMeta(getStatus(j));
       const dur=parseInt(j.duration)||1;
       const crew=(j.crew||[]).slice(0,2).join(', ')+(((j.crew||[]).length>2)?` +${(j.crew||[]).length-2}`:'');
-      const eCount=(j.equip||[]).length;
       const trailers=(j.equip||[]).filter(e=>EQUIPMENT.Trailers.includes(e));
       const specialty=(j.equip||[]).filter(e=>EQUIPMENT.Specialty.includes(e));
       const chipEquip=[...trailers,...specialty];
@@ -607,7 +656,12 @@ function renderWeek(){
           .replace('Ingersoll Rand ','').replace('Wacker Neuson ','').replace('Smithco ','')
           .trim()
       }
-      html+=`<div class="job-chip ${st.cls}" onclick="openModal('${j.id}')">
+      html+=`<div class="job-chip ${st.cls}"
+        ${canDrag?`draggable="true"
+          ondragstart="handleDragStart(event,'${j.id}')"
+          ondragend="handleDragEnd(event)"
+          title="Drag to reschedule"`:''}
+        onclick="openModal('${j.id}')">
         <div class="chip-client">${j.client.split(' ')[0]}${dur>1?`<span class="duration-badge">${dur}d</span>`:''}</div>
         <div class="chip-detail">${j.service}${j.field?' · '+j.field:''}<br>${crew||'Unassigned'}</div>
         ${chipEquip.length?`<div class="chip-trailers">${chipEquip.map(t=>shortName(t)).join(', ')}</div>`:''}
@@ -751,6 +805,7 @@ function crewFilterBar(){
 function setCrew(c){crewFilter=c;render()}
 
 function openModal(id=null,defaultDate=null){
+  if(!isAdmin) return; // non-admins cannot add or edit jobs
   editId=id;
   const job=id?jobs.find(j=>j.id===id):null;
   pickedCrew=job?[...(job.crew||[])]:[];
@@ -1390,7 +1445,7 @@ function openWoModal(id){
   if(!w) return;
   const canSchedule=w.status==='open';
   const canResolve=w.status==='scheduled'||w.status==='open';
-  const isMatt=true; // Matt-only gate — in future tie to login
+  const isMatt=isAdmin; // tied to admin role
   document.getElementById('modal-root').innerHTML=`<div class="modal-overlay" onclick="maybeClose(event)">
     <div class="modal-sheet">
       <div class="sheet-handle"></div>
@@ -1475,8 +1530,192 @@ async function resolveWo(id){
   } catch(e){ alert('Error resolving work order.'); console.error(e); }
 }
 
+// ── AUTH ─────────────────────────────────────────────────────
+const ADMIN_EMAILS = [
+  'jake@fieldsourceohio.com',
+  'ryan@fieldsourceohio.com',
+  'matt@fieldsourceohio.com'
+];
+
+let currentUser = null;
+let currentToken = null;
+let isAdmin = false;
+
+async function doLogin(){
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  const errEl = document.getElementById('login-error');
+  const btn = document.getElementById('login-btn');
+  errEl.textContent = '';
+  if(!email||!password){ errEl.textContent='Please enter your email and password.'; return; }
+  btn.disabled = true; btn.textContent = 'Signing in...';
+  try{
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if(!res.ok || data.error){ errEl.textContent = data.error_description || data.msg || 'Invalid email or password.'; btn.disabled=false; btn.textContent='Sign in'; return; }
+    currentUser = data.user;
+    currentToken = data.access_token;
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
+    // Store session
+    sessionStorage.setItem('fs_token', currentToken);
+    sessionStorage.setItem('fs_user', JSON.stringify(currentUser));
+    showApp();
+  } catch(e){
+    errEl.textContent = 'Connection error. Please try again.';
+    btn.disabled=false; btn.textContent='Sign in';
+  }
+}
+
+function doLogout(){
+  sessionStorage.removeItem('fs_token');
+  sessionStorage.removeItem('fs_user');
+  currentUser = null; currentToken = null; isAdmin = false;
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('main-header').style.display = 'none';
+  document.getElementById('app-body').style.display = 'none';
+  document.getElementById('login-email').value = '';
+  document.getElementById('login-password').value = '';
+}
+
+function showApp(){
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('main-header').style.display = '';
+  document.getElementById('app-body').style.display = '';
+  // Set user name in header
+  const name = currentUser.email.split('@')[0];
+  const display = name.charAt(0).toUpperCase() + name.slice(1);
+  document.getElementById('header-user-name').textContent = display;
+  // Hide Add Job button for non-admins
+  const ajb = document.getElementById('add-job-btn');
+  if(ajb) ajb.style.display = isAdmin ? '' : 'none';
+  // Load data and start
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); startPolling(); });
+  render();
+}
+
+// Override sbFetch to use auth token when available
+const _origSbFetch = sbFetch;
+async function sbFetch(method, path, body=null){
+  const token = currentToken || SUPABASE_KEY;
+  const opts = {
+    method,
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + token,
+      'Content-Type': 'application/json',
+      'Prefer': method==='POST'?'return=representation':'',
+    }
+  };
+  if(body) opts.body = JSON.stringify(body);
+  const res = await fetch(SUPABASE_URL + path, opts);
+  if(!res.ok){
+    const t=await res.text();
+    console.error('Supabase error:', method, path, t);
+    alert('Supabase error: ' + t);
+    throw new Error(t);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// Check for existing session on load
+function checkSession(){
+  const token = sessionStorage.getItem('fs_token');
+  const user = sessionStorage.getItem('fs_user');
+  if(token && user){
+    try{
+      currentToken = token;
+      currentUser = JSON.parse(user);
+      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
+      showApp();
+      return;
+    } catch(e){}
+  }
+  // No session — show login
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+// Restrict admin-only actions
+function requireAdmin(action){
+  if(!isAdmin){ alert('This action requires admin access.'); return false; }
+  return true;
+}
+
+
+let dragJobId = null;
+
+function handleDragStart(e, jobId){
+  dragJobId = jobId;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', jobId);
+  setTimeout(()=>{ if(e.target) e.target.classList.add('dragging'); }, 0);
+}
+
+function handleDragEnd(e){
+  if(e.target) e.target.classList.remove('dragging');
+  document.querySelectorAll('.day-col').forEach(c=>c.classList.remove('drag-over'));
+  dragJobId = null;
+}
+
+function handleDragOver(e, ds){
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.day-col').forEach(c=>c.classList.remove('drag-over'));
+  const col = document.getElementById('daycol-'+ds);
+  if(col) col.classList.add('drag-over');
+}
+
+function handleDragLeave(e, ds){
+  // Only remove if leaving the column entirely
+  if(!e.currentTarget.contains(e.relatedTarget)){
+    const col = document.getElementById('daycol-'+ds);
+    if(col) col.classList.remove('drag-over');
+  }
+}
+
+async function handleDrop(e, newStartDate){
+  e.preventDefault();
+  document.querySelectorAll('.day-col').forEach(c=>c.classList.remove('drag-over'));
+  if(!dragJobId) return;
+  const job = jobs.find(j=>j.id===dragJobId);
+  if(!job) return;
+  if(job.startDate === newStartDate) return; // no change
+
+  // Check for equipment conflicts on the new dates
+  const dur = parseInt(job.duration)||1;
+  const conflicts = [];
+  (job.equip||[]).forEach(eq=>{
+    const conflictJob = trailerConflictJob(eq, newStartDate, dur, job.id);
+    if(conflictJob) conflicts.push({ eq, conflictJob });
+  });
+
+  if(conflicts.length){
+    const names = conflicts.map(c=>`${c.eq} (conflicts with ${c.conflictJob.client})`).join('\n');
+    const ok = confirm(`Equipment conflict on new date:\n\n${names}\n\nMove the job anyway?`);
+    if(!ok){ dragJobId=null; return; }
+  }
+
+  // Apply the move
+  const oldStart = job.startDate;
+  job.startDate = newStartDate;
+  try{
+    await dbSaveJob(job, job.id);
+    render();
+  } catch(err){
+    job.startDate = oldStart; // revert on failure
+    alert('Error moving job. Please try again.');
+    render();
+  }
+  dragJobId = null;
+}
+
 // Init: load from Supabase then start polling
-loadJobs().then(()=>{ loadReports(); loadWorkOrders(); startPolling(); });
+// Init
+checkSession();
 </script>
 </body>
 </html>

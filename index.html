@@ -349,7 +349,6 @@ async function loadReports(){
 }
 async function dbSaveReport(data){
   const row = {
-    job_id: data.jobId||null,
     client: data.client,
     field: data.field,
     report_date: data.reportDate,

@@ -1082,12 +1082,12 @@ function openReportModal(){
         <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end">
           <div>
             <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Arrived</div>
-            <input type="text" id="r-timein" placeholder="e.g. 7:30 AM">
+            <select id="r-timein">${buildTimeOptions()}</select>
           </div>
           <div class="date-sep">→</div>
           <div>
             <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Left</div>
-            <input type="text" id="r-timeout" placeholder="e.g. 3:00 PM">
+            <select id="r-timeout">${buildTimeOptions()}</select>
           </div>
         </div>
       </div>
@@ -1309,10 +1309,35 @@ function openReportDetail(id){
       ${r.hasIssue&&r.issueNotes?`<div style="background:#fee2e2;border:1.5px solid #fca5a5;border-radius:var(--radius-sm);padding:12px;margin-bottom:14px"><div style="font-size:11px;font-weight:600;color:#991b1b;margin-bottom:4px">ISSUE FLAGGED</div><div style="font-size:13px;color:#7f1d1d">${r.issueNotes}</div></div>`:''}
       ${linkedWo?`<div style="background:var(--green-light);border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:10px;margin-bottom:14px"><div style="font-size:11px;font-weight:600;color:var(--green-dark)">WORK ORDER CREATED</div><div style="font-size:12px;color:var(--text-2);margin-top:2px">Status: ${linkedWo.status.toUpperCase()}${linkedWo.scheduledDate?' · Scheduled '+linkedWo.scheduledDate:''}</div></div>`:''}
       <div class="sheet-actions">
+        <button class="btn-delete" onclick="deleteReport('${r.id}')">Delete</button>
         <button class="btn-cancel" onclick="closeModal()">Close</button>
       </div>
     </div>
   </div>`;
+}
+
+async function deleteReport(id){
+  if(!confirm('Delete this report? This cannot be undone.')) return;
+  try{
+    await sbFetch('DELETE', `/rest/v1/field_reports?id=eq.${id}`);
+    reports=reports.filter(r=>r.id!==id);
+    closeModal();
+    renderReports();
+  } catch(e){ alert('Error deleting report.'); console.error(e); }
+}
+
+function buildTimeOptions(selectedVal=''){
+  let opts='<option value="">— select —</option>';
+  for(let h=5;h<=22;h++){
+    for(let m=0;m<60;m+=30){
+      const ampm=h<12?'AM':'PM';
+      const hour=h>12?h-12:h===0?12:h;
+      const min=m===0?'00':'30';
+      const label=`${hour}:${min} ${ampm}`;
+      opts+=`<option value="${label}"${selectedVal===label?' selected':''}>${label}</option>`;
+    }
+  }
+  return opts;
 }
 
 // ── WORK ORDERS VIEW ──────────────────────────────────────────

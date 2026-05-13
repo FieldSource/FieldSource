@@ -275,7 +275,12 @@ async function sbFetch(method, path, body=null){
   };
   if(body) opts.body = JSON.stringify(body);
   const res = await fetch(SUPABASE_URL + path, opts);
-  if(!res.ok){ const t=await res.text(); throw new Error(t); }
+  if(!res.ok){
+    const t=await res.text();
+    console.error('Supabase error:', method, path, t);
+    alert('Supabase error: ' + t);
+    throw new Error(t);
+  }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
 }

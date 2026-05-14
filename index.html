@@ -323,7 +323,7 @@ async function sbFetch(method, path, body=null){
   if(!res.ok){
     const t=await res.text();
     console.error('Supabase error:', method, path, t);
-    alert('Supabase error: ' + t);
+    if(t.includes('JWT expired')){ doLogout(); return null; }
     throw new Error(t);
   }
   const text = await res.text();
@@ -1559,9 +1559,10 @@ async function doLogin(){
     if(!res.ok || data.error){ errEl.textContent = data.error_description || data.msg || 'Invalid email or password.'; btn.disabled=false; btn.textContent='Sign in'; return; }
     currentUser = data.user;
     currentToken = data.access_token;
+    refreshToken = data.refresh_token;
     isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
-    // Store session
     sessionStorage.setItem('fs_token', currentToken);
+    sessionStorage.setItem('fs_refresh', refreshToken);
     sessionStorage.setItem('fs_user', JSON.stringify(currentUser));
     showApp();
   } catch(e){
@@ -1615,7 +1616,7 @@ async function sbFetch(method, path, body=null){
   if(!res.ok){
     const t=await res.text();
     console.error('Supabase error:', method, path, t);
-    alert('Supabase error: ' + t);
+    if(t.includes('JWT expired')){ doLogout(); return null; }
     throw new Error(t);
   }
   const text = await res.text();
@@ -1625,10 +1626,12 @@ async function sbFetch(method, path, body=null){
 // Check for existing session on load
 function checkSession(){
   const token = sessionStorage.getItem('fs_token');
+  const refresh = sessionStorage.getItem('fs_refresh');
   const user = sessionStorage.getItem('fs_user');
   if(token && user){
     try{
       currentToken = token;
+      refreshToken = refresh;
       currentUser = JSON.parse(user);
       isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
       showApp();
@@ -1646,6 +1649,30 @@ function requireAdmin(action){
 }
 
 
+// ── TOKEN REFRESH ────────────────────────────────────────────
+let refreshToken = null;
+
+async function refreshSession(){
+  if(!refreshToken) return;
+  try{
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken })
+    });
+    const data = await res.json();
+    if(!res.ok || data.error){ doLogout(); return; }
+    currentToken = data.access_token;
+    refreshToken = data.refresh_token;
+    sessionStorage.setItem('fs_token', currentToken);
+    sessionStorage.setItem('fs_refresh', refreshToken);
+  } catch(e){ console.warn('Token refresh failed', e); }
+}
+
+// Refresh every 45 minutes to stay ahead of the 1hr expiry
+setInterval(refreshSession, 45 * 60 * 1000);
+
+// ── DRAG AND DROP ────────────────────────────────────────────
 let dragJobId = null;
 
 function handleDragStart(e, jobId){

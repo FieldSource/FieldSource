@@ -389,7 +389,8 @@ async function loadJobs(){
       crew: row.crew||[],
       equip: row.equip||[],
       touchUp: row.touch_up||false,
-      notes: row.notes||''
+      notes: row.notes||'',
+      createdBy: row.created_by||''
     }));
   } catch(e) {
     console.error('Load error', e);
@@ -524,6 +525,7 @@ async function dbSaveJob(data, id=null){
     notes: data.notes,
     include_weekends: data.includeWeekends||false
   };
+  if(!id && data.createdBy) row.created_by = data.createdBy;
   if(id){
     // Update existing — id is the numeric DB id
     await sbFetch('PATCH', `/rest/v1/jobs?id=eq.${id}`, row);
@@ -555,6 +557,7 @@ function startPolling(){
         equip: row.equip||[],
         touchUp: row.touch_up||false,
         notes: row.notes||'',
+        createdBy: row.created_by||'',
         includeWeekends: row.include_weekends||false
       }));
       save();
@@ -674,7 +677,7 @@ function renderWeek(){
     days[0].toLocaleDateString('en-US',{month:'short',day:'numeric'})+' – '+
     days[6].toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const todayStr=isoDate(today());
-  const canDrag=isAdmin; // admins only
+  const canDrag=!!currentUser; // all logged-in users can drag
   let html='<div class="week-scroll"><div class="week-grid">';
   days.forEach((d,i)=>{
     const ds=isoDate(d);
@@ -850,7 +853,6 @@ function crewFilterBar(){
 function setCrew(c){crewFilter=c;render()}
 
 function openModal(id=null,defaultDate=null){
-  if(!isAdmin) return; // non-admins cannot add or edit jobs
   editId=id;
   const job=id?jobs.find(j=>j.id===id):null;
   pickedCrew=job?[...(job.crew||[])]:[];
@@ -941,6 +943,7 @@ function openModal(id=null,defaultDate=null){
         <label class="form-label">Notes</label>
         <input type="text" id="f-notes" placeholder="Conditions, special instructions..." value="${job&&job.notes?job.notes:''}">
       </div>
+      ${job&&job.createdBy?`<div style="font-size:12px;color:var(--text-3);padding:6px 2px 10px;border-top:1px solid var(--border);margin-top:4px">Created by <strong style="color:var(--text-2)">${job.createdBy}</strong></div>`:''}
       <div class="sheet-actions">
         ${job?`<button class="btn-delete" onclick="deleteJob('${id}')">Remove</button>`:''}
         <button class="btn-cancel" onclick="closeModal()">Cancel</button>
@@ -1080,13 +1083,15 @@ async function saveJob(){
   const notes=document.getElementById('f-notes').value.trim();
   if(!startDate){alert('Please pick a start date.');return}
   const includeWeekends=document.getElementById('f-weekends')?document.getElementById('f-weekends').checked:false;
-  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,includeWeekends};
+  const createdBy = editId ? (jobs.find(j=>j.id===editId)||{}).createdBy||'' : getDisplayName(currentUser&&currentUser.email);
+  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,includeWeekends,createdBy};
   const btn=document.querySelector('.btn-save');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   try{
     if(editId){
       await dbSaveJob(data, editId);
-      Object.assign(jobs.find(j=>j.id===editId),{...data,id:editId});
+      const existing=jobs.find(j=>j.id===editId);
+      Object.assign(existing,{...data,id:editId,createdBy:existing.createdBy||data.createdBy});
     } else {
       const newId=await dbSaveJob(data);
       if(newId) jobs.push({...data,id:newId});
@@ -1516,7 +1521,7 @@ function openWoModal(id){
         <label class="form-label">Assign crew</label>
         <div class="crew-grid" id="wo-crew-grid">${buildWoCrewGrid(w.scheduledCrew||[])}</div>
       </div>
-      <p class="matt-only-note">Only Matt can schedule and resolve work orders.</p>
+      <p class="matt-only-note">Only admins can schedule and resolve work orders.</p>
       `:''}
       <div class="sheet-actions">
         ${w.status==='resolved'?'':`<button class="btn-delete" onclick="resolveWo('${w.id}')">Mark resolved</button>`}
@@ -1588,6 +1593,17 @@ const ADMIN_EMAILS = [
   'haller@fieldsourceohio.com'
 ];
 
+const USER_DISPLAY_NAMES = {
+  'haller@fieldsourceohio.com': 'Dan Haller',
+  'jake@fieldsourceohio.com': 'Jake',
+  'ryan@fieldsourceohio.com': 'Ryan',
+  'matt@fieldsourceohio.com': 'Matt'
+};
+function getDisplayName(email){
+  if(!email) return 'Unknown';
+  return USER_DISPLAY_NAMES[email.toLowerCase()] || email.split('@')[0];
+}
+
 let currentUser = null;
 let currentToken = null;
 let isAdmin = false;
@@ -1643,7 +1659,7 @@ function showApp(){
   document.getElementById('header-user-name').textContent = display;
   // Hide Add Job button for non-admins
   const ajb = document.getElementById('add-job-btn');
-  if(ajb) ajb.style.display = isAdmin ? '' : 'none';
+  if(ajb) ajb.style.display = '';
   // Load data and start
   loadJobs().then(()=>{ loadReports(); loadWorkOrders(); startPolling(); });
   render();

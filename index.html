@@ -200,6 +200,7 @@ main{padding:12px 16px 100px}
 .logout-btn{font-size:12px;color:var(--text-3);background:none;border:1px solid var(--border);border-radius:99px;padding:4px 12px;cursor:pointer;font-family:'DM Sans',sans-serif}
 .logout-btn:active{background:var(--bg)}
 .user-chip{font-size:12px;color:#fff;display:flex;align-items:center;gap:8px}
+.reset-success{font-size:13px;color:#16a34a;margin-top:10px;text-align:center;min-height:20px}
 </style>
 </head>
 <body>
@@ -220,6 +221,50 @@ main{padding:12px 16px 100px}
     </div>
     <button class="login-btn" id="login-btn" onclick="doLogin()">Sign in</button>
     <div class="login-error" id="login-error"></div>
+    <div style="text-align:center;margin-top:14px">
+      <button onclick="showForgotPassword()" style="background:none;border:none;color:var(--text-3);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">Forgot password?</button>
+    </div>
+  </div>
+</div>
+
+<!-- FORGOT PASSWORD SCREEN -->
+<div class="login-screen" id="forgot-screen" style="display:none">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-text">Field Source</div>
+      <div class="login-logo-sub">Reset your password</div>
+    </div>
+    <div class="login-field">
+      <label class="login-label">Email</label>
+      <input class="login-input" type="email" id="forgot-email" placeholder="you@fieldsourceohio.com" autocomplete="email" onkeydown="if(event.key==='Enter')doForgotPassword()">
+    </div>
+    <button class="login-btn" id="forgot-btn" onclick="doForgotPassword()">Send reset link</button>
+    <div class="login-error" id="forgot-error"></div>
+    <div class="reset-success" id="forgot-success"></div>
+    <div style="text-align:center;margin-top:14px">
+      <button onclick="showLogin()" style="background:none;border:none;color:var(--text-3);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">Back to sign in</button>
+    </div>
+  </div>
+</div>
+
+<!-- SET NEW PASSWORD SCREEN -->
+<div class="login-screen" id="reset-screen" style="display:none">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-text">Field Source</div>
+      <div class="login-logo-sub">Set a new password</div>
+    </div>
+    <div class="login-field">
+      <label class="login-label">New Password</label>
+      <input class="login-input" type="password" id="reset-password" placeholder="Eight or more characters" autocomplete="new-password" onkeydown="if(event.key==='Enter')doResetPassword()">
+    </div>
+    <div class="login-field">
+      <label class="login-label">Confirm Password</label>
+      <input class="login-input" type="password" id="reset-password2" placeholder="Same as above" autocomplete="new-password" onkeydown="if(event.key==='Enter')doResetPassword()">
+    </div>
+    <button class="login-btn" id="reset-btn" onclick="doResetPassword()">Set new password</button>
+    <div class="login-error" id="reset-error"></div>
+    <div class="reset-success" id="reset-success"></div>
   </div>
 </div>
 
@@ -1745,9 +1790,103 @@ async function handleDrop(e, newStartDate){
   dragJobId = null;
 }
 
-// Init: load from Supabase then start polling
+// ── PASSWORD RESET FLOW ──────────────────────────────────────────
+function showLogin(){
+  document.getElementById('login-screen').style.display='flex';
+  document.getElementById('forgot-screen').style.display='none';
+  document.getElementById('reset-screen').style.display='none';
+}
+function showForgotPassword(){
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('forgot-screen').style.display='flex';
+  document.getElementById('forgot-error').textContent='';
+  document.getElementById('forgot-success').textContent='';
+  document.getElementById('forgot-email').value='';
+}
+
+async function doForgotPassword(){
+  const email = document.getElementById('forgot-email').value.trim();
+  const errEl = document.getElementById('forgot-error');
+  const sucEl = document.getElementById('forgot-success');
+  const btn = document.getElementById('forgot-btn');
+  errEl.textContent=''; sucEl.textContent='';
+  if(!email){ errEl.textContent='Please enter your email address.'; return; }
+  btn.disabled=true; btn.textContent='Sending...';
+  try{
+    await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+      method:'POST',
+      headers:{ 'apikey': SUPABASE_KEY, 'Content-Type':'application/json' },
+      body: JSON.stringify({ email, redirect_to: window.location.origin + window.location.pathname })
+    });
+    sucEl.textContent='If that email is registered, a reset link has been sent. Check your inbox.';
+    btn.textContent='Sent!';
+  } catch(e){
+    errEl.textContent='Error sending reset email. Please try again.';
+    btn.disabled=false; btn.textContent='Send reset link';
+  }
+}
+
+let resetAccessToken = null;
+
+async function doResetPassword(){
+  const pw = document.getElementById('reset-password').value;
+  const pw2 = document.getElementById('reset-password2').value;
+  const errEl = document.getElementById('reset-error');
+  const sucEl = document.getElementById('reset-success');
+  const btn = document.getElementById('reset-btn');
+  errEl.textContent=''; sucEl.textContent='';
+  if(!pw || pw.length < 8){ errEl.textContent='Password must be at least 8 characters.'; return; }
+  if(pw !== pw2){ errEl.textContent='Passwords do not match.'; return; }
+  if(!resetAccessToken){ errEl.textContent='Session expired. Please request a new reset link.'; return; }
+  btn.disabled=true; btn.textContent='Saving...';
+  try{
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+      method:'PUT',
+      headers:{
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + resetAccessToken,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ password: pw })
+    });
+    const data = await res.json();
+    if(!res.ok || data.error){
+      errEl.textContent = data.message || data.error_description || 'Failed to update password.';
+      btn.disabled=false; btn.textContent='Set new password';
+      return;
+    }
+    sucEl.textContent='Password updated! Signing you in...';
+    currentToken = resetAccessToken;
+    currentUser = data;
+    isAdmin = ADMIN_EMAILS.includes((currentUser.email||'').toLowerCase());
+    sessionStorage.setItem('fs_token', currentToken);
+    sessionStorage.setItem('fs_user', JSON.stringify(currentUser));
+    resetAccessToken = null;
+    history.replaceState(null, '', window.location.pathname);
+    setTimeout(()=>{ document.getElementById('reset-screen').style.display='none'; showApp(); }, 1200);
+  } catch(e){
+    errEl.textContent='Connection error. Please try again.';
+    btn.disabled=false; btn.textContent='Set new password';
+  }
+}
+
+function checkForRecoveryToken(){
+  const hash = window.location.hash;
+  if(!hash) return false;
+  const params = new URLSearchParams(hash.replace('#',''));
+  const type = params.get('type');
+  const token = params.get('access_token');
+  if(type === 'recovery' && token){
+    resetAccessToken = token;
+    document.getElementById('login-screen').style.display='none';
+    document.getElementById('reset-screen').style.display='flex';
+    return true;
+  }
+  return false;
+}
+
 // Init
-checkSession();
+if(!checkForRecoveryToken()) checkSession();
 </script>
 </body>
 </html>

@@ -323,6 +323,7 @@ const SERVICES=['Mowing','Aeration','Applications','Topdressing','Grading','Irri
 const CREW=['Dan Sr','Dan Jr','Brandon','BMoore','Greg','Matt','Wes','Cameron','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
+  Carts:['John Deere Gator TX #1','John Deere Gator TX #2','John Deere Gator HPX #1','2017 Gator John Deere HPX #2','Toro GTX','2019 Toro Workman HDX','John Deere Gator TX #3'],
   Attachments:['Toro ProForce Blower #1','Toro ProForce Blower #2','Buffalo Blower #1','Buffalo Blower #2','Agrimetal 3500 Blower','LitterKat','Redexim VT-1500','Greens Groomer #1','Greens Groomer #2','Turfco Topdresser #1','Turfco Topdresser #2','2021 Woodbay FDS 6000 Dethatcher','Vredo Overseeder DZ5','Imants Shockwave 2.1','Turfco Torrent 2','2025 Snow Dogg','Level Best'],
   Specialty:['ABI Force','FS Skid Sprayer','Smithco Spray Star 2000','2024 John Deere 4066R','Kubota Tractor','Wacker Neuson Roller','Old Steel Green','New Steel Green','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift','Ford F550 Dump Truck'],
   'Hand Tools':['Green Push Spreader','Stihl Backpack Blower #1','Stihl Backpack Blower #2','Stihl Backpack Blower #3','Stihl Combi','Stihl String Trimmer #1','Stihl String Trimmer #2','Little Wonder Pro Edger','Jumping Jack Tamper','MQ Plate Compactor','Ryan Sod Cutter','Dewalt Hammer Drill','Stihl RB 400','Honda EU 2200i','Husqvarna Trimmer','Billy Goat Sod Cutter','Mi-T-M GH-3003','Stihl ST 500i']
@@ -776,8 +777,8 @@ function renderEquipment(){
   // Render each category
   EQUIP_CATS.forEach(cat=>{
     const items=EQUIPMENT[cat];
-    // Only show Trailers and Specialty in the equipment calendar
-    if(cat!=='Trailers'&&cat!=='Specialty') return;
+    // Only show Trailers, Specialty, and Carts in the equipment calendar
+    if(cat!=='Trailers'&&cat!=='Specialty'&&cat!=='Carts') return;
     const visibleItems=items;
     if(!visibleItems.length) return;
 
@@ -805,7 +806,7 @@ function renderEquipment(){
     });
   });
 
-  html+=`<div style="font-size:11px;color:var(--text-3);margin-top:12px;padding-left:2px">Trailers and Specialty always visible. Attachments and Hand Tools are tracked for conflicts in scheduling but not shown here.</div>`;
+  html+=`<div style="font-size:11px;color:var(--text-3);margin-top:12px;padding-left:2px">Trailers, Specialty, and Carts always visible. Attachments and Hand Tools are tracked for conflicts in scheduling but not shown here.</div>`;
   html+='</div></div>';
   document.getElementById('main-content').innerHTML=html;
 }

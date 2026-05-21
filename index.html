@@ -692,7 +692,7 @@ function renderWeek(){
     dayJobs.forEach(j=>{
       const st=statusMeta(getStatus(j));
       const dur=parseInt(j.duration)||1;
-      const crew=(j.crew||[]).slice(0,2).join(', ')+(((j.crew||[]).length>2)?` +${(j.crew||[]).length-2}`:'');
+      const crew=(j.crew||[]).join(', ');
       const trailers=(j.equip||[]).filter(e=>EQUIPMENT.Trailers.includes(e));
       const specialty=(j.equip||[]).filter(e=>EQUIPMENT.Specialty.includes(e));
       const chipEquip=[...trailers,...specialty];

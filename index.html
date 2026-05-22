@@ -706,9 +706,9 @@ function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-  const idx={week:0,next:1,month:2,list:3,equipment:4,reports:5,workorders:6};
+  const idx={week:0,next:1,month:2,list:3,equipment:4,reports:5,timeoff:6,workorders:7};
   document.querySelectorAll('.vtab')[idx[v]].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff';
   document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
   document.querySelector('.nav-row').style.display=hideNav?'none':'flex';
   render();

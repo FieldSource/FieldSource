@@ -705,7 +705,9 @@ function renderWeek(){
           .replace('Ingersoll Rand ','').replace('Wacker Neuson ','').replace('Smithco ','')
           .trim()
       }
-      html+=`<div class="job-chip ${st.cls}"
+      const crewColor=getCrewColor(j.crew||[]);
+      const crewStyle=crewColor?`style="background:${crewColor};border-color:${crewColor}"`:'';
+      html+=`<div class="job-chip ${st.cls}" ${crewColor?`style="background:${crewColor};border-left:3px solid rgba(0,0,0,0.15)"`:''} 
         ${canDrag?`draggable="true"
           ondragstart="handleDragStart(event,'${j.id}')"
           ondragend="handleDragEnd(event)"
@@ -1808,6 +1810,26 @@ async function handleDrop(e, newStartDate){
   dragJobId = null;
 }
 
+
+// ── CREW COLOR CODING ───────────────────────────────────────
+function getCrewColor(crew){
+  if(!crew||!crew.length) return null;
+  const hasDanJr   = crew.some(c=>c==='Dan Jr');
+  const hasBMoore  = crew.some(c=>c==='BMoore');
+  const hasDanSr   = crew.some(c=>c==='Dan Sr');
+  const hasBStith  = crew.some(c=>c==='Brandon');
+  const hasCameron = crew.some(c=>c==='Cameron');
+  const hasIntern  = crew.some(c=>c.toLowerCase().includes('intern'));
+  // Combined rule first
+  if(hasDanJr && hasBMoore) return '#2dd4bf'; // turquoise
+  if(hasDanJr)   return '#f9a8d4'; // pink
+  if(hasBMoore)  return '#86efac'; // green
+  if(hasDanSr)   return '#93c5fd'; // blue
+  if(hasBStith)  return '#fde68a'; // yellow
+  if(hasCameron) return '#fca5a5'; // red
+  if(hasIntern)  return '#fdba74'; // orange
+  return null;
+}
 // ── PASSWORD RESET FLOW ──────────────────────────────────────────
 function showLogin(){
   document.getElementById('login-screen').style.display='flex';

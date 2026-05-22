@@ -333,11 +333,11 @@ const TRUCKS=[
   'Chevrolet Silverado 2500 HD LT (Matt)',
   'Chevrolet Silverado 2500 HD (Dan Sr.)',
   'Chevrolet Silverado 1500 RST Duramax (Brandon)',
+  '2026 Chevrolet Silverado 3500HD (BMoore)',
   'Chevrolet Silverado 1500 LT Duramax (Greg)',
   'Chevrolet Silverado 1500 LT Duramax (Wes)',
   'GMC Sierra 1500 SLT (Ryan)',
   'Ford F450 (Jr)',
-  'GMC Sierra 2500 (Spare)',
   'Chevrolet Silverado 2500 (Spare)'
 ];
 // Categories for scheduling modal (no trucks)
@@ -444,6 +444,8 @@ async function loadReports(){
     reports = [];
   }
 }
+const SHEETS_WEBHOOK = 'https://script.google.com/macros/s/AKfycbw5bW4WqG2m6NB2LqMFfJ5-iIdmyOk2wizR0sXuJfmzztHB9JmfM9zZmks03qa_x73R/exec';
+
 async function dbSaveReport(data){
   const row = {
     client: data.client,
@@ -459,6 +461,27 @@ async function dbSaveReport(data){
     issue_notes: data.issueNotes
   };
   const result = await sbFetch('POST', '/rest/v1/field_reports', row);
+  // Sync to Google Sheets
+  try {
+    await fetch(SHEETS_WEBHOOK, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ record: {
+        date: data.reportDate,
+        site: data.client,
+        field: data.field,
+        filed_by: data.filedBy,
+        time_in: data.timeIn,
+        time_out: data.timeOut,
+        work_done: data.workDone,
+        products_used: data.productsUsed,
+        equipment: data.equipUsed,
+        issue: data.hasIssue ? 'Yes' : 'No',
+        issue_notes: data.issueNotes || ''
+      }})
+    });
+  } catch(e) { console.warn('Sheets sync failed:', e); }
   return result && result[0] ? String(result[0].id) : null;
 }
 

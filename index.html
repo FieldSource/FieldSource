@@ -323,7 +323,7 @@ main{padding:12px 16px 100px}
 <script>
 const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
 const SERVICES=['Mowing','Aeration','Applications','Topdressing','Grading','Irrigation Check','Irrigation Repair','Shockwave','Slit Seeding','Broadcast Seeding','Sodding'];
-const CREW=['Dan Sr','Dan Jr','Brandon','BMoore','Greg','Matt','Wes','Cameron','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
+const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Matt','Wes','Cameron','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
   Carts:['John Deere Gator TX #1','John Deere Gator TX #2','John Deere Gator HPX #1','2017 Gator John Deere HPX #2','Toro GTX','2019 Toro Workman HDX','John Deere Gator TX #3'],
@@ -336,7 +336,7 @@ const TRUCKS=[
   'Chevrolet Silverado 2500 HD LT (Matt)',
   'Chevrolet Silverado 2500 HD (Dan Sr.)',
   'Chevrolet Silverado 1500 RST Duramax (Brandon)',
-  '2026 Chevrolet Silverado 3500HD (BMoore)',
+  '2026 Chevrolet Silverado 3500HD (Brandon Moore)',
   'Chevrolet Silverado 1500 LT Duramax (Greg)',
   'Chevrolet Silverado 1500 LT Duramax (Wes)',
   'GMC Sierra 1500 SLT (Ryan)',
@@ -2027,9 +2027,9 @@ async function handleDrop(e, newStartDate){
 function getCrewColor(crew){
   if(!crew||!crew.length) return null;
   const hasDanJr   = crew.some(c=>c==='Dan Jr');
-  const hasBMoore  = crew.some(c=>c==='BMoore');
+  const hasBMoore  = crew.some(c=>c==='Brandon Moore');
   const hasDanSr   = crew.some(c=>c==='Dan Sr');
-  const hasBStith  = crew.some(c=>c==='Brandon');
+  const hasBStith  = crew.some(c=>c==='Brandon Stith');
   const hasCameron = crew.some(c=>c==='Cameron');
   const hasIntern  = crew.some(c=>c.toLowerCase().includes('intern'));
   // Combined rule first

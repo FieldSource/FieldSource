@@ -197,6 +197,8 @@ main{padding:12px 16px 100px}
 .login-btn:active{background:var(--green-dark)}
 .login-btn:disabled{opacity:0.6;cursor:not-allowed}
 .login-error{font-size:13px;color:#dc2626;margin-top:10px;text-align:center;min-height:20px}
+.crew-off{opacity:0.5;border-style:dashed !important}
+.crew-off.picked{opacity:1}
 .logout-btn{font-size:12px;color:var(--text-3);background:none;border:1px solid var(--border);border-radius:99px;padding:4px 12px;cursor:pointer;font-family:'DM Sans',sans-serif}
 .logout-btn:active{background:var(--bg)}
 .user-chip{font-size:12px;color:#fff;display:flex;align-items:center;gap:8px}
@@ -415,6 +417,7 @@ function showLoading(on){
 let jobs = [];
 let reports = [];
 let workOrders = [];
+let timeOffEntries = [];
 let reportSiteFilter = 'All';
 let woSiteFilter = 'All';
 let woStatusFilter = 'open';
@@ -506,6 +509,40 @@ async function loadWorkOrders(){
     workOrders = [];
   }
 }
+// ── TIME OFF ─────────────────────────────────────────────────
+async function loadTimeOff(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/time_off?select=*&order=start_date.asc');
+    timeOffEntries = (data||[]).map(row => ({
+      id: String(row.id),
+      person: row.person||'',
+      startDate: row.start_date||'',
+      endDate: row.end_date||'',
+      note: row.note||''
+    }));
+  } catch(e) {
+    console.warn('Could not load time off — table may not exist yet', e);
+    timeOffEntries = [];
+  }
+}
+async function dbSaveTimeOff(data, id=null){
+  const row = { person: data.person, start_date: data.startDate, end_date: data.endDate, note: data.note||'' };
+  if(id){
+    await sbFetch('PATCH', `/rest/v1/time_off?id=eq.${id}`, row);
+  } else {
+    await sbFetch('POST', '/rest/v1/time_off', row);
+  }
+}
+async function dbDeleteTimeOff(id){
+  await sbFetch('DELETE', `/rest/v1/time_off?id=eq.${id}`);
+}
+function isPersonOff(person, dateStr){
+  return timeOffEntries.some(e => e.person === person && dateStr >= e.startDate && dateStr <= e.endDate);
+}
+function getOffPeopleOnDate(dateStr){
+  return timeOffEntries.filter(e => dateStr >= e.startDate && dateStr <= e.endDate).map(e => e.person);
+}
+
 async function dbSaveWorkOrder(data, id=null){
   const row = {
     report_id: data.reportId||null,
@@ -691,6 +728,7 @@ function render(){
   else if(view==='equipment') renderEquipment();
   else if(view==='reports') renderReports();
   else if(view==='workorders') renderWorkOrders();
+  else if(view==='timeoff') renderTimeOff();
   else renderList();
 }
 
@@ -702,10 +740,13 @@ function renderWeek(){
     days[6].toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const todayStr=isoDate(today());
   const canDrag=!!currentUser; // all logged-in users can drag
+  const offToday={}; days.forEach(d=>{ offToday[isoDate(d)]=getOffPeopleOnDate(isoDate(d)); });
   let html='<div class="week-scroll"><div class="week-grid">';
   days.forEach((d,i)=>{
     const ds=isoDate(d);
     const dayJobs=jobsForDate(ds);
+    const offPpl = offToday[ds]||[];
+    const offBadge = offPpl.length ? `<div style="font-size:10px;color:#b45309;margin-top:2px">${offPpl.join(', ')} off</div>` : '';
     html+=`<div class="day-col" id="daycol-${ds}"
       ondragover="handleDragOver(event,'${ds}')"
       ondragleave="handleDragLeave(event,'${ds}')"
@@ -1005,7 +1046,11 @@ function refreshEquipConflicts(){
 }
 
 function buildCrewGrid(){
-  return CREW.map(c=>`<div class="sel-opt${pickedCrew.includes(c)?' picked':''}" onclick="toggleCrew('${c}')">${c}</div>`).join('');
+  const {start} = getModalDates();
+  return CREW.map(c=>{
+    const off = start && isPersonOff(c, start);
+    return `<div class="sel-opt${pickedCrew.includes(c)?' picked':''}${off?' crew-off':''}" onclick="toggleCrew('${c}',${off})">${c}${off?'<span style=\"font-size:9px;margin-left:4px;opacity:0.7\">OFF</span>':''}</div>`;
+  }).join('');
 }
 function buildEquipTabs(){
   return EQUIP_CATS.map(cat=>`<button class="etab${activeEquipTab===cat?' active':''}" onclick="setEquipTab('${cat}')">${cat}</button>`).join('');
@@ -1047,7 +1092,10 @@ function toggleEquip(name){
   if(s) s.innerHTML=buildEquipSelected();
   refreshEquipConflicts();
 }
-function toggleCrew(name){
+function toggleCrew(name, isOff=false){
+  if(isOff && !pickedCrew.includes(name)){
+    if(!confirm(`${name} is scheduled off on this date. Add them anyway?`)) return;
+  }
   pickedCrew=pickedCrew.includes(name)?pickedCrew.filter(c=>c!==name):[...pickedCrew,name];
   const g=document.getElementById('crew-grid');
   if(g) g.innerHTML=buildCrewGrid();
@@ -1477,6 +1525,140 @@ function buildTimeOptions(selectedVal=''){
 }
 
 // ── WORK ORDERS VIEW ──────────────────────────────────────────
+// ── TIME OFF UI ──────────────────────────────────────────────
+let editingTimeOffId = null;
+
+function renderTimeOff(){
+  const today = isoDate(new Date());
+  const upcoming = timeOffEntries.filter(e => e.endDate >= today).sort((a,b)=>a.startDate.localeCompare(b.startDate));
+  const past = timeOffEntries.filter(e => e.endDate < today).sort((a,b)=>b.startDate.localeCompare(a.startDate));
+
+  let html = '';
+  if(isAdmin){
+    html += `<div style="margin-bottom:16px">
+      <button class="btn-save" style="font-size:13px;padding:8px 18px" onclick="openTimeOffForm()">+ Add time off</button>
+    </div>`;
+  }
+
+  // Form (hidden by default)
+  html += `<div id="timeoff-form" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
+    <div style="font-weight:600;margin-bottom:12px" id="timeoff-form-title">Add Time Off</div>
+    <div class="form-group">
+      <label class="form-label">Person</label>
+      <select id="to-person" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg)">
+        ${CREW.map(c=>`<option value="${c}">${c}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Start date</label>
+        <input type="date" id="to-start" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div>
+        <label class="form-label">End date</label>
+        <input type="date" id="to-end" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Note (optional)</label>
+      <input type="text" id="to-note" placeholder="Vacation, personal, etc." style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn-save" onclick="saveTimeOff()">Save</button>
+      <button class="btn-cancel" onclick="closeTimeOffForm()">Cancel</button>
+      <button class="btn-delete" id="to-delete-btn" style="display:none" onclick="deleteTimeOffEntry()">Remove</button>
+    </div>
+    <div id="to-error" style="color:#dc2626;font-size:12px;margin-top:8px"></div>
+  </div>`;
+
+  function entryHtml(e){
+    const isCurrent = today >= e.startDate && today <= e.endDate;
+    const dateRange = e.startDate === e.endDate ? fmtShort(e.startDate) : `${fmtShort(e.startDate)} – ${fmtShort(e.endDate)}`;
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div>
+        <span style="font-weight:600">${e.person}</span>
+        ${isCurrent?`<span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:99px;padding:2px 8px;margin-left:6px">Out now</span>`:''}
+        <div style="font-size:12px;color:var(--text-3);margin-top:2px">${dateRange}${e.note?` · ${e.note}`:''}</div>
+      </div>
+      ${isAdmin?`<button onclick="openTimeOffForm('${e.id}')" style="background:none;border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">Edit</button>`:''}
+    </div>`;
+  }
+
+  if(upcoming.length){
+    html += `<div style="font-weight:600;margin-bottom:8px;font-size:13px;color:var(--text-2)">UPCOMING & CURRENT</div>`;
+    html += upcoming.map(entryHtml).join('');
+  } else {
+    html += `<div style="color:var(--text-3);font-size:13px;padding:20px 0">No upcoming time off scheduled.</div>`;
+  }
+
+  if(past.length){
+    html += `<div style="font-weight:600;margin:16px 0 8px;font-size:13px;color:var(--text-3)">PAST</div>`;
+    html += past.map(entryHtml).join('');
+  }
+
+  document.getElementById('main').innerHTML = html;
+}
+
+function openTimeOffForm(id=null){
+  editingTimeOffId = id;
+  const form = document.getElementById('timeoff-form');
+  const title = document.getElementById('timeoff-form-title');
+  const delBtn = document.getElementById('to-delete-btn');
+  document.getElementById('to-error').textContent = '';
+  if(id){
+    const e = timeOffEntries.find(x=>x.id===id);
+    if(!e) return;
+    title.textContent = 'Edit Time Off';
+    document.getElementById('to-person').value = e.person;
+    document.getElementById('to-start').value = e.startDate;
+    document.getElementById('to-end').value = e.endDate;
+    document.getElementById('to-note').value = e.note||'';
+    delBtn.style.display = '';
+  } else {
+    title.textContent = 'Add Time Off';
+    document.getElementById('to-person').value = CREW[0];
+    document.getElementById('to-start').value = '';
+    document.getElementById('to-end').value = '';
+    document.getElementById('to-note').value = '';
+    delBtn.style.display = 'none';
+  }
+  form.style.display = 'block';
+  form.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function closeTimeOffForm(){
+  document.getElementById('timeoff-form').style.display = 'none';
+  editingTimeOffId = null;
+}
+
+async function saveTimeOff(){
+  const person = document.getElementById('to-person').value;
+  const startDate = document.getElementById('to-start').value;
+  const endDate = document.getElementById('to-end').value;
+  const note = document.getElementById('to-note').value.trim();
+  const errEl = document.getElementById('to-error');
+  errEl.textContent = '';
+  if(!startDate || !endDate){ errEl.textContent = 'Please set both start and end dates.'; return; }
+  if(endDate < startDate){ errEl.textContent = 'End date must be on or after start date.'; return; }
+  try {
+    await dbSaveTimeOff({person, startDate, endDate, note}, editingTimeOffId);
+    await loadTimeOff();
+    closeTimeOffForm();
+    renderTimeOff();
+  } catch(e) {
+    errEl.textContent = 'Error saving. Please try again.';
+  }
+}
+
+async function deleteTimeOffEntry(){
+  if(!editingTimeOffId) return;
+  if(!confirm('Remove this time off entry?')) return;
+  await dbDeleteTimeOff(editingTimeOffId);
+  await loadTimeOff();
+  editingTimeOffId = null;
+  renderTimeOff();
+}
+
 function renderWorkOrders(){
   const allClients = ['All', ...new Set(workOrders.map(w=>w.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
   const byStatus = woStatusFilter==='all' ? workOrders : workOrders.filter(w=>w.status===woStatusFilter);
@@ -1687,7 +1869,7 @@ function showApp(){
   const ajb = document.getElementById('add-job-btn');
   if(ajb) ajb.style.display = '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); startPolling(); });
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff(); startPolling(); });
   render();
 }
 

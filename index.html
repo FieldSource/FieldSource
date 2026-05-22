@@ -623,6 +623,12 @@ function startPolling(){
         includeWeekends: row.include_weekends||false
       }));
       save();
+      // Don't re-render if user is mid-form on time off
+      if(view==='timeoff' && editingTimeOffId !== null) return;
+      if(view==='timeoff'){
+        const form = document.getElementById('timeoff-form');
+        if(form && form.style.display !== 'none') return;
+      }
       render();
     } catch(e){ console.warn('Poll error', e); }
   }, 10000);

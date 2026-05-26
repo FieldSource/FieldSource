@@ -2097,12 +2097,12 @@ async function resolveWo(id){
 const ADMIN_EMAILS = [
   'jake@fieldsourceohio.com',
   'ryan@fieldsourceohio.com',
-  'matt@fieldsourceohio.com'
+  'matt@fieldsourceohio.com',
+  'haller@fieldsourceohio.com'
 ];
 
 // Can schedule jobs, file reports, log & view own mileage
 const SCHEDULER_EMAILS = [
-  'haller@fieldsourceohio.com',
   'dan@fieldsourceohio.com',
   'brandon@fieldsourceohio.com',
   'wes@fieldsourceohio.com',
@@ -2199,10 +2199,11 @@ function showApp(){
   const ajb = document.getElementById('add-job-btn');
   if(ajb) ajb.style.display = isScheduler ? '' : 'none';
   // Show/hide tabs based on role
+  const allTabs = Array.from(document.querySelectorAll('.vtab'));
   const mileageTab = document.getElementById('mileage-tab');
   const timeoffTab = document.getElementById('timeoff-tab');
-  const woTab = document.querySelector("[onclick="setView('workorders')"]");
-  const equipTab = document.querySelector("[onclick="setView('equipment')"]");
+  const woTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes('workorders'));
+  const equipTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes("'equipment'"));
   if(mileageTab) mileageTab.style.display = isReportOnly ? 'none' : '';
   if(timeoffTab) timeoffTab.style.display = isReportOnly ? 'none' : '';
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';

@@ -296,9 +296,10 @@ main{padding:12px 16px 100px}
     <button class="vtab" onclick="setView('list')">All jobs</button>
   </div>
   <div class="view-bar-row">
+    <button class="vtab" id="mileage-tab" onclick="setView('mileage')">Mileage</button>
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
-    <button class="vtab" onclick="setView('timeoff')">Time Off</button>
+    <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off</button>
     <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
   </div>
 </div>
@@ -419,6 +420,10 @@ let jobs = [];
 let reports = [];
 let workOrders = [];
 let timeOffEntries = [];
+let mileageLogs = [];
+let mileageYearFilter = new Date().getFullYear();
+let mileagePersonFilter = 'All';
+let mileageTripFilter = 'All';
 let reportSiteFilter = 'All';
 let woSiteFilter = 'All';
 let woStatusFilter = 'open';
@@ -510,6 +515,62 @@ async function loadWorkOrders(){
     workOrders = [];
   }
 }
+
+// ── MILEAGE ───────────────────────────────────────────────────
+const MILEAGE_VEHICLES = [
+  {id:'TR1',  label:'2024 Chevrolet Silverado 2500 HD LT (Matt)'},
+  {id:'TR3',  label:'2023 Chevrolet Silverado 1500 LT Duramax (Wes)'},
+  {id:'TR4',  label:'2024 Chevrolet Silverado 2500 HD (Dan Sr.)'},
+  {id:'TR5',  label:'2024 Chevrolet Silverado 1500 RST Duramax (Brandon Stith)'},
+  {id:'TR6',  label:'2025 Chevrolet Silverado 1500 LT Duramax (Greg)'},
+  {id:'TR7',  label:'2015 Chevrolet Silverado 2500 (Spare)'},
+  {id:'TR9',  label:'2024 Ford F-450 (Jr)'},
+  {id:'TR10', label:'2017 Ford F-550 Dump'},
+  {id:'TR11', label:'2026 GMC Sierra 1500 SLT (Ryan)'},
+  {id:'TR12', label:'2026 Chevrolet Silverado 3500HD (Brandon Moore)'},
+];
+
+async function loadMileage(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/mileage_logs?select=*&order=date.desc,created_at.desc');
+    mileageLogs = (data||[]).map(r=>({
+      id: String(r.id),
+      userEmail: r.user_email||'',
+      date: r.date||'',
+      vehicleId: r.vehicle_id||'',
+      vehicleLabel: r.vehicle_label||'',
+      odoStart: Number(r.odometer_start)||0,
+      odoEnd: Number(r.odometer_end)||0,
+      miles: Number(r.miles)||0,
+      tripType: r.trip_type||'commute',
+      purpose: r.purpose||'',
+      year: Number(r.year)||0,
+    }));
+  } catch(e){ console.warn('Mileage load failed:', e); mileageLogs=[]; }
+}
+
+async function dbSaveMileageLog(d){
+  const miles = d.odoEnd - d.odoStart;
+  const year = new Date(d.date).getFullYear();
+  const row = {
+    user_email: currentUser.email,
+    date: d.date,
+    vehicle_id: d.vehicleId,
+    vehicle_label: d.vehicleLabel,
+    odometer_start: d.odoStart,
+    odometer_end: d.odoEnd,
+    miles,
+    trip_type: d.tripType,
+    purpose: d.purpose||'',
+    year,
+  };
+  return await sbFetch('POST', '/rest/v1/mileage_logs', row);
+}
+
+async function dbDeleteMileageLog(id){
+  await sbFetch('DELETE', `/rest/v1/mileage_logs?id=eq.${id}`);
+}
+
 // ── TIME OFF ─────────────────────────────────────────────────
 async function loadTimeOff(){
   try {
@@ -629,6 +690,8 @@ function startPolling(){
         const form = document.getElementById('timeoff-form');
         if(form && form.style.display !== 'none') return;
       }
+      // Don't re-render if mileage modal is open
+      if(view==='mileage' && mileageModalOpen) return;
       render();
     } catch(e){ console.warn('Poll error', e); }
   }, 10000);
@@ -712,9 +775,9 @@ function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-  const idx={week:0,next:1,month:2,list:3,equipment:4,reports:5,timeoff:6,workorders:7};
+  const idx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,workorders:8};
   document.querySelectorAll('.vtab')[idx[v]].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage';
   document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
   document.querySelector('.nav-row').style.display=hideNav?'none':'flex';
   render();
@@ -736,6 +799,7 @@ function render(){
   else if(view==='reports') renderReports();
   else if(view==='workorders') renderWorkOrders();
   else if(view==='timeoff') renderTimeOff();
+  else if(view==='mileage') renderMileage();
   else renderList();
 }
 
@@ -746,7 +810,7 @@ function renderWeek(){
     days[0].toLocaleDateString('en-US',{month:'short',day:'numeric'})+' – '+
     days[6].toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
   const todayStr=isoDate(today());
-  const canDrag=!!currentUser; // all logged-in users can drag
+  const canDrag=isScheduler; // schedulers and admins can drag
   const offToday={}; days.forEach(d=>{ offToday[isoDate(d)]=getOffPeopleOnDate(isoDate(d)); });
   let html='<div class="week-scroll"><div class="week-grid">';
   days.forEach((d,i)=>{
@@ -1532,6 +1596,235 @@ function buildTimeOptions(selectedVal=''){
 }
 
 // ── WORK ORDERS VIEW ──────────────────────────────────────────
+
+// ── MILEAGE UI ────────────────────────────────────────────────
+let mileageModalOpen = false;
+let mileageEditId = null;
+let mileageTripType = 'commute';
+
+function renderMileage(){
+  const yr = mileageYearFilter;
+  const email = currentUser ? currentUser.email : '';
+  const myLogs = isAdmin ? mileageLogs : mileageLogs.filter(l=>l.userEmail===email);
+
+  // Year selector
+  const years = [...new Set(mileageLogs.map(l=>l.year))];
+  if(!years.includes(new Date().getFullYear())) years.unshift(new Date().getFullYear());
+  years.sort((a,b)=>b-a);
+
+  let html = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+    <div style="display:flex;gap:6px;align-items:center">
+      <span style="font-size:12px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:0.4px">Year</span>
+      <div class="filter-row" style="margin:0;padding:0">
+        ${years.map(y=>`<button class="filter-chip${y===yr?' active':''}" onclick="mileageYearFilter=${y};renderMileage()">${y}</button>`).join('')}
+      </div>
+    </div>
+    <button class="btn-save" style="font-size:13px;padding:8px 18px" onclick="openMileageModal()">+ Log miles</button>
+  </div>`;
+
+  // ── ADMIN VIEW ──
+  if(isAdmin){
+    // Summary table
+    const allEmails = [...new Set(mileageLogs.map(l=>l.userEmail))].sort();
+    html += `<div style="overflow-x:auto;margin-bottom:20px">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="border-bottom:2px solid var(--border)">
+            <th style="text-align:left;padding:8px 10px;color:var(--text-2);font-weight:600;white-space:nowrap">Employee</th>
+            <th style="text-align:right;padding:8px 10px;color:var(--text-2);font-weight:600;white-space:nowrap">YTD Commute</th>
+            <th style="text-align:right;padding:8px 10px;color:var(--text-2);font-weight:600;white-space:nowrap">YTD Personal</th>
+            <th style="text-align:right;padding:8px 10px;color:var(--text-2);font-weight:600;white-space:nowrap">YTD Total</th>
+            <th style="text-align:right;padding:8px 10px;color:var(--text-2);font-weight:600;white-space:nowrap">Last Entry</th>
+          </tr>
+        </thead>
+        <tbody>`;
+    allEmails.forEach(em=>{
+      const eLogs = mileageLogs.filter(l=>l.userEmail===em && l.year===yr);
+      const commute = eLogs.filter(l=>l.tripType==='commute').reduce((s,l)=>s+l.miles,0);
+      const personal = eLogs.filter(l=>l.tripType==='personal').reduce((s,l)=>s+l.miles,0);
+      const all = mileageLogs.filter(l=>l.userEmail===em).sort((a,b)=>b.date.localeCompare(a.date));
+      const last = all.length ? all[0].date : '—';
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:8px 10px;color:var(--text)">${em}</td>
+        <td style="padding:8px 10px;text-align:right;color:var(--green-dark);font-weight:600">${commute.toFixed(1)}</td>
+        <td style="padding:8px 10px;text-align:right;color:var(--text-2)">${personal.toFixed(1)}</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:700;color:var(--text)">${(commute+personal).toFixed(1)}</td>
+        <td style="padding:8px 10px;text-align:right;color:var(--text-3)">${last}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+
+    // Filters
+    const fEmails = ['All',...allEmails];
+    html += `<div class="filter-row">
+      ${fEmails.map(e=>`<button class="filter-chip${mileagePersonFilter===e?' active':''}" onclick="mileagePersonFilter='${e}';renderMileage()">${e==='All'?'All employees':e}</button>`).join('')}
+    </div>
+    <div class="filter-row">
+      ${['All','commute','personal'].map(t=>`<button class="filter-chip${mileageTripFilter===t?' active':''}" onclick="mileageTripFilter='${t}';renderMileage()">${t==='All'?'All trips':t.charAt(0).toUpperCase()+t.slice(1)}</button>`).join('')}
+    </div>`;
+
+    // Log entries
+    let filtered = mileageLogs.filter(l=>l.year===yr);
+    if(mileagePersonFilter!=='All') filtered=filtered.filter(l=>l.userEmail===mileagePersonFilter);
+    if(mileageTripFilter!=='All') filtered=filtered.filter(l=>l.tripType===mileageTripFilter);
+    filtered.forEach(l=>{
+      html += mileageEntryCard(l, true);
+    });
+    if(!filtered.length) html += `<div style="color:var(--text-3);font-size:13px;padding:16px 0">No entries found.</div>`;
+
+  } else {
+    // ── EMPLOYEE VIEW ──
+    const myYrLogs = myLogs.filter(l=>l.year===yr);
+    const commute = myYrLogs.filter(l=>l.tripType==='commute').reduce((s,l)=>s+l.miles,0);
+    const personal = myYrLogs.filter(l=>l.tripType==='personal').reduce((s,l)=>s+l.miles,0);
+    html += `<div class="stats-bar" style="grid-template-columns:repeat(3,1fr)">
+      <div class="stat-card"><div class="stat-num">${commute.toFixed(1)}</div><div class="stat-label">Commute mi</div></div>
+      <div class="stat-card"><div class="stat-num">${personal.toFixed(1)}</div><div class="stat-label">Personal mi</div></div>
+      <div class="stat-card"><div class="stat-num">${(commute+personal).toFixed(1)}</div><div class="stat-label">Total mi</div></div>
+    </div>`;
+    if(!myYrLogs.length){
+      html += `<div style="color:var(--text-3);font-size:13px;padding:16px 0">No entries for ${yr}. Tap "+ Log miles" to add one.</div>`;
+    } else {
+      myYrLogs.forEach(l=>{ html += mileageEntryCard(l, false); });
+    }
+  }
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
+function mileageEntryCard(l, showEmail){
+  const tripBadge = l.tripType==='commute'
+    ? `<span style="font-size:11px;background:var(--green-light);color:var(--green-dark);border-radius:99px;padding:2px 8px;font-weight:600">Commute</span>`
+    : `<span style="font-size:11px;background:#ede9fe;color:#5b21b6;border-radius:99px;padding:2px 8px;font-weight:600">Personal</span>`;
+  return `<div class="report-card">
+    <div class="report-card-header">
+      <div>
+        <div class="report-card-title">${l.vehicleId} · ${l.vehicleLabel}</div>
+        <div class="report-card-meta">${l.date}${showEmail?' · '+l.userEmail:''}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-size:18px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${l.miles.toFixed(1)} mi</div>
+        ${tripBadge}
+      </div>
+    </div>
+    <div class="report-detail-row">
+      <span class="report-pill">${l.odoStart.toLocaleString()} → ${l.odoEnd.toLocaleString()}</span>
+      ${l.purpose?`<span class="report-pill">${l.purpose}</span>`:''}
+    </div>
+    ${isAdmin?`<div style="margin-top:8px"><button class="btn-delete" style="font-size:12px;padding:4px 10px" onclick="deleteMileageEntry('${l.id}')">Remove</button></div>`:''}
+  </div>`;
+}
+
+function openMileageModal(id=null){
+  mileageEditId = id;
+  mileageTripType = 'commute';
+  const today = new Date().toISOString().split('T')[0];
+  const vOptions = MILEAGE_VEHICLES.map(v=>`<option value="${v.id}">${v.id} — ${v.label}</option>`).join('');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'mileage-overlay';
+  overlay.innerHTML = `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Log Miles</div>
+    <div class="sheet-subtitle">Record your trip mileage</div>
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <input type="date" id="ml-date" value="${today}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Vehicle</label>
+      <select id="ml-vehicle">${vOptions}</select>
+    </div>
+    <div class="form-group" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Odometer Start</label>
+        <input type="number" id="ml-odo-start" placeholder="e.g. 45200" oninput="calcMileageMiles()">
+      </div>
+      <div>
+        <label class="form-label">Odometer End</label>
+        <input type="number" id="ml-odo-end" placeholder="e.g. 45247" oninput="calcMileageMiles()">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Miles (auto-calculated)</label>
+      <div id="ml-miles-display" style="padding:10px 12px;background:var(--accent);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:18px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">—</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Trip Type</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div id="ml-type-commute" class="sel-opt picked" onclick="setMileageTripType('commute')">Commute</div>
+        <div id="ml-type-personal" class="sel-opt" onclick="setMileageTripType('personal')">Personal</div>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Purpose <span style="font-weight:400;text-transform:none;color:var(--text-3)">(optional)</span></label>
+      <input type="text" id="ml-purpose" placeholder="e.g. Home to job site">
+    </div>
+    <div id="ml-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      <button class="btn-save" onclick="saveMileageLog()">Save</button>
+      <button class="btn-cancel" onclick="closeMileageModal()">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  mileageModalOpen = true;
+}
+
+function calcMileageMiles(){
+  const s = parseFloat(document.getElementById('ml-odo-start').value)||0;
+  const e = parseFloat(document.getElementById('ml-odo-end').value)||0;
+  const el = document.getElementById('ml-miles-display');
+  if(e > s){ el.textContent = (e-s).toFixed(1)+' mi'; el.style.color='var(--green-dark)'; }
+  else if(s||e){ el.textContent = 'Invalid'; el.style.color='#dc2626'; }
+  else { el.textContent = '—'; el.style.color='var(--green-dark)'; }
+}
+
+function setMileageTripType(t){
+  mileageTripType = t;
+  document.getElementById('ml-type-commute').classList.toggle('picked', t==='commute');
+  document.getElementById('ml-type-personal').classList.toggle('picked', t==='personal');
+}
+
+function closeMileageModal(){
+  const el = document.getElementById('mileage-overlay');
+  if(el) el.remove();
+  mileageModalOpen = false;
+}
+
+async function saveMileageLog(){
+  const date = document.getElementById('ml-date').value;
+  const vIdx = document.getElementById('ml-vehicle').selectedIndex;
+  const vehicle = MILEAGE_VEHICLES[vIdx];
+  const odoStart = parseFloat(document.getElementById('ml-odo-start').value);
+  const odoEnd = parseFloat(document.getElementById('ml-odo-end').value);
+  const purpose = document.getElementById('ml-purpose').value.trim();
+  const errEl = document.getElementById('ml-error');
+  errEl.textContent = '';
+
+  if(!date){ errEl.textContent='Date is required.'; return; }
+  if(isNaN(odoStart)||isNaN(odoEnd)){ errEl.textContent='Both odometer readings are required.'; return; }
+  if(odoEnd <= odoStart){ errEl.textContent='Odometer end must be greater than odometer start.'; return; }
+
+  const btn = document.querySelector('#mileage-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  try {
+    await dbSaveMileageLog({ date, vehicleId: vehicle.id, vehicleLabel: vehicle.label, odoStart, odoEnd, tripType: mileageTripType, purpose });
+    await loadMileage();
+    closeMileageModal();
+    renderMileage();
+  } catch(e){
+    errEl.textContent = 'Error saving. Please try again.';
+    btn.disabled=false; btn.textContent='Save';
+  }
+}
+
+async function deleteMileageEntry(id){
+  if(!confirm('Remove this mileage entry?')) return;
+  await dbDeleteMileageLog(id);
+  await loadMileage();
+  renderMileage();
+}
+
 // ── TIME OFF UI ──────────────────────────────────────────────
 let editingTimeOffId = null;
 
@@ -1804,15 +2097,41 @@ async function resolveWo(id){
 const ADMIN_EMAILS = [
   'jake@fieldsourceohio.com',
   'ryan@fieldsourceohio.com',
-  'matt@fieldsourceohio.com',
-  'haller@fieldsourceohio.com'
+  'matt@fieldsourceohio.com'
+];
+
+// Can schedule jobs, file reports, log & view own mileage
+const SCHEDULER_EMAILS = [
+  'haller@fieldsourceohio.com',
+  'dan@fieldsourceohio.com',
+  'brandon@fieldsourceohio.com',
+  'wes@fieldsourceohio.com',
+  'moore@fieldsourceohio.com',
+  'greg@fieldsourceohio.com'
+];
+
+// Can only file daily reports
+const REPORT_ONLY_EMAILS = [
+  'jones@fieldsourceohio.com',
+  'badenhop@fieldsourceohio.com',
+  'kaleb@fieldsourceohio.com',
+  'gase@fieldsourceohio.com'
 ];
 
 const USER_DISPLAY_NAMES = {
   'haller@fieldsourceohio.com': 'Dan Haller',
+  'dan@fieldsourceohio.com': 'Dan Trubisky',
+  'brandon@fieldsourceohio.com': 'Brandon Stith',
+  'wes@fieldsourceohio.com': 'Wes Ganobcik',
+  'moore@fieldsourceohio.com': 'Brandon Moore',
+  'greg@fieldsourceohio.com': 'Greg',
   'jake@fieldsourceohio.com': 'Jake',
   'ryan@fieldsourceohio.com': 'Ryan',
-  'matt@fieldsourceohio.com': 'Matt'
+  'matt@fieldsourceohio.com': 'Matt',
+  'jones@fieldsourceohio.com': 'Cameron',
+  'badenhop@fieldsourceohio.com': 'Badenhop',
+  'kaleb@fieldsourceohio.com': 'Kaleb',
+  'gase@fieldsourceohio.com': 'Gase'
 };
 function getDisplayName(email){
   if(!email) return 'Unknown';
@@ -1822,6 +2141,8 @@ function getDisplayName(email){
 let currentUser = null;
 let currentToken = null;
 let isAdmin = false;
+let isScheduler = false;  // can add jobs + reports + own mileage
+let isReportOnly = false; // reports only
 
 async function doLogin(){
   const email = document.getElementById('login-email').value.trim();
@@ -1843,6 +2164,8 @@ async function doLogin(){
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
     isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
+    isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
+    isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     sessionStorage.setItem('fs_token', currentToken);
     sessionStorage.setItem('fs_refresh', refreshToken);
     sessionStorage.setItem('fs_user', JSON.stringify(currentUser));
@@ -1856,7 +2179,7 @@ async function doLogin(){
 function doLogout(){
   sessionStorage.removeItem('fs_token');
   sessionStorage.removeItem('fs_user');
-  currentUser = null; currentToken = null; isAdmin = false;
+  currentUser = null; currentToken = null; isAdmin = false; isScheduler = false; isReportOnly = false;
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('main-header').style.display = 'none';
   document.getElementById('app-body').style.display = 'none';
@@ -1874,9 +2197,18 @@ function showApp(){
   document.getElementById('header-user-name').textContent = display;
   // Hide Add Job button for non-admins
   const ajb = document.getElementById('add-job-btn');
-  if(ajb) ajb.style.display = '';
+  if(ajb) ajb.style.display = isScheduler ? '' : 'none';
+  // Show/hide tabs based on role
+  const mileageTab = document.getElementById('mileage-tab');
+  const timeoffTab = document.getElementById('timeoff-tab');
+  const woTab = document.querySelector("[onclick="setView('workorders')"]");
+  const equipTab = document.querySelector("[onclick="setView('equipment')"]");
+  if(mileageTab) mileageTab.style.display = isReportOnly ? 'none' : '';
+  if(timeoffTab) timeoffTab.style.display = isReportOnly ? 'none' : '';
+  if(woTab) woTab.style.display = isAdmin ? '' : 'none';
+  if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff(); startPolling(); });
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff(); loadMileage(); startPolling(); });
   render();
 }
 
@@ -1916,6 +2248,10 @@ function checkSession(){
       refreshToken = refresh;
       currentUser = JSON.parse(user);
       isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
+      isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
+      isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
+    isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
+    isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
       showApp();
       return;
     } catch(e){}
@@ -2111,6 +2447,8 @@ async function doResetPassword(){
     currentToken = resetAccessToken;
     currentUser = data;
     isAdmin = ADMIN_EMAILS.includes((currentUser.email||'').toLowerCase());
+    isScheduler = isAdmin || SCHEDULER_EMAILS.includes((currentUser.email||'').toLowerCase());
+    isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes((currentUser.email||'').toLowerCase());
     sessionStorage.setItem('fs_token', currentToken);
     sessionStorage.setItem('fs_user', JSON.stringify(currentUser));
     resetAccessToken = null;

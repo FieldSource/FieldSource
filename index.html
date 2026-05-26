@@ -564,7 +564,27 @@ async function dbSaveMileageLog(d){
     purpose: d.purpose||'',
     year,
   };
-  return await sbFetch('POST', '/rest/v1/mileage_logs', row);
+  const result = await sbFetch('POST', '/rest/v1/mileage_logs', row);
+  // Sync to Google Sheets
+  try {
+    await fetch(SHEETS_WEBHOOK, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'mileage', record: {
+        date: d.date,
+        user_email: currentUser.email,
+        vehicle_id: d.vehicleId,
+        vehicle_label: d.vehicleLabel,
+        odometer_start: d.odoStart,
+        odometer_end: d.odoEnd,
+        miles,
+        trip_type: d.tripType,
+        purpose: d.purpose||''
+      }})
+    });
+  } catch(e){ console.warn('Sheets mileage sync failed:', e); }
+  return result;
 }
 
 async function dbDeleteMileageLog(id){

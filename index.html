@@ -1599,21 +1599,21 @@ function exportReport(id){
   const r = reports.find(x=>x.id===id);
   if(!r) return;
   const equipList = (r.equipUsed||[]).join(', ')||'—';
-  const lines = [
-    `*📋 Daily Field Report*`,
-    `*${r.client}${r.field?' · '+r.field:''}*`,
-    `📅 ${r.reportDate}  |  Filed by: ${r.filedBy}`,
-    r.timeIn&&r.timeOut ? `🕐 On site: ${r.timeIn} – ${r.timeOut}` : '',
-    ``,
-    r.workDone ? `*Work Done:*
-${r.workDone}` : '',
-    r.productsUsed ? `*Products Used:*
-${r.productsUsed}` : '',
-    equipList !== '—' ? `*Equipment:*
-${equipList}` : '',
-    r.hasIssue && r.issueNotes ? `⚠️ *Issue Flagged:*
-${r.issueNotes}` : '',
-  ].filter(Boolean).join('
+  const parts = [];
+  parts.push('*📋 Daily Field Report*');
+  parts.push('*' + r.client + (r.field?' · '+r.field:'') + '*');
+  parts.push('📅 ' + r.reportDate + '  |  Filed by: ' + r.filedBy);
+  if(r.timeIn&&r.timeOut) parts.push('🕐 On site: ' + r.timeIn + ' – ' + r.timeOut);
+  parts.push('');
+  if(r.workDone) parts.push('*Work Done:*
+' + r.workDone);
+  if(r.productsUsed) parts.push('*Products Used:*
+' + r.productsUsed);
+  if(equipList !== '—') parts.push('*Equipment:*
+' + equipList);
+  if(r.hasIssue && r.issueNotes) parts.push('⚠️ *Issue Flagged:*
+' + r.issueNotes);
+  const lines = parts.join('
 ');
 
   navigator.clipboard.writeText(lines).then(()=>{

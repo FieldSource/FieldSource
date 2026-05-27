@@ -329,7 +329,7 @@ const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
   Carts:['John Deere Gator TX #1','John Deere Gator TX #2','John Deere Gator HPX #1','2017 Gator John Deere HPX #2','Toro GTX','2019 Toro Workman HDX','John Deere Gator TX #3'],
   Attachments:['Toro ProForce Blower #1','Toro ProForce Blower #2','Buffalo Blower #1','Buffalo Blower #2','Agrimetal 3500 Blower','LitterKat','Redexim VT-1500','Greens Groomer #1','Greens Groomer #2','Turfco Topdresser #1','Turfco Topdresser #2','2021 Woodbay FDS 6000 Dethatcher','Vredo Overseeder DZ5','Imants Shockwave 2.1','Turfco Torrent 2','2025 Snow Dogg','Level Best'],
-  Specialty:['ABI Force','FS Skid Sprayer','Smithco Spray Star 2000','2024 John Deere 4066R','Kubota Tractor','Wacker Neuson Roller','Old Steel Green','New Steel Green','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift','Ford F550 Dump Truck'],
+  Specialty:['ABI Force','FS Skid Sprayer','Smithco Spray Star 2000','2024 John Deere 4066R','Kubota Tractor','Wacker Neuson Roller','Old Steel Green','New Steel Green','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift'],
   'Hand Tools':['Green Push Spreader','Stihl Backpack Blower #1','Stihl Backpack Blower #2','Stihl Backpack Blower #3','Stihl Combi','Stihl String Trimmer #1','Stihl String Trimmer #2','Little Wonder Pro Edger','Jumping Jack Tamper','MQ Plate Compactor','Ryan Sod Cutter','Dewalt Hammer Drill','Stihl RB 400','Honda EU 2200i','Husqvarna Trimmer','Billy Goat Sod Cutter','Mi-T-M GH-3003','Stihl ST 500i']
 };
 // Trucks shown only on daily reports, not in scheduling modal
@@ -341,6 +341,7 @@ const TRUCKS=[
   'Chevrolet Silverado 1500 LT Duramax (Greg)',
   'Chevrolet Silverado 1500 LT Duramax (Wes)',
   'GMC Sierra 1500 SLT (Ryan)',
+  'Ford F550 Dump Truck',
   'Ford F450 (Jr)',
   'Chevrolet Silverado 2500 (Spare)'
 ];
@@ -395,7 +396,8 @@ async function loadJobs(){
       equip: row.equip||[],
       touchUp: row.touch_up||false,
       notes: row.notes||'',
-      createdBy: row.created_by||''
+      createdBy: row.created_by||'',
+      rentalEquip: row.rental_equip||''
     }));
   } catch(e) {
     console.error('Load error', e);
@@ -666,6 +668,7 @@ async function dbSaveJob(data, id=null){
     equip: data.equip,
     touch_up: data.touchUp,
     notes: data.notes,
+    rental_equip: data.rentalEquip||'',
     include_weekends: data.includeWeekends||false
   };
   if(!id && data.createdBy) row.created_by = data.createdBy;
@@ -1101,6 +1104,10 @@ function openModal(id=null,defaultDate=null){
         <label class="form-label">Notes</label>
         <input type="text" id="f-notes" placeholder="Conditions, special instructions..." value="${job&&job.notes?job.notes:''}">
       </div>
+      <div class="form-group">
+        <label class="form-label">Rental Equipment</label>
+        <input type="text" id="f-rental-equip" placeholder="e.g. Bobcat S650, Trencher, Scissor Lift..." value="${job&&job.rentalEquip?job.rentalEquip:''}">
+      </div>
       ${job&&job.createdBy?`<div style="font-size:12px;color:var(--text-3);padding:6px 2px 10px;border-top:1px solid var(--border);margin-top:4px">Created by <strong style="color:var(--text-2)">${job.createdBy}</strong></div>`:''}
       <div class="sheet-actions">
         ${job?`<button class="btn-delete" onclick="deleteJob('${id}')">Remove</button>`:''}
@@ -1248,15 +1255,16 @@ async function saveJob(){
   const notes=document.getElementById('f-notes').value.trim();
   if(!startDate){alert('Please pick a start date.');return}
   const includeWeekends=document.getElementById('f-weekends')?document.getElementById('f-weekends').checked:false;
+  const rentalEquip = document.getElementById('f-rental-equip') ? document.getElementById('f-rental-equip').value.trim() : '';
   const createdBy = editId ? (jobs.find(j=>j.id===editId)||{}).createdBy||'' : getDisplayName(currentUser&&currentUser.email);
-  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,includeWeekends,createdBy};
+  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,rentalEquip,includeWeekends,createdBy};
   const btn=document.querySelector('.btn-save');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   try{
     if(editId){
       await dbSaveJob(data, editId);
       const existing=jobs.find(j=>j.id===editId);
-      Object.assign(existing,{...data,id:editId,createdBy:existing.createdBy||data.createdBy});
+      Object.assign(existing,{...data,id:editId,createdBy:existing.createdBy||data.createdBy,rentalEquip:data.rentalEquip||existing.rentalEquip||''});
     } else {
       const newId=await dbSaveJob(data);
       if(newId) jobs.push({...data,id:newId});
@@ -1581,9 +1589,48 @@ function openReportDetail(id){
       <div class="sheet-actions">
         <button class="btn-delete" onclick="deleteReport('${r.id}')">Delete</button>
         <button class="btn-cancel" onclick="closeModal()">Close</button>
+        <button class="btn-save" onclick="exportReport('${r.id}')">📋 Copy for Slack</button>
       </div>
     </div>
   </div>`;
+}
+
+function exportReport(id){
+  const r = reports.find(x=>x.id===id);
+  if(!r) return;
+  const equipList = (r.equipUsed||[]).join(', ')||'—';
+  const lines = [
+    `*📋 Daily Field Report*`,
+    `*${r.client}${r.field?' · '+r.field:''}*`,
+    `📅 ${r.reportDate}  |  Filed by: ${r.filedBy}`,
+    r.timeIn&&r.timeOut ? `🕐 On site: ${r.timeIn} – ${r.timeOut}` : '',
+    ``,
+    r.workDone ? `*Work Done:*
+${r.workDone}` : '',
+    r.productsUsed ? `*Products Used:*
+${r.productsUsed}` : '',
+    equipList !== '—' ? `*Equipment:*
+${equipList}` : '',
+    r.hasIssue && r.issueNotes ? `⚠️ *Issue Flagged:*
+${r.issueNotes}` : '',
+  ].filter(Boolean).join('
+');
+
+  navigator.clipboard.writeText(lines).then(()=>{
+    // Show a brief confirmation
+    const btn = document.querySelector('.btn-save');
+    if(btn){ const orig=btn.textContent; btn.textContent='✓ Copied!'; setTimeout(()=>btn.textContent=orig, 2000); }
+  }).catch(()=>{
+    // Fallback for older browsers
+    const ta = document.createElement('textarea');
+    ta.value = lines;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    const btn = document.querySelector('.btn-save');
+    if(btn){ const orig=btn.textContent; btn.textContent='✓ Copied!'; setTimeout(()=>btn.textContent=orig, 2000); }
+  });
 }
 
 async function deleteReport(id){

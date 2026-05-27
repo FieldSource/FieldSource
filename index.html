@@ -284,6 +284,9 @@ main{padding:12px 16px 100px}
     </div>
     <button class="header-add" onclick="openReportModal()">+ File report</button>
     <button class="header-add" id="add-job-btn" onclick="openModal()">+ Add job</button>
+    <button class="header-add" id="import-csv-btn" onclick="document.getElementById('csv-file-input').click()" style="display:none">⬆ Import CSV</button>
+    <button class="header-add" id="download-template-btn" onclick="downloadCsvTemplate()" style="display:none">⬇ CSV Template</button>
+    <input type="file" id="csv-file-input" accept=".csv" style="display:none" onchange="importCsvJobs(this)">
   </div>
 </header>
 
@@ -395,6 +398,7 @@ async function loadJobs(){
       crew: row.crew||[],
       equip: row.equip||[],
       touchUp: row.touch_up||false,
+      task: row.task||'',
       notes: row.notes||'',
       createdBy: row.created_by||'',
       rentalEquip: row.rental_equip||''
@@ -593,6 +597,121 @@ async function dbDeleteMileageLog(id){
   await sbFetch('DELETE', `/rest/v1/mileage_logs?id=eq.${id}`);
 }
 
+
+// ── CSV IMPORT / EXPORT ───────────────────────────────────────
+const VALID_SERVICES = ['Mowing','Aeration','Applications','Topdressing','Grading','Irrigation Check','Irrigation Repair','Shockwave','Slit Seeding','Broadcast Seeding','Sodding','Other'];
+
+function downloadCsvTemplate(){
+  const headers = ['client','site_field','task','phase_service','start_date','duration_days','crew','equipment','notes'];
+  const example = [
+    'Washington Court House','Gardner Park Stadium','Till existing 2X (88,000 SF)','Till & Rough Grade','2026-05-29','3','Dan Sr|Dan Jr','Big Tex 25GM','Two-pass till per plan — no topsoil strip'
+  ];
+  const instructions = [
+    '# INSTRUCTIONS:',
+    '# client: Name of the client (e.g. Athens CC)',
+    '# site_field: Field or location name',
+    '# task: Specific task description — goes into the Task field',
+    '# phase_service: Phase/service type. If not one of the standard services it will save as Other.',
+    '#   Standard services: ' + VALID_SERVICES.filter(s=>s!=='Other').join(', '),
+    '# start_date: YYYY-MM-DD format (e.g. 2026-05-29)',
+    '# duration_days: Number of weekdays the job spans (e.g. 3)',
+    '# crew: Optional. Separate multiple crew with | (e.g. Dan Sr|Dan Jr|BMoore)',
+    '# equipment: Optional. Separate multiple with | (e.g. Big Tex 25GM|ABI Force)',
+    '# notes: Optional additional notes',
+    '#',
+    '# Delete these comment lines before importing.',
+    '#',
+  ].join('\n');
+  const csv = instructions + '\n' + headers.join(',') + '\n' + example.join(',');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'fieldsource_import_template.csv';
+  a.click();
+}
+
+async function importCsvJobs(input){
+  const file = input.files[0];
+  if(!file) return;
+  const text = await file.text();
+  const lines = text.split('\n').filter(l=>l.trim() && !l.trim().startsWith('#'));
+  if(lines.length < 2){ alert('CSV must have a header row and at least one data row.'); return; }
+
+  const headers = lines[0].split(',').map(h=>h.trim().toLowerCase());
+  const rows = lines.slice(1).map(line=>{
+    // Handle quoted commas
+    const cols = [];
+    let cur = '', inQ = false;
+    for(let c of line){
+      if(c==='"') inQ=!inQ;
+      else if(c===',' && !inQ){ cols.push(cur.trim()); cur=''; }
+      else cur+=c;
+    }
+    cols.push(cur.trim());
+    const obj = {};
+    headers.forEach((h,i)=>obj[h]=cols[i]||'');
+    return obj;
+  }).filter(r=>r.client||r.site_field||r.task);
+
+  if(!rows.length){ alert('No valid rows found in CSV.'); return; }
+
+  // Confirm client/site with user
+  const clients = [...new Set(rows.map(r=>r.client).filter(Boolean))];
+  const sites = [...new Set(rows.map(r=>r.site_field).filter(Boolean))];
+  const confirmMsg = `Ready to import ${rows.length} job(s):\n\nClients: ${clients.join(', ')}\nSites: ${sites.join(', ')}\n\nProceed?`;
+  if(!confirm(confirmMsg)) return;
+
+  let imported = 0, errors = 0;
+  for(const row of rows){
+    try {
+      // Map service
+      const phaseRaw = (row.phase_service||'').trim();
+      const service = VALID_SERVICES.includes(phaseRaw) ? phaseRaw : 'Other';
+      const task = (row.task||'').trim();
+      const notes = service==='Other' && phaseRaw
+        ? (phaseRaw + (row.notes ? ' — ' + row.notes : ''))
+        : (row.notes||'');
+
+      // Crew
+      const crew = row.crew ? row.crew.split('|').map(c=>c.trim()).filter(Boolean) : [];
+
+      // Equipment — match against known equipment names loosely
+      const equipRaw = row.equipment ? row.equipment.split('|').map(e=>e.trim()).filter(Boolean) : [];
+      const allEquip = Object.values(EQUIPMENT).flat();
+      const equip = equipRaw.map(e=>{
+        const match = allEquip.find(eq=>eq.toLowerCase().includes(e.toLowerCase())||e.toLowerCase().includes(eq.toLowerCase()));
+        return match || null;
+      }).filter(Boolean);
+
+      const data = {
+        client: row.client||'',
+        field: row.site_field||'',
+        service,
+        task,
+        startDate: row.start_date||'',
+        duration: parseInt(row.duration_days)||1,
+        crew,
+        equip,
+        touchUp: false,
+        notes,
+        rentalEquip: '',
+        includeWeekends: false,
+        createdBy: getDisplayName(currentUser&&currentUser.email)
+      };
+      await dbSaveJob(data);
+      imported++;
+    } catch(e){
+      console.error('Import error on row:', row, e);
+      errors++;
+    }
+  }
+
+  await loadJobs();
+  render();
+  input.value = '';
+  alert(`Import complete!\n${imported} job(s) imported${errors?' — '+errors+' failed':''}.`);
+}
+
 // ── TIME OFF ─────────────────────────────────────────────────
 async function loadTimeOff(){
   try {
@@ -667,6 +786,7 @@ async function dbSaveJob(data, id=null){
     crew: data.crew,
     equip: data.equip,
     touch_up: data.touchUp,
+    task: data.task||'',
     notes: data.notes,
     rental_equip: data.rentalEquip||'',
     include_weekends: data.includeWeekends||false
@@ -872,7 +992,7 @@ function renderWeek(){
           title="Drag to reschedule"`:''}
         onclick="openModal('${j.id}')">
         <div class="chip-client">${j.client.length>16?j.client.slice(0,15).trim()+'…':j.client}${dur>1?`<span class="duration-badge">${dur}d</span>`:''}</div>
-        <div class="chip-detail">${j.service}${j.field?' · '+j.field:''}<br>${crew||'Unassigned'}</div>
+        <div class="chip-detail">${j.task?j.task+' · ':''} ${j.service}${j.field?' · '+j.field:''}<br>${crew||'Unassigned'}</div>
         ${chipEquip.length?`<div class="chip-trailers">${chipEquip.map(t=>shortName(t)).join(', ')}</div>`:''}
         ${dur>1?'<div class="multi-day-bar"></div>':''}
       </div>`;
@@ -1101,8 +1221,11 @@ function openModal(id=null,defaultDate=null){
         <div id="equip-selected">${buildEquipSelected()}</div>
       </div>
       <div class="form-group">
+        <label class="form-label">Task / Description</label>
+        <input type="text" id="f-task" placeholder="e.g. Till existing 2X, Form curbs, Sod install..." value="${job&&job.task?job.task:''}">      </div>
+      <div class="form-group">
         <label class="form-label">Notes</label>
-        <input type="text" id="f-notes" placeholder="Conditions, special instructions..." value="${job&&job.notes?job.notes:''}">
+        <textarea id="f-notes" placeholder="Conditions, special instructions..." rows="3" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);resize:vertical;box-sizing:border-box">${job&&job.notes?job.notes:''}</textarea>
       </div>
       <div class="form-group">
         <label class="form-label">Rental Equipment</label>
@@ -1255,9 +1378,10 @@ async function saveJob(){
   const notes=document.getElementById('f-notes').value.trim();
   if(!startDate){alert('Please pick a start date.');return}
   const includeWeekends=document.getElementById('f-weekends')?document.getElementById('f-weekends').checked:false;
+  const task = document.getElementById('f-task') ? document.getElementById('f-task').value.trim() : '';
   const rentalEquip = document.getElementById('f-rental-equip') ? document.getElementById('f-rental-equip').value.trim() : '';
   const createdBy = editId ? (jobs.find(j=>j.id===editId)||{}).createdBy||'' : getDisplayName(currentUser&&currentUser.email);
-  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,rentalEquip,includeWeekends,createdBy};
+  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,task,rentalEquip,includeWeekends,createdBy};
   const btn=document.querySelector('.btn-save');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   try{
@@ -1600,15 +1724,15 @@ function exportReport(id){
   if(!r) return;
   const equipList = (r.equipUsed||[]).join(', ')||'—';
   const parts = [];
-  parts.push('*📋 Daily Field Report*');
+  parts.push('*Daily Field Report*');
   parts.push('*' + r.client + (r.field?' · '+r.field:'') + '*');
-  parts.push('📅 ' + r.reportDate + '  |  Filed by: ' + r.filedBy);
-  if(r.timeIn&&r.timeOut) parts.push('🕐 On site: ' + r.timeIn + ' – ' + r.timeOut);
+  parts.push(r.reportDate + '  |  Filed by: ' + r.filedBy);
+  if(r.timeIn&&r.timeOut) parts.push('On site: ' + r.timeIn + ' - ' + r.timeOut);
   parts.push('');
   if(r.workDone) parts.push('*Work Done:*\n' + r.workDone);
   if(r.productsUsed) parts.push('*Products Used:*\n' + r.productsUsed);
   if(equipList !== '—') parts.push('*Equipment:*\n' + equipList);
-  if(r.hasIssue && r.issueNotes) parts.push('\u26a0\ufe0f *Issue Flagged:*\n' + r.issueNotes);
+  if(r.hasIssue && r.issueNotes) parts.push('*Issue Flagged:*\n' + r.issueNotes);
   const lines = parts.join('\n');
 
   navigator.clipboard.writeText(lines).then(()=>{
@@ -2260,6 +2384,10 @@ function showApp(){
   // Hide Add Job button for non-admins
   const ajb = document.getElementById('add-job-btn');
   if(ajb) ajb.style.display = isScheduler ? '' : 'none';
+  const importBtn = document.getElementById('import-csv-btn');
+  const templateBtn = document.getElementById('download-template-btn');
+  if(importBtn) importBtn.style.display = isScheduler ? '' : 'none';
+  if(templateBtn) templateBtn.style.display = isScheduler ? '' : 'none';
   // Show/hide tabs based on role
   const allTabs = Array.from(document.querySelectorAll('.vtab'));
   const mileageTab = document.getElementById('mileage-tab');

@@ -1605,16 +1605,11 @@ function exportReport(id){
   parts.push('📅 ' + r.reportDate + '  |  Filed by: ' + r.filedBy);
   if(r.timeIn&&r.timeOut) parts.push('🕐 On site: ' + r.timeIn + ' – ' + r.timeOut);
   parts.push('');
-  if(r.workDone) parts.push('*Work Done:*
-' + r.workDone);
-  if(r.productsUsed) parts.push('*Products Used:*
-' + r.productsUsed);
-  if(equipList !== '—') parts.push('*Equipment:*
-' + equipList);
-  if(r.hasIssue && r.issueNotes) parts.push('⚠️ *Issue Flagged:*
-' + r.issueNotes);
-  const lines = parts.join('
-');
+  if(r.workDone) parts.push('*Work Done:*\n' + r.workDone);
+  if(r.productsUsed) parts.push('*Products Used:*\n' + r.productsUsed);
+  if(equipList !== '—') parts.push('*Equipment:*\n' + equipList);
+  if(r.hasIssue && r.issueNotes) parts.push('\u26a0\ufe0f *Issue Flagged:*\n' + r.issueNotes);
+  const lines = parts.join('\n');
 
   navigator.clipboard.writeText(lines).then(()=>{
     // Show a brief confirmation

@@ -1612,10 +1612,14 @@ function toggleServiceOther(){
 
 function buildCrewGrid(){
   const {start} = getModalDates();
+  const subPicked = pickedCrew.some(c=>c.startsWith('Sub:'));
+  const subName = subPicked ? (pickedCrew.find(c=>c.startsWith('Sub:'))||'Sub:').slice(4) : '';
   return CREW.map(c=>{
     const off = start && isPersonOff(c, start);
     return `<div class="sel-opt${pickedCrew.includes(c)?' picked':''}${off?' crew-off':''}" onclick="toggleCrew('${c}',${off})">${c}${off?'<span style=\"font-size:9px;margin-left:4px;opacity:0.7\">OFF</span>':''}</div>`;
-  }).join('');
+  }).join('')
+  + `<div class="sel-opt${subPicked?' picked':''}" onclick="toggleSubcontractor()">Subcontractor</div>`
+  + `<div id="f-sub-wrap" style="display:${subPicked?'block':'none'};grid-column:1/-1;margin-top:4px"><input type="text" id="f-sub-name" placeholder="Company or person name..." value="${subName}" oninput="updateSubName(this.value)" style="width:100%;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);box-sizing:border-box"></div>`;
 }
 function buildEquipTabs(){
   return EQUIP_CATS.map(cat=>`<button class="etab${activeEquipTab===cat?' active':''}" onclick="setEquipTab('${cat}')">${cat}</button>`).join('');

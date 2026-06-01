@@ -371,7 +371,7 @@ main{padding:12px 16px 100px}
 
 <script>
 const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
-const SERVICES=['Mowing','Aeration','Applications','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Shockwave','Slit Seeding','Broadcast Seeding','Sodding'];
+const SERVICES=['Mowing','Aeration','Applications','Contract Maintenance','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Shockwave','Slit Seeding','Broadcast Seeding','Sodding'];
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Matt','Wes','Cameron','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
@@ -1585,12 +1585,29 @@ function refreshEquipConflicts(){
 
 function buildServiceGrid(pre=[]){
   pickedServices = pre && pre.length ? [...pre] : [];
-  return SERVICES.map(s=>`<div class="sel-opt${pickedServices.includes(s)?' picked':''}" onclick="toggleService('${s}')">${s}</div>`).join('');
+  const hasOther = pickedServices.some(s=>!SERVICES.includes(s));
+  const otherVal = hasOther ? pickedServices.find(s=>!SERVICES.includes(s)) : '';
+  const otherPicked = pickedServices.includes('Other') || hasOther;
+  return SERVICES.map(s=>`<div class="sel-opt${pickedServices.includes(s)?' picked':''}" onclick="toggleService('${s}')">${s}</div>`).join('')
+    + `<div class="sel-opt${otherPicked?' picked':''}" onclick="toggleServiceOther()">Other</div>`
+    + `<div id="f-service-other-wrap" style="display:${otherPicked?'block':'none'};grid-column:1/-1;margin-top:4px"><input type="text" id="f-service-other" placeholder="Describe other service..." value="${otherVal}" style="width:100%;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);box-sizing:border-box"></div>`;
 }
 function toggleService(s){
   pickedServices = pickedServices.includes(s) ? pickedServices.filter(x=>x!==s) : [...pickedServices,s];
   const g = document.getElementById('f-service-grid');
   if(g) g.innerHTML = buildServiceGrid(pickedServices);
+}
+function toggleServiceOther(){
+  const hasOther = pickedServices.includes('Other') || pickedServices.some(s=>!SERVICES.includes(s));
+  if(hasOther){
+    pickedServices = pickedServices.filter(s=>s==='Other'||SERVICES.includes(s)).filter(s=>s!=='Other');
+  } else {
+    pickedServices = [...pickedServices.filter(s=>SERVICES.includes(s)), 'Other'];
+  }
+  const g = document.getElementById('f-service-grid');
+  if(g) g.innerHTML = buildServiceGrid(pickedServices);
+  // focus the text input
+  setTimeout(()=>{ const inp=document.getElementById('f-service-other'); if(inp&&!hasOther) inp.focus(); },50);
 }
 
 function buildCrewGrid(){
@@ -1705,7 +1722,13 @@ async function saveJob(){
   const notes=document.getElementById('f-notes').value.trim();
   if(!startDate){alert('Please pick a start date.');return}
   const includeWeekends=document.getElementById('f-weekends')?document.getElementById('f-weekends').checked:false;
-  const services = [...pickedServices];
+  const services = [...pickedServices].map(s=>{
+    if(s==='Other'){
+      const otherText = document.getElementById('f-service-other') ? document.getElementById('f-service-other').value.trim() : '';
+      return otherText || 'Other';
+    }
+    return s;
+  });
   const task = document.getElementById('f-task') ? document.getElementById('f-task').value.trim() : '';
   const rentalEquip = document.getElementById('f-rental-equip') ? document.getElementById('f-rental-equip').value.trim() : '';
   const createdBy = editId ? (jobs.find(j=>j.id===editId)||{}).createdBy||'' : getDisplayName(currentUser&&currentUser.email);

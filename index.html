@@ -1292,7 +1292,7 @@ function renderWeek(){
     dayJobs.forEach(j=>{
       const st=statusMeta(getStatus(j));
       const dur=parseInt(j.duration)||1;
-      const crew=(j.crew||[]).join(', ');
+      const crew=(j.crew||[]).map(c=>c.startsWith('Sub:')?'Sub: '+(c.slice(4)||'?'):c).join(', ');
       const trailers=(j.equip||[]).filter(e=>EQUIPMENT.Trailers.includes(e));
       const specialty=(j.equip||[]).filter(e=>EQUIPMENT.Specialty.includes(e));
       const chipEquip=[...trailers,...specialty];
@@ -1665,6 +1665,24 @@ function toggleCrew(name, isOff=false){
   const g=document.getElementById('crew-grid');
   if(g) g.innerHTML=buildCrewGrid();
 }
+function toggleSubcontractor(){
+  const subPicked = pickedCrew.some(c=>c.startsWith('Sub:'));
+  if(subPicked){
+    pickedCrew = pickedCrew.filter(c=>!c.startsWith('Sub:'));
+  } else {
+    pickedCrew = [...pickedCrew, 'Sub:'];
+  }
+  const g=document.getElementById('crew-grid');
+  if(g) g.innerHTML=buildCrewGrid();
+  if(!subPicked){
+    setTimeout(()=>{ const inp=document.getElementById('f-sub-name'); if(inp) inp.focus(); },50);
+  }
+}
+function updateSubName(val){
+  pickedCrew = pickedCrew.filter(c=>!c.startsWith('Sub:'));
+  pickedCrew = [...pickedCrew, 'Sub:'+val];
+}
+
 function toggleTouchUp(){
   touchUpOn=!touchUpOn;
   const el=document.getElementById('touchup-toggle');

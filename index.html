@@ -164,7 +164,7 @@ main{padding:12px 16px 100px}
 .wo-card-meta{font-size:11px;color:var(--text-3);margin-top:2px}
 .wo-status-badge{font-size:11px;font-weight:600;border-radius:99px;padding:2px 10px;white-space:nowrap;flex-shrink:0}
 .wo-status-open{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
-.wo-status-scheduled{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
+.wo-status-assigned{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
 .wo-status-resolved{background:#dcfce7;color:#14532d;border:1px solid #86efac}
 .wo-issue-text{font-size:13px;color:var(--text-2);margin-top:6px;line-height:1.4}
 .wo-schedule-info{font-size:12px;color:var(--green-dark);background:var(--green-light);border-radius:var(--radius-sm);padding:6px 10px;margin-top:8px;font-weight:500}
@@ -203,6 +203,42 @@ main{padding:12px 16px 100px}
 .logout-btn:active{background:var(--bg)}
 .user-chip{font-size:12px;color:#fff;display:flex;align-items:center;gap:8px}
 .reset-success{font-size:13px;color:#16a34a;margin-top:10px;text-align:center;min-height:20px}
+
+/* ── PIPELINE ─────────────────────────────────────────────── */
+.pipeline-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px;cursor:pointer;transition:border-color .15s;position:relative}
+.pipeline-card:active{border-color:var(--border-2);background:var(--accent)}
+.pipeline-card.stage-initial{border-left:3px solid #60a5fa}
+.pipeline-card.stage-site{border-left:3px solid #a78bfa}
+.pipeline-card.stage-proposal{border-left:3px solid #f59e0b}
+.pipeline-card.stage-accepted{border-left:3px solid #22c55e}
+.pipeline-card.stage-declined{border-left:3px solid #ef4444}
+.card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px}
+.card-project{font-size:15px;font-weight:600;color:var(--text);line-height:1.2}
+.card-contact{font-size:12px;color:var(--text-2);margin-top:3px}
+.stage-badge{font-size:11px;font-weight:600;border-radius:99px;padding:3px 10px;white-space:nowrap;flex-shrink:0}
+.stage-badge.initial{background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd}
+.stage-badge.site{background:#ede9fe;color:#6d28d9;border:1px solid #c4b5fd}
+.stage-badge.proposal{background:#fef3c7;color:#92400e;border:1px solid #fcd34d}
+.stage-badge.accepted{background:#dcfce7;color:#14532d;border:1px solid #86efac}
+.stage-badge.declined{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+.card-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px}
+.card-date{font-size:11px;color:var(--text-3);font-family:'DM Mono',monospace}
+.card-notes-preview{font-size:12px;color:var(--text-2);margin-top:6px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.log-count{font-size:11px;color:var(--green-dark);background:var(--green-light);border-radius:99px;padding:2px 8px;font-weight:500}
+.log-section{margin-top:20px;border-top:1px solid var(--border);padding-top:16px}
+.log-section-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:12px}
+.log-entry{display:flex;gap:10px;margin-bottom:12px}
+.log-dot-col{display:flex;flex-direction:column;align-items:center;padding-top:3px}
+.log-dot{width:10px;height:10px;border-radius:50%;background:var(--green-mid);flex-shrink:0}
+.log-line{flex:1;width:1.5px;background:var(--border);margin-top:3px}
+.log-body{flex:1;padding-bottom:8px}
+.log-meta{font-size:11px;color:var(--text-3);font-family:'DM Mono',monospace;margin-bottom:3px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.log-stage-pill{font-size:10px;font-weight:600;border-radius:99px;padding:1px 7px}
+.log-text{font-size:13px;color:var(--text);line-height:1.4}
+.btn-restore{padding:10px 16px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer}
+.pipeline-search{width:100%;padding:10px 14px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--surface);outline:none;margin-bottom:12px}
+.pipeline-search:focus{border-color:var(--green);background:#fff}
+.declined-header{background:#fee2e2;border:1px solid #fca5a5;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:13px;color:#991b1b;font-weight:500}
 </style>
 </head>
 <body>
@@ -282,6 +318,7 @@ main{padding:12px 16px 100px}
       <span id="header-user-name"></span>
       <button class="logout-btn" onclick="doLogout()">Sign out</button>
     </div>
+    <button class="header-add" id="new-wo-btn" onclick="openNewWorkOrderModal()" style="display:none">+ Work Order</button>
     <button class="header-add" onclick="openReportModal()">+ File report</button>
     <button class="header-add" id="add-job-btn" onclick="openModal()">+ Add job</button>
     <button class="header-add" id="import-csv-btn" onclick="document.getElementById('csv-file-input').click()" style="display:none">⬆ Import CSV</button>
@@ -299,6 +336,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" onclick="setView('list')">All jobs</button>
   </div>
   <div class="view-bar-row">
+    <button class="vtab" id="pipeline-tab" onclick="setView('pipeline')" style="display:none">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="mileage-tab" onclick="setView('mileage')">Mileage</button>
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
@@ -427,6 +465,10 @@ let reports = [];
 let workOrders = [];
 let timeOffEntries = [];
 let mileageLogs = [];
+let pipelines = [];
+let plTab = 'active';
+let plStageFilter = 'All';
+let plSearchQ = '';
 let mileageYearFilter = new Date().getFullYear();
 let mileagePersonFilter = 'All';
 let mileageTripFilter = 'All';
@@ -520,6 +562,275 @@ async function loadWorkOrders(){
     console.warn('Could not load work orders — table may not exist yet', e);
     workOrders = [];
   }
+}
+
+
+// ── PIPELINE ──────────────────────────────────────────────────
+const STAGES = ['Initial Contact','Site Visit','Proposal','Acceptance','Declined'];
+const STAGE_KEY = {'Initial Contact':'initial','Site Visit':'site','Proposal':'proposal','Acceptance':'accepted','Declined':'declined'};
+
+async function loadPipelines(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/pipeline_projects?select=*&order=created_at.asc');
+    pipelines = (data||[]).map(row=>({
+      id: String(row.id),
+      project: row.project||'',
+      contact: row.contact||'',
+      phone: row.phone||'',
+      email: row.email||'',
+      stage: row.stage||'Initial Contact',
+      notes: row.notes||'',
+      log: row.log ? (typeof row.log==='string' ? JSON.parse(row.log) : row.log) : [],
+      createdAt: row.created_at||new Date().toISOString(),
+      updatedAt: row.updated_at||new Date().toISOString(),
+    }));
+    updatePipelineBadge();
+  } catch(e){ console.warn('Pipeline load failed:', e); pipelines=[]; }
+}
+
+async function dbSavePipeline(obj, existingId=null){
+  const row = {
+    project: obj.project, contact: obj.contact, phone: obj.phone,
+    email: obj.email, stage: obj.stage, notes: obj.notes,
+    log: JSON.stringify(obj.log||[]),
+    updated_at: new Date().toISOString(),
+  };
+  if(existingId){
+    await sbFetch('PATCH', `/rest/v1/pipeline_projects?id=eq.${existingId}`, row);
+    return existingId;
+  } else {
+    row.created_at = new Date().toISOString();
+    const result = await sbFetch('POST', '/rest/v1/pipeline_projects', row);
+    return result && result[0] ? String(result[0].id) : null;
+  }
+}
+
+async function dbDeletePipeline(id){
+  await sbFetch('DELETE', `/rest/v1/pipeline_projects?id=eq.${id}`);
+}
+
+function updatePipelineBadge(){
+  const n = pipelines.filter(p=>p.stage==='Acceptance').length;
+  const badge = document.getElementById('pl-badge');
+  if(badge){ badge.style.display = n ? '' : 'none'; badge.textContent = n; }
+}
+
+function plEsc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function plFmtDate(iso){
+  if(!iso) return '';
+  const d = new Date(iso), now = new Date();
+  const diff = Math.floor((now-d)/86400000);
+  if(diff===0) return 'Today';
+  if(diff===1) return 'Yesterday';
+  if(diff<7) return `${diff} days ago`;
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+
+function plFmtDateFull(iso){
+  if(!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+}
+
+function renderPipeline(){
+  const active = pipelines.filter(p=>p.stage!=='Acceptance'&&p.stage!=='Declined');
+  const accepted = pipelines.filter(p=>p.stage==='Acceptance');
+  const declined = pipelines.filter(p=>p.stage==='Declined');
+
+  // Stats
+  const statsHtml = `<div class="stats-bar" style="grid-template-columns:repeat(4,1fr);margin-bottom:0">
+    <div class="stat-card"><div class="stat-num">${active.length}</div><div class="stat-label">Active</div></div>
+    <div class="stat-card"><div class="stat-num">${active.filter(p=>p.stage==='Site Visit'||p.stage==='Proposal').length}</div><div class="stat-label">In Progress</div></div>
+    <div class="stat-card"><div class="stat-num">${active.filter(p=>p.stage==='Proposal').length}</div><div class="stat-label">Proposals Out</div></div>
+    <div class="stat-card"><div class="stat-num">${accepted.length}</div><div class="stat-label">Accepted</div></div>
+  </div>`;
+
+  // Sub-tabs
+  const subTabs = `<div class="filter-row" style="margin-top:12px">
+    ${['active','accepted','declined'].map(t=>`<button class="filter-chip${plTab===t?' active':''}" onclick="plSetTab('${t}')">${t==='active'?'Active':t==='accepted'?'Accepted ('+accepted.length+')':'Declined'}</button>`).join('')}
+    <button class="btn-save" style="font-size:12px;padding:5px 14px;margin-left:auto" onclick="openPipelineModal()">+ Add Project</button>
+  </div>`;
+
+  // Stage filter (active tab only)
+  const stageFilterHtml = plTab==='active' ? `<div class="filter-row">
+    ${['All',...STAGES.filter(s=>s!=='Acceptance'&&s!=='Declined')].map(s=>`<button class="filter-chip${plStageFilter===s?' active':''}" onclick="plSetStageFilter('${s}')">${s}</button>`).join('')}
+  </div>` : '';
+
+  // Search
+  const searchHtml = `<input class="pipeline-search" placeholder="Search projects, contacts..." value="${plEsc(plSearchQ)}" oninput="plSearchQ=this.value;renderPipeline()">`;
+
+  // Items
+  let items = plTab==='active' ? active : plTab==='accepted' ? accepted : declined;
+  if(plTab==='active' && plStageFilter!=='All') items = items.filter(p=>p.stage===plStageFilter);
+  if(plSearchQ){
+    const q = plSearchQ.toLowerCase();
+    items = items.filter(p=>(p.project+p.contact+p.notes+p.email+p.phone).toLowerCase().includes(q));
+  }
+  items = [...items].sort((a,b)=>new Date(b.updatedAt)-new Date(a.updatedAt));
+
+  let cardsHtml = '';
+  if(!items.length){
+    cardsHtml = `<div style="text-align:center;padding:48px 24px;color:var(--text-3)"><div style="font-size:32px;margin-bottom:12px;opacity:0.4">📋</div><p style="font-size:14px">${plTab==='active'?'No active projects. Tap "+ Add Project" to get started.':plTab==='accepted'?'No accepted projects yet.':'No declined projects.'}</p></div>`;
+  } else {
+    if(plTab==='declined') cardsHtml += `<div class="declined-header">These jobs are declined and hidden from the main pipeline. You can restore any of them if needed.</div>`;
+    items.forEach(p=>{
+      const sk = STAGE_KEY[p.stage]||'initial';
+      const lastLog = p.log && p.log.length ? p.log[p.log.length-1] : null;
+      const logCount = p.log ? p.log.length : 0;
+      cardsHtml += `<div class="pipeline-card stage-${sk}" onclick="openPipelineModal('${p.id}')">
+        <div class="card-top">
+          <div>
+            <div class="card-project">${plEsc(p.project)}</div>
+            <div class="card-contact">${p.contact?`<span>👤 ${plEsc(p.contact)}</span>`:''}${p.phone?`<span>📞 ${plEsc(p.phone)}</span>`:''}${p.email?`<span>✉️ ${plEsc(p.email)}</span>`:''}</div>
+          </div>
+          <span class="stage-badge ${sk}">${plEsc(p.stage)}</span>
+        </div>
+        ${lastLog?`<div class="card-notes-preview">${plEsc(lastLog.text)}</div>`:(p.notes?`<div class="card-notes-preview">${plEsc(p.notes)}</div>`:'')}
+        <div class="card-meta">
+          <span class="card-date">Updated ${plFmtDate(p.updatedAt)}</span>
+          ${logCount?`<span class="log-count">📝 ${logCount} note${logCount!==1?'s':''}</span>`:''}
+          ${plTab==='declined'?`<button class="btn-restore" onclick="event.stopPropagation();plRestoreProject('${p.id}')">↩ Restore</button>`:''}
+        </div>
+      </div>`;
+    });
+  }
+
+  document.getElementById('main-content').innerHTML = statsHtml + subTabs + stageFilterHtml + searchHtml + cardsHtml;
+}
+
+function plSetTab(t){ plTab=t; renderPipeline(); }
+function plSetStageFilter(s){ plStageFilter=s; renderPipeline(); }
+
+function openPipelineModal(id=null){
+  const p = id ? pipelines.find(x=>x.id===id) : null;
+  const isNew = !p;
+  const stageOpts = STAGES.map(s=>`<option value="${s}"${p&&p.stage===s?' selected':''}>${s}</option>`).join('');
+
+  let logHtml = '';
+  if(p && p.log && p.log.length){
+    [...p.log].reverse().forEach((entry,i,arr)=>{
+      const sk = STAGE_KEY[entry.stage]||'initial';
+      const isLast = i===arr.length-1;
+      logHtml += `<div class="log-entry">
+        <div class="log-dot-col"><div class="log-dot"></div>${!isLast?'<div class="log-line"></div>':''}</div>
+        <div class="log-body">
+          <div class="log-meta"><span>${plFmtDateFull(entry.ts)}</span><span class="log-stage-pill stage-badge ${sk}">${plEsc(entry.stage)}</span></div>
+          <div class="log-text">${plEsc(entry.text)}</div>
+        </div>
+      </div>`;
+    });
+  } else {
+    logHtml = '<div style="font-size:13px;color:var(--text-3);padding:8px 0">No notes yet.</div>';
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'pipeline-overlay';
+  overlay.onclick = (e)=>{ if(e.target===overlay) closePipelineModal(); };
+  overlay.innerHTML = `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${isNew?'New Project':'Edit Project'}</div>
+    <div class="sheet-subtitle">${isNew?'Add a new pipeline project':'Update details and log notes'}</div>
+    <div class="form-group">
+      <label class="form-label">Project Name *</label>
+      <input type="text" id="pl-project" placeholder="e.g. Dublin High School Field #2" value="${p?plEsc(p.project):''}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">Contact Name</label>
+        <input type="text" id="pl-contact" placeholder="e.g. John Smith" value="${p?plEsc(p.contact):''}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Stage *</label>
+        <select id="pl-stage">${stageOpts}</select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">Phone</label>
+        <input type="tel" id="pl-phone" placeholder="(614) 555-0100" value="${p?plEsc(p.phone):''}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Email</label>
+        <input type="email" id="pl-email" placeholder="contact@email.com" value="${p?plEsc(p.email):''}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes (for this update)</label>
+      <textarea id="pl-notes" placeholder="What happened in this interaction?" rows="3" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);resize:vertical;box-sizing:border-box"></textarea>
+    </div>
+    ${!isNew?`<div class="log-section"><div class="log-section-title">Activity Log</div>${logHtml}</div>`:''}
+    <div id="pl-error" style="color:#dc2626;font-size:12px;margin-top:8px"></div>
+    <div class="sheet-actions">
+      ${!isNew?`<button class="btn-delete" onclick="plDeleteProject('${p.id}')">Remove</button>`:''}
+      <button class="btn-cancel" onclick="closePipelineModal()">Cancel</button>
+      <button class="btn-save" onclick="plSaveProject('${id||''}')">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+function closePipelineModal(){
+  const el = document.getElementById('pipeline-overlay');
+  if(el) el.remove();
+}
+
+async function plSaveProject(id){
+  const project = document.getElementById('pl-project').value.trim();
+  const contact = document.getElementById('pl-contact').value.trim();
+  const phone = document.getElementById('pl-phone').value.trim();
+  const email = document.getElementById('pl-email').value.trim();
+  const stage = document.getElementById('pl-stage').value;
+  const noteText = document.getElementById('pl-notes').value.trim();
+  const errEl = document.getElementById('pl-error');
+  if(!project){ errEl.textContent='Project name is required.'; return; }
+  const btn = document.querySelector('#pipeline-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  try{
+    if(id){
+      const p = pipelines.find(x=>x.id===id);
+      const stageChanged = p.stage !== stage;
+      p.project=project; p.contact=contact; p.phone=phone; p.email=email;
+      p.stage=stage; p.updatedAt=new Date().toISOString();
+      if(noteText||stageChanged){
+        p.log = [...(p.log||[]), {ts:new Date().toISOString(), stage, text: noteText||(stageChanged?`Stage changed to "${stage}"`:'') }];
+      }
+      await dbSavePipeline(p, id);
+    } else {
+      const newP = { project, contact, phone, email, stage, notes:'', log:[], createdAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
+      if(noteText) newP.log.push({ts:new Date().toISOString(), stage, text:noteText});
+      const newId = await dbSavePipeline(newP);
+      if(newId) newP.id = newId;
+      pipelines.push(newP);
+    }
+    updatePipelineBadge();
+    closePipelineModal();
+    renderPipeline();
+  } catch(e){
+    errEl.textContent = 'Error saving. Please try again.';
+    btn.disabled=false; btn.textContent='Save';
+  }
+}
+
+async function plDeleteProject(id){
+  if(!confirm('Delete this project? This cannot be undone.')) return;
+  await dbDeletePipeline(id);
+  pipelines = pipelines.filter(p=>p.id!==id);
+  closePipelineModal();
+  updatePipelineBadge();
+  renderPipeline();
+}
+
+async function plRestoreProject(id){
+  const p = pipelines.find(x=>x.id===id);
+  if(!p) return;
+  const prev = p.log && p.log.length > 1 ? p.log[p.log.length-2].stage : 'Initial Contact';
+  p.stage=prev; p.updatedAt=new Date().toISOString();
+  p.log=[...(p.log||[]),{ts:new Date().toISOString(),stage:prev,text:`Restored from Declined to ${prev}`}];
+  await dbSavePipeline(p, id);
+  updatePipelineBadge();
+  renderPipeline();
 }
 
 // ── MILEAGE ───────────────────────────────────────────────────
@@ -918,9 +1229,9 @@ function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-  const idx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,workorders:8};
+  const idx={week:0,next:1,month:2,list:3,pipeline:4,mileage:5,equipment:6,reports:7,timeoff:8,workorders:9};
   document.querySelectorAll('.vtab')[idx[v]].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline';
   document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
   document.querySelector('.nav-row').style.display=hideNav?'none':'flex';
   render();
@@ -943,6 +1254,7 @@ function render(){
   else if(view==='workorders') renderWorkOrders();
   else if(view==='timeoff') renderTimeOff();
   else if(view==='mileage') renderMileage();
+  else if(view==='pipeline') renderPipeline();
   else renderList();
 }
 
@@ -1713,7 +2025,8 @@ function openReportDetail(id){
       <div class="sheet-actions">
         <button class="btn-delete" onclick="deleteReport('${r.id}')">Delete</button>
         <button class="btn-cancel" onclick="closeModal()">Close</button>
-        <button class="btn-save" onclick="exportReport('${r.id}')">📋 Copy for Slack</button>
+        <button class="btn-save" style="background:#d97706;border-color:#d97706" onclick="closeModal();openNewWorkOrderModal({client:'${r.client}',field:'${r.field}',reportId:'${r.id}'})">+ Work Order</button>
+        <button class="btn-save" onclick="exportReport('${r.id}')">Copy for Slack</button>
       </div>
     </div>
   </div>`;
@@ -2145,18 +2458,78 @@ async function deleteTimeOffEntry(){
   renderTimeOff();
 }
 
+
+function openNewWorkOrderModal(prefill={}){
+  const clientOptions = CLIENTS.map(c=>`<option value="${c}"${prefill.client===c?' selected':''}>${c}</option>`).join('');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'new-wo-overlay';
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">New Work Order</div>
+    <div class="sheet-subtitle">Submit an issue to be reviewed and assigned</div>
+    <div class="form-group">
+      <label class="form-label">Client</label>
+      <select id="nwo-client">${clientOptions}</select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Field / Location</label>
+      <input type="text" id="nwo-field" placeholder="e.g. Football Field, Stadium" value="${prefill.field||''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Description of Issue *</label>
+      <textarea id="nwo-issue" placeholder="Describe the issue in detail..." rows="4" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);resize:vertical;box-sizing:border-box">${prefill.issue||''}</textarea>
+    </div>
+    <div id="nwo-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('new-wo-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="submitNewWorkOrder('${prefill.reportId||''}')">Submit Work Order</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function submitNewWorkOrder(reportId){
+  const client = document.getElementById('nwo-client').value;
+  const field = document.getElementById('nwo-field').value.trim();
+  const issue = document.getElementById('nwo-issue').value.trim();
+  const errEl = document.getElementById('nwo-error');
+  if(!issue){ errEl.textContent='Please describe the issue.'; return; }
+  const btn = document.querySelector('#new-wo-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Submitting...';
+  try {
+    const data = { client, field, issueNotes: issue, status:'open', reportId: reportId||null, scheduledDate:'', scheduledCrew:[] };
+    const newId = await dbSaveWorkOrder(data);
+    if(newId){ data.id=newId; workOrders.unshift({...data, id:String(newId), createdAt:new Date().toISOString()}); }
+    updateWoBadge();
+    document.getElementById('new-wo-overlay').remove();
+    // If on work orders view, refresh it
+    if(view==='workorders') renderWorkOrders();
+    // Show a brief confirmation
+    const confirm2 = document.createElement('div');
+    confirm2.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1f18;color:#fff;padding:10px 20px;border-radius:99px;font-size:13px;font-weight:600;z-index:9999;animation:fadeIn .2s';
+    confirm2.textContent = 'Work order submitted';
+    document.body.appendChild(confirm2);
+    setTimeout(()=>confirm2.remove(), 2500);
+  } catch(e){
+    errEl.textContent = 'Error submitting. Please try again.';
+    btn.disabled=false; btn.textContent='Submit Work Order';
+  }
+}
+
 function renderWorkOrders(){
   const allClients = ['All', ...new Set(workOrders.map(w=>w.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
   const byStatus = woStatusFilter==='all' ? workOrders : workOrders.filter(w=>w.status===woStatusFilter);
   const filtered = woSiteFilter==='All' ? byStatus : byStatus.filter(w=>w.client===woSiteFilter);
 
   const openCount=workOrders.filter(w=>w.status==='open').length;
-  const schedCount=workOrders.filter(w=>w.status==='scheduled').length;
+  const schedCount=workOrders.filter(w=>w.status==='assigned').length;
   const resolvedCount=workOrders.filter(w=>w.status==='resolved').length;
 
   let html=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
     <div class="stat-card" style="cursor:pointer;border-color:${woStatusFilter==='open'?'#ef4444':'var(--border)'}" onclick="setWoStatus('open')"><div class="stat-num" style="color:#dc2626">${openCount}</div><div class="stat-label">Open</div></div>
-    <div class="stat-card" style="cursor:pointer;border-color:${woStatusFilter==='scheduled'?'#f59e0b':'var(--border)'}" onclick="setWoStatus('scheduled')"><div class="stat-num" style="color:#d97706">${schedCount}</div><div class="stat-label">Scheduled</div></div>
+    <div class="stat-card" style="cursor:pointer;border-color:${woStatusFilter==='assigned'?'#f59e0b':'var(--border)'}" onclick="setWoStatus('scheduled')"><div class="stat-num" style="color:#d97706">${schedCount}</div><div class="stat-label">Assigned</div></div>
     <div class="stat-card" style="cursor:pointer;border-color:${woStatusFilter==='resolved'?'#22c55e':'var(--border)'}" onclick="setWoStatus('resolved')"><div class="stat-num" style="color:#16a34a">${resolvedCount}</div><div class="stat-label">Resolved</div></div>
   </div>`;
 
@@ -2165,12 +2538,12 @@ function renderWorkOrders(){
   ).join('')}</div>`;
 
   if(!filtered.length){
-    const labels={open:'No open work orders.',scheduled:'No scheduled work orders.',resolved:'No resolved work orders.',all:'No work orders yet.'};
+    const labels={open:'No open work orders.',scheduled:'No assigned work orders.',resolved:'No resolved work orders.',all:'No work orders yet.'};
     html+=`<div class="empty-state"><p>${labels[woStatusFilter]||'No work orders.'}</p></div>`;
   } else {
     filtered.forEach(w=>{
-      const stLabel={open:'Open',scheduled:'Scheduled',resolved:'Resolved'}[w.status]||w.status;
-      const stCls={open:'wo-status-open',scheduled:'wo-status-scheduled',resolved:'wo-status-resolved'}[w.status]||'wo-status-open';
+      const stLabel={open:'Open',scheduled:'Assigned',resolved:'Resolved'}[w.status]||w.status;
+      const stCls={open:'wo-status-open',scheduled:'wo-status-assigned',resolved:'wo-status-resolved'}[w.status]||'wo-status-open';
       html+=`<div class="wo-card wo-${w.status}" onclick="openWoModal('${w.id}')">
         <div class="wo-card-header">
           <div>
@@ -2180,7 +2553,7 @@ function renderWorkOrders(){
           <span class="wo-status-badge ${stCls}">${stLabel}</span>
         </div>
         <div class="wo-issue-text">${w.issueNotes}</div>
-        ${w.status==='scheduled'&&w.scheduledDate?`<div class="wo-schedule-info">📅 Scheduled for ${w.scheduledDate}${(w.scheduledCrew||[]).length?' · '+(w.scheduledCrew||[]).join(', '):''}</div>`:''}
+        ${w.status==='assigned'&&w.scheduledDate?`<div class="wo-schedule-info">📅 Scheduled for ${w.scheduledDate}${(w.scheduledCrew||[]).length?' · '+(w.scheduledCrew||[]).join(', '):''}</div>`:''}
       </div>`;
     });
   }
@@ -2193,7 +2566,7 @@ function openWoModal(id){
   const w=workOrders.find(x=>x.id===id);
   if(!w) return;
   const canSchedule=w.status==='open';
-  const canResolve=w.status==='scheduled'||w.status==='open';
+  const canResolve=w.status==='assigned'||w.status==='open';
   const isMatt=isAdmin; // tied to admin role
   document.getElementById('modal-root').innerHTML=`<div class="modal-overlay" onclick="maybeClose(event)">
     <div class="modal-sheet">
@@ -2204,11 +2577,11 @@ function openWoModal(id){
         <div style="font-size:11px;font-weight:600;color:#991b1b;margin-bottom:4px">ISSUE</div>
         <div style="font-size:13px;color:#7f1d1d;line-height:1.5">${w.issueNotes}</div>
       </div>
-      ${w.status==='scheduled'&&w.scheduledDate?`<div class="wo-schedule-info" style="margin-bottom:16px">📅 Currently scheduled: ${w.scheduledDate}${(w.scheduledCrew||[]).length?' · '+(w.scheduledCrew||[]).join(', '):''}</div>`:''}
+      ${w.status==='assigned'&&w.scheduledDate?`<div class="wo-schedule-info" style="margin-bottom:16px">📅 Currently assigned: ${w.scheduledDate}${(w.scheduledCrew||[]).length?' · '+(w.scheduledCrew||[]).join(', '):''}</div>`:''}
       ${canSchedule&&isMatt?`
       <div class="form-group">
-        <label class="form-label">Schedule this work order</label>
-        <div style="font-size:12px;color:var(--text-3);margin-bottom:6px">Scheduling will add this to the main job calendar automatically.</div>
+        <label class="form-label">Assign this work order</label>
+        <div style="font-size:12px;color:var(--text-3);margin-bottom:6px">Assigning will add this to the main job calendar automatically.</div>
         <input type="date" id="wo-date" value="${w.scheduledDate||isoDate(today())}">
       </div>
       <div class="form-group">
@@ -2220,7 +2593,7 @@ function openWoModal(id){
       <div class="sheet-actions">
         ${w.status==='resolved'?'':`<button class="btn-delete" onclick="resolveWo('${w.id}')">Mark resolved</button>`}
         <button class="btn-cancel" onclick="closeModal()">Close</button>
-        ${canSchedule&&isMatt?`<button class="btn-save" onclick="scheduleWo('${w.id}')">Schedule</button>`:''}
+        ${canSchedule&&isMatt?`<button class="btn-save" onclick="scheduleWo('${w.id}')">Assign</button>`:''}
       </div>
     </div>
   </div>`;
@@ -2244,11 +2617,11 @@ async function scheduleWo(id){
   if(!scheduledDate){alert('Pick a date to schedule.');return;}
   const scheduledCrew=[...woPicked];
   const btn=document.querySelector('.btn-save');
-  if(btn){btn.disabled=true;btn.textContent='Scheduling...';}
+  if(btn){btn.disabled=true;btn.textContent='Assigning...';}
   try{
-    const updated={...w,status:'scheduled',scheduledDate,scheduledCrew};
+    const updated={...w,status:'assigned',scheduledDate,scheduledCrew};
     await dbSaveWorkOrder(updated,id);
-    Object.assign(w,{status:'scheduled',scheduledDate,scheduledCrew});
+    Object.assign(w,{status:'assigned',scheduledDate,scheduledCrew});
     // Auto-add to jobs calendar
     const newJob={
       client:w.client,field:w.field,service:'Work Order',
@@ -2384,11 +2757,17 @@ function showApp(){
   // Hide Add Job button for non-admins
   const ajb = document.getElementById('add-job-btn');
   if(ajb) ajb.style.display = isScheduler ? '' : 'none';
+  const newWoBtn = document.getElementById('new-wo-btn');
+  if(newWoBtn) newWoBtn.style.display = '';
   const importBtn = document.getElementById('import-csv-btn');
   const templateBtn = document.getElementById('download-template-btn');
   if(importBtn) importBtn.style.display = isScheduler ? '' : 'none';
   if(templateBtn) templateBtn.style.display = isScheduler ? '' : 'none';
   // Show/hide tabs based on role
+  // Show pipeline tab only for Jake and Ryan
+  const plTab2 = document.getElementById('pipeline-tab');
+  const PIPELINE_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com'];
+  if(plTab2) plTab2.style.display = PIPELINE_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
   const allTabs = Array.from(document.querySelectorAll('.vtab'));
   const mileageTab = document.getElementById('mileage-tab');
   const timeoffTab = document.getElementById('timeoff-tab');
@@ -2399,7 +2778,7 @@ function showApp(){
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff(); loadMileage(); startPolling(); });
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff(); loadMileage(); loadPipelines(); startPolling(); });
   render();
 }
 

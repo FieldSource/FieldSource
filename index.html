@@ -444,6 +444,7 @@ async function loadJobs(){
       equip: row.equip||[],
       touchUp: row.touch_up||false,
       task: row.task||'',
+      services: row.services||(row.service?[row.service]:[]),
       notes: row.notes||'',
       createdBy: row.created_by||'',
       rentalEquip: row.rental_equip||''
@@ -1105,6 +1106,8 @@ async function dbSaveJob(data, id=null){
     equip: data.equip,
     touch_up: data.touchUp,
     task: data.task||'',
+    services: data.services||[],
+    service: (data.services||[])[0]||'',
     notes: data.notes,
     rental_equip: data.rentalEquip||'',
     include_weekends: data.includeWeekends||false
@@ -1311,7 +1314,7 @@ function renderWeek(){
           title="Drag to reschedule"`:''}
         onclick="openModal('${j.id}')">
         <div class="chip-client">${j.client.length>16?j.client.slice(0,15).trim()+'…':j.client}${dur>1?`<span class="duration-badge">${dur}d</span>`:''}</div>
-        <div class="chip-detail">${j.task?j.task+' · ':''} ${j.service}${j.field?' · '+j.field:''}<br>${crew||'Unassigned'}</div>
+        <div class="chip-detail">${j.task?j.task+' · ':''} ${(j.services&&j.services.length?j.services:j.service?[j.service]:[]).join(', ')}${j.field?' · '+j.field:''}<br>${crew||'Unassigned'}</div>
         ${chipEquip.length?`<div class="chip-trailers">${chipEquip.map(t=>shortName(t)).join(', ')}</div>`:''}
         ${dur>1?'<div class="multi-day-bar"></div>':''}
       </div>`;
@@ -1488,13 +1491,8 @@ function openModal(id=null,defaultDate=null){
         <input type="text" id="f-field" placeholder="e.g. Soccer field 1, Stadium" value="${job&&job.field?job.field:''}">
       </div>
       <div class="form-group">
-        <label class="form-label">Service</label>
-        <select id="f-service" onchange="handleServiceChange(this.value)" style="margin-bottom:6px">
-          <option value="">— pick a service —</option>
-          ${SERVICES.map(s=>`<option value="${s}" ${job&&job.service===s?'selected':''}>${s}</option>`).join('')}
-          <option value="__custom__" ${job&&job.service&&!SERVICES.includes(job.service)?'selected':''}>Other (type below)</option>
-        </select>
-        <input type="text" id="f-service-custom" placeholder="Type a custom service..." value="${job&&job.service&&!SERVICES.includes(job.service)?job.service:''}" style="display:${job&&job.service&&!SERVICES.includes(job.service)?'block':'none'}">
+        <label class="form-label">Service — tap to select multiple</label>
+        <div class="crew-grid" id="f-service-grid">${buildServiceGrid(job&&job.services?job.services:(job&&job.service?[job.service]:[]))}</div>
       </div>
       <div class="form-group">
         <label class="form-label">Start &amp; end date</label>
@@ -1583,6 +1581,16 @@ function refreshEquipConflicts(){
     }
   });
   w.innerHTML=warnings;
+}
+
+function buildServiceGrid(pre=[]){
+  pickedServices = pre && pre.length ? [...pre] : [];
+  return SERVICES.map(s=>`<div class="sel-opt${pickedServices.includes(s)?' picked':''}" onclick="toggleService('${s}')">${s}</div>`).join('');
+}
+function toggleService(s){
+  pickedServices = pickedServices.includes(s) ? pickedServices.filter(x=>x!==s) : [...pickedServices,s];
+  const g = document.getElementById('f-service-grid');
+  if(g) g.innerHTML = buildServiceGrid(pickedServices);
 }
 
 function buildCrewGrid(){
@@ -1697,10 +1705,11 @@ async function saveJob(){
   const notes=document.getElementById('f-notes').value.trim();
   if(!startDate){alert('Please pick a start date.');return}
   const includeWeekends=document.getElementById('f-weekends')?document.getElementById('f-weekends').checked:false;
+  const services = [...pickedServices];
   const task = document.getElementById('f-task') ? document.getElementById('f-task').value.trim() : '';
   const rentalEquip = document.getElementById('f-rental-equip') ? document.getElementById('f-rental-equip').value.trim() : '';
   const createdBy = editId ? (jobs.find(j=>j.id===editId)||{}).createdBy||'' : getDisplayName(currentUser&&currentUser.email);
-  const data={client,field,service,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,task,rentalEquip,includeWeekends,createdBy};
+  const data={client,field,service:services[0]||'',services,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,task,rentalEquip,includeWeekends,createdBy};
   const btn=document.querySelector('.btn-save');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   try{

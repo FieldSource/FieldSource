@@ -206,6 +206,7 @@ main{padding:12px 16px 100px}
 .login-error{font-size:13px;color:#dc2626;margin-top:10px;text-align:center;min-height:20px}
 .crew-off{opacity:0.5;border-style:dashed !important}
 .crew-off.picked{opacity:1}
+.job-off{opacity:0.7;border-style:dashed !important}
 .logout-btn{font-size:12px;color:var(--text-3);background:none;border:1px solid var(--border);border-radius:99px;padding:4px 12px;cursor:pointer;font-family:'DM Sans',sans-serif}
 .logout-btn:active{background:var(--bg)}
 .user-chip{font-size:12px;color:#fff;display:flex;align-items:center;gap:8px}
@@ -371,7 +372,7 @@ main{padding:12px 16px 100px}
 
 <script>
 const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
-const SERVICES=['Mowing','Aeration','Applications','Contract Maintenance','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Shockwave','Slit Seeding','Broadcast Seeding','Sodding'];
+const SERVICES=['Mowing','Aeration','Applications','Contract Maintenance','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Off','Shockwave','Slit Seeding','Broadcast Seeding','Sodding'];
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Matt','Wes','Cameron','Killer','Sly','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
@@ -1305,9 +1306,10 @@ function renderWeek(){
           .replace('Ingersoll Rand ','').replace('Wacker Neuson ','').replace('Smithco ','')
           .trim()
       }
-      const crewColor=getCrewColor(j.crew||[]);
+      const crewColor=getCrewColor(j.crew||[], j.service||'');
       const crewStyle=crewColor?`style="background:${crewColor};border-color:${crewColor}"`:'';
-      html+=`<div class="job-chip ${st.cls}" ${crewColor?`style="background:${crewColor};border-left:3px solid rgba(0,0,0,0.15)"`:''} 
+      const isOff = (j.services&&j.services.includes('Off'))||(j.service==='Off');
+      html+=`<div class="job-chip ${st.cls}${isOff?' job-off':''}" ${crewColor?`style="background:${crewColor};border-left:3px solid rgba(0,0,0,0.15)"`:''} 
         ${canDrag?`draggable="true"
           ondragstart="handleDragStart(event,'${j.id}')"
           ondragend="handleDragEnd(event)"
@@ -2991,22 +2993,37 @@ async function handleDrop(e, newStartDate){
 
 
 // ── CREW COLOR CODING ───────────────────────────────────────
-function getCrewColor(crew){
+// Per-person pastel colors
+const CREW_COLORS = {
+  'Dan Sr':        '#bfdbfe', // soft blue
+  'Dan Jr':        '#fbcfe8', // soft pink
+  'Brandon Stith': '#fef08a', // soft yellow
+  'Brandon Moore': '#bbf7d0', // soft green
+  'Greg':          '#fed7aa', // soft orange
+  'Matt':          '#e9d5ff', // soft purple
+  'Wes':           '#a5f3fc', // soft cyan
+  'Cameron':       '#ede9fe', // soft lavender
+  'Killer':        '#d1fae5', // soft mint
+  'Sly':           '#fde8d8', // soft peach
+  'Penlin':        '#e0e7ff', // soft indigo
+};
+const INTERN_COLOR = '#fef3c7'; // soft amber for interns
+const MULTI_COLOR  = '#d1fae5'; // team green for 2+ people
+const OFF_COLOR    = '#fecaca'; // soft red for off days
+
+function getCrewColor(crew, service){
   if(!crew||!crew.length) return null;
-  const hasDanJr   = crew.some(c=>c==='Dan Jr');
-  const hasBMoore  = crew.some(c=>c==='Brandon Moore');
-  const hasDanSr   = crew.some(c=>c==='Dan Sr');
-  const hasBStith  = crew.some(c=>c==='Brandon Stith');
-  const hasCameron = crew.some(c=>c==='Cameron');
-  const hasIntern  = crew.some(c=>c.toLowerCase().includes('intern'));
-  // Combined rule first
-  if(hasDanJr && hasBMoore) return '#2dd4bf'; // turquoise
-  if(hasDanJr)   return '#f9a8d4'; // pink
-  if(hasBMoore)  return '#86efac'; // green
-  if(hasDanSr)   return '#93c5fd'; // blue
-  if(hasBStith)  return '#fde68a'; // yellow
-  if(hasCameron) return '#fca5a5'; // red
-  if(hasIntern)  return '#fdba74'; // orange
+  // Off duty — light gray-blue
+  if(service==='Off') return OFF_COLOR;
+  // Filter out Sub: entries
+  const realCrew = crew.filter(c=>!c.startsWith('Sub:'));
+  if(!realCrew.length) return null;
+  // 2+ people = team green
+  if(realCrew.length > 1) return MULTI_COLOR;
+  // Single person
+  const person = realCrew[0];
+  if(CREW_COLORS[person]) return CREW_COLORS[person];
+  if(person.toLowerCase().includes('intern')) return INTERN_COLOR;
   return null;
 }
 // ── PASSWORD RESET FLOW ──────────────────────────────────────────

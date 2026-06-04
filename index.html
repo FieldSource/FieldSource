@@ -1180,7 +1180,7 @@ function startPolling(){
   }, 10000);
 }
 
-let view='week',offset=0,editId=null,crewFilter='All';
+let view='week',offset=0,editId=null,crewFilter='All',weekViewMode='site';
 let pickedCrew=[],pickedEquip=[],touchUpOn=false,activeEquipTab=EQUIP_CATS[0];
 let equipOffset=0;
 function today(){const d=new Date();d.setHours(0,0,0,0);return d}
@@ -1291,7 +1291,7 @@ function render(){
 
 function renderWeekByPerson(days){
   const todayStr = isoDate(today());
-  const allCrew = crewFilterActive ? [crewFilterActive] : CREW;
+  const allCrew = (crewFilter && crewFilter!=='All') ? [crewFilter] : CREW;
 
   // Build header
   let html = '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="border-collapse:collapse;min-width:700px;width:100%">';

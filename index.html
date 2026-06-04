@@ -49,6 +49,20 @@ main{padding:12px 16px 100px}
 .s-complete{background:#dcfce7;color:#14532d;border-color:#86efac}
 /* WEEK */
 .week-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.view-toggle{display:flex;background:var(--surface);border:1px solid var(--border);border-radius:99px;padding:2px;gap:2px;margin-left:auto}
+.view-toggle-btn{padding:4px 12px;border-radius:99px;border:none;background:none;font-size:12px;font-weight:500;font-family:'DM Sans',sans-serif;color:var(--text-2);cursor:pointer}
+.view-toggle-btn.active{background:var(--green);color:#fff}
+.person-row{display:grid;grid-template-columns:100px repeat(7,minmax(110px,1fr));gap:0;border-bottom:1px solid var(--border)}
+.person-row:last-child{border-bottom:none}
+.person-label{padding:8px 10px;font-size:12px;font-weight:600;color:var(--text-2);display:flex;align-items:flex-start;border-right:1px solid var(--border);background:var(--surface);position:sticky;left:0;z-index:1}
+.person-cell{padding:4px;border-right:1px solid var(--border);min-height:48px;vertical-align:top}
+.person-cell:last-child{border-right:none}
+.person-chip{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:4px 6px;font-size:11px;margin-bottom:3px;cursor:pointer;line-height:1.3}
+.person-chip:active{opacity:0.7}
+.person-chip-client{font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.person-chip-detail{color:var(--text-3);font-size:10px;margin-top:1px}
+.person-header{display:grid;grid-template-columns:100px repeat(7,minmax(110px,1fr));gap:0;border-bottom:2px solid var(--border);background:var(--surface);position:sticky;top:0;z-index:2}
+.person-header-label{padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;border-right:1px solid var(--border)}
 .week-grid{display:grid;grid-template-columns:repeat(7,minmax(110px,1fr));gap:8px;min-width:700px}
 .day-col{min-height:100px}
 .day-header{font-size:11px;font-weight:600;color:var(--text-3);text-align:center;padding:6px 4px;border-radius:var(--radius-sm);margin-bottom:6px;background:var(--surface);border:1px solid var(--border)}
@@ -357,6 +371,10 @@ main{padding:12px 16px 100px}
   <button class="nav-btn" onclick="navBack()">&#8592;</button>
   <div class="period-label" id="period-label">—</div>
   <button class="nav-btn" onclick="navFwd()">&#8594;</button>
+  <div class="view-toggle" id="week-view-toggle" style="display:none">
+    <button class="view-toggle-btn active" id="toggle-site" onclick="setWeekViewMode('site')">By Site</button>
+    <button class="view-toggle-btn" id="toggle-person" onclick="setWeekViewMode('person')">By Person</button>
+  </div>
 </div>
 
 <div class="legend" id="legend-bar">
@@ -1258,6 +1276,8 @@ function navFwd(){
   render();
 }
 function render(){
+  const wt=document.getElementById('week-view-toggle');
+  if(wt) wt.style.display=(view==='week'||view==='next')?'flex':'none';
   if(view==='week'||view==='next') renderWeek();
   else if(view==='month') renderMonth();
   else if(view==='equipment') renderEquipment();
@@ -1269,12 +1289,78 @@ function render(){
   else renderList();
 }
 
+function renderWeekByPerson(days){
+  const todayStr = isoDate(today());
+  const allCrew = crewFilterActive ? [crewFilterActive] : CREW;
+
+  // Build header
+  let html = '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch"><table style="border-collapse:collapse;min-width:700px;width:100%">';
+  html += '<thead><tr>';
+  html += '<th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;border-bottom:2px solid var(--border);border-right:1px solid var(--border);background:var(--surface);position:sticky;left:0;z-index:2;min-width:90px;text-align:left">Person</th>';
+  days.forEach((d,i)=>{
+    const ds = isoDate(d);
+    const isToday = ds===todayStr;
+    html += `<th style="padding:8px 6px;font-size:11px;font-weight:600;border-bottom:2px solid var(--border);border-right:1px solid var(--border);background:${isToday?'var(--green-light)':'var(--surface)'};color:${isToday?'var(--green-dark)':'var(--text-2)'};text-align:center;min-width:110px">${DOW[i]}<br><span style="font-size:13px;font-weight:700;color:${isToday?'var(--green-dark)':'var(--text)'}">${d.getDate()}</span></th>`;
+  });
+  html += '</tr></thead><tbody>';
+
+  // One row per crew member
+  allCrew.forEach(person=>{
+    html += '<tr>';
+    // Person label with their color
+    const personColor = CREW_COLORS[person] || (person.toLowerCase().includes('intern') ? INTERN_COLOR : 'var(--surface)');
+    html += `<td style="padding:6px 8px;font-size:12px;font-weight:600;color:var(--text);border-bottom:1px solid var(--border);border-right:1px solid var(--border);background:${personColor};position:sticky;left:0;z-index:1;vertical-align:top">${person}</td>`;
+    
+    days.forEach(d=>{
+      const ds = isoDate(d);
+      const isToday = ds===todayStr;
+      const personJobs = jobsForDate(ds).filter(j=>(j.crew||[]).some(c=>c===person||c===('Sub:'+person)));
+      html += `<td style="padding:4px;border-bottom:1px solid var(--border);border-right:1px solid var(--border);vertical-align:top;background:${isToday?'rgba(42,106,34,0.04)':''}">`;
+      if(!personJobs.length){
+        // Check time off
+        if(isPersonOff(person, ds)){
+          html += `<div style="font-size:10px;color:#b45309;background:#fef3c7;border-radius:4px;padding:3px 5px;text-align:center">Off</div>`;
+        } else {
+          html += `<div style="color:var(--text-3);font-size:11px;text-align:center;padding:6px 0">—</div>`;
+        }
+      } else {
+        personJobs.forEach(j=>{
+          const isOff = (j.services&&j.services.includes('Off'))||(j.service==='Off');
+          const bg = isOff ? '#fecaca' : (getCrewColor(j.crew||[], j.service||'') || 'var(--card)');
+          const services = (j.services&&j.services.length?j.services:j.service?[j.service]:[]).join(', ');
+          html += `<div class="person-chip" style="background:${bg};border-color:${bg}" onclick="openModal('${j.id}')">
+            <div class="person-chip-client">${j.client.length>18?j.client.slice(0,17)+'…':j.client}</div>
+            <div class="person-chip-detail">${services}${j.field?' · '+j.field:''}</div>
+          </div>`;
+        });
+      }
+      html += '</td>';
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  document.getElementById('main-content').innerHTML = crewFilterBar() + statsBar() + html;
+}
+
+function setWeekViewMode(mode){
+  weekViewMode=mode;
+  document.getElementById('toggle-site').classList.toggle('active',mode==='site');
+  document.getElementById('toggle-person').classList.toggle('active',mode==='person');
+  render();
+}
+
 function renderWeek(){
   const ws=weekStart(today(),(view==='next'?1:0)+offset);
   const days=Array.from({length:7},(_,i)=>{const d=new Date(ws);d.setDate(d.getDate()+i);return d});
   document.getElementById('period-label').textContent=
     days[0].toLocaleDateString('en-US',{month:'short',day:'numeric'})+' – '+
     days[6].toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+
+  if(weekViewMode==='person'){
+    renderWeekByPerson(days);
+    return;
+  }
   const todayStr=isoDate(today());
   const canDrag=isScheduler; // schedulers and admins can drag
   const offToday={}; days.forEach(d=>{ offToday[isoDate(d)]=getOffPeopleOnDate(isoDate(d)); });

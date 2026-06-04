@@ -1214,7 +1214,7 @@ function filteredJobs(){
   if(crewFilter==='All') return jobs;
   return jobs.filter(j=>(j.crew||[]).includes(crewFilter));
 }
-function jobsForDate(ds){return filteredJobs().filter(j=>jobDates(j).includes(ds))}
+function jobsForDate(ds){return filteredJobs().filter(j=>jobDates(j).includes(ds)).sort((a,b)=>(a.client||'').localeCompare(b.client||''))}
 
 // Returns all jobs (not filtered) that use a specific piece of equipment on a specific date
 function jobsUsingEquipOnDate(equipName, ds){

@@ -1183,7 +1183,14 @@ function startPolling(){
       }
       // Don't re-render if mileage modal is open
       if(view==='mileage' && mileageModalOpen) return;
+      // Preserve scroll position during background refresh
+      const weekScroll = document.querySelector('.week-scroll');
+      const scrollLeft = weekScroll ? weekScroll.scrollLeft : 0;
       render();
+      if(scrollLeft > 0){
+        const ws2 = document.querySelector('.week-scroll');
+        if(ws2) ws2.scrollLeft = scrollLeft;
+      }
     } catch(e){ console.warn('Poll error', e); }
   }, 10000);
 }

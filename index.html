@@ -681,7 +681,7 @@ function renderPO(){
     <button class="btn-save" style="font-size:12px;padding:5px 14px;margin-left:auto" onclick="openPOModal()">+ Add PO</button>
   </div>
   <div class="filter-row">
-    ${['All','Maintenance','Consulting','Construction'].map(c=>`<button class="filter-chip${poCatFilter===c?' active':''}" onclick="poCatFilter='${c}';renderPO()">${c}</button>`).join('')}
+    ${['All','Maintenance','Consulting','Construction','Feasibility Study'].map(c=>`<button class="filter-chip${poCatFilter===c?' active':''}" onclick="poCatFilter='${c}';renderPO()">${c}</button>`).join('')}
   </div>`;
 
   // List
@@ -768,7 +768,7 @@ function openPOModal(id=null){
     <div class="form-group">
       <label class="form-label">Category</label>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px" id="po-cat-grid">
-        ${['Maintenance','Consulting','Construction'].map(c=>`<div class="sel-opt${po&&po.category===c?' picked':''}" onclick="poToggleCat('${c}',this)" style="text-align:center">${c}</div>`).join('')}
+        ${['Maintenance','Consulting','Construction','Feasibility Study'].map(c=>`<div class="sel-opt${po&&po.category===c?' picked':''}" onclick="poToggleCat('${c}',this)" style="text-align:center">${c}</div>`).join('')}
       </div>
       <input type="hidden" id="po-category" value="${po?po.category:''}">
     </div>

@@ -724,7 +724,7 @@ function renderPO(){
 function openPOModal(id=null){
   const po = id ? poEntries.find(x=>x.id===id) : null;
   const isNew = !po;
-  const clientOpts = CLIENTS.map(c=>`<option value="${c}"${po&&po.client===c?' selected':''}>${c}</option>`).join('');
+
   const statusOpts = ['Open','Partially Billed','Closed'].map(s=>`<option value="${s}"${po&&po.status===s?' selected':''}>${s}</option>`).join('');
 
   // Billing log
@@ -753,7 +753,7 @@ function openPOModal(id=null){
     <div class="sheet-title">${isNew?'New PO':'Edit PO'}</div>
     <div class="form-group">
       <label class="form-label">Client *</label>
-      <select id="po-client">${clientOpts}</select>
+      <input type="text" id="po-client" placeholder="Type client name..." value="${po?po.client:''}">
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="form-group">

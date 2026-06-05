@@ -367,6 +367,7 @@ main{padding:12px 16px 100px}
   </div>
   <div class="view-bar-row">
     <button class="vtab" id="pipeline-tab" onclick="setView('pipeline')" style="display:none">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" id="po-tab" onclick="setView('po')" style="display:none">PO Tracker</button>
     <button class="vtab" id="mileage-tab" onclick="setView('mileage')">Mileage</button>
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
@@ -502,6 +503,8 @@ let timeOffEntries = [];
 let mileageLogs = [];
 let pipelines = [];
 let plTab = 'active';
+let poEntries = [];
+let poStatusFilter = 'All';
 let plStageFilter = 'All';
 let plSearchQ = '';
 let mileageYearFilter = new Date().getFullYear();
@@ -599,6 +602,253 @@ async function loadWorkOrders(){
   }
 }
 
+
+
+// ── PO TRACKER ────────────────────────────────────────────────
+async function loadPO(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/po_tracker?select=*&order=created_at.desc');
+    poEntries = (data||[]).map(r=>({
+      id: String(r.id),
+      client: r.client||'',
+      poNumber: r.po_number||'',
+      date: r.date||'',
+      poAmount: Number(r.po_amount)||0,
+      amountBilled: Number(r.amount_billed)||0,
+      status: r.status||'Open',
+      billingLog: r.billing_log ? (typeof r.billing_log==='string'?JSON.parse(r.billing_log):r.billing_log) : [],
+      notes: r.notes||'',
+      createdAt: r.created_at||'',
+    }));
+  } catch(e){ console.warn('PO load failed:', e); poEntries=[]; }
+}
+
+async function dbSavePO(obj, id=null){
+  const row = {
+    client: obj.client, po_number: obj.poNumber, date: obj.date,
+    po_amount: obj.poAmount, amount_billed: obj.amountBilled,
+    status: obj.status, billing_log: JSON.stringify(obj.billingLog||[]),
+    notes: obj.notes||'',
+  };
+  if(id){
+    await sbFetch('PATCH', `/rest/v1/po_tracker?id=eq.${id}`, row);
+  } else {
+    row.created_at = new Date().toISOString();
+    const result = await sbFetch('POST', '/rest/v1/po_tracker', row);
+    return result && result[0] ? String(result[0].id) : null;
+  }
+}
+
+async function dbDeletePO(id){
+  await sbFetch('DELETE', `/rest/v1/po_tracker?id=eq.${id}`);
+}
+
+function poFmt(n){ return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function poStatusColor(s){
+  if(s==='Open') return {bg:'#dbeafe',text:'#1d4ed8'};
+  if(s==='Partially Billed') return {bg:'#fef3c7',text:'#92400e'};
+  if(s==='Closed') return {bg:'#dcfce7',text:'#14532d'};
+  return {bg:'#f1f5f9',text:'#475569'};
+}
+function poAutoStatus(po){
+  if(po.amountBilled<=0) return 'Open';
+  if(po.amountBilled>=po.poAmount) return 'Closed';
+  return 'Partially Billed';
+}
+
+function renderPO(){
+  const PO_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com'];
+  // Summary stats
+  const totalPO = poEntries.reduce((s,p)=>s+p.poAmount,0);
+  const totalBilled = poEntries.reduce((s,p)=>s+p.amountBilled,0);
+  const totalRemaining = totalPO - totalBilled;
+  const open = poEntries.filter(p=>p.status==='Open').length;
+  const partial = poEntries.filter(p=>p.status==='Partially Billed').length;
+
+  let html = `<div class="stats-bar" style="grid-template-columns:repeat(4,1fr);margin-bottom:0">
+    <div class="stat-card"><div class="stat-num" style="font-size:15px">${poFmt(totalPO)}</div><div class="stat-label">Total PO Value</div></div>
+    <div class="stat-card"><div class="stat-num" style="font-size:15px;color:var(--green-dark)">${poFmt(totalBilled)}</div><div class="stat-label">Total Billed</div></div>
+    <div class="stat-card"><div class="stat-num" style="font-size:15px;color:#d97706">${poFmt(totalRemaining)}</div><div class="stat-label">Remaining</div></div>
+    <div class="stat-card"><div class="stat-num">${open+partial}</div><div class="stat-label">Active POs</div></div>
+  </div>`;
+
+  // Filters + add button
+  html += `<div class="filter-row" style="margin-top:12px">
+    ${['All','Open','Partially Billed','Closed'].map(s=>`<button class="filter-chip${poStatusFilter===s?' active':''}" onclick="poStatusFilter='${s}';renderPO()">${s}</button>`).join('')}
+    <button class="btn-save" style="font-size:12px;padding:5px 14px;margin-left:auto" onclick="openPOModal()">+ Add PO</button>
+  </div>`;
+
+  // List
+  let filtered = poStatusFilter==='All' ? poEntries : poEntries.filter(p=>p.status===poStatusFilter);
+
+  if(!filtered.length){
+    html += `<div style="text-align:center;padding:48px 24px;color:var(--text-3);font-size:14px">No POs found. Tap "+ Add PO" to get started.</div>`;
+  } else {
+    filtered.forEach(po=>{
+      const remaining = po.poAmount - po.amountBilled;
+      const pct = po.poAmount > 0 ? Math.min(100,Math.round((po.amountBilled/po.poAmount)*100)) : 0;
+      const sc = poStatusColor(po.status);
+      html += `<div class="report-card" style="cursor:pointer" onclick="openPOModal('${po.id}')">
+        <div class="report-card-header">
+          <div>
+            <div class="report-card-title">${po.client}${po.poNumber?' <span style="font-size:12px;color:var(--text-3);font-weight:400">· PO #'+po.poNumber+'</span>':''}</div>
+            <div class="report-card-meta">${po.date||'No date'}</div>
+          </div>
+          <span style="font-size:11px;font-weight:600;border-radius:99px;padding:3px 10px;background:${sc.bg};color:${sc.text};white-space:nowrap;flex-shrink:0">${po.status}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0;font-size:13px">
+          <div><div style="color:var(--text-3);font-size:11px;margin-bottom:2px">PO Amount</div><div style="font-weight:700">${poFmt(po.poAmount)}</div></div>
+          <div><div style="color:var(--text-3);font-size:11px;margin-bottom:2px">Billed</div><div style="font-weight:700;color:var(--green-dark)">${poFmt(po.amountBilled)}</div></div>
+          <div><div style="color:var(--text-3);font-size:11px;margin-bottom:2px">Remaining</div><div style="font-weight:700;color:${remaining>0?'#d97706':'var(--green-dark)'}">${poFmt(remaining)}</div></div>
+        </div>
+        <div style="background:var(--border);border-radius:99px;height:6px;overflow:hidden">
+          <div style="background:var(--green);height:100%;width:${pct}%;border-radius:99px;transition:width .3s"></div>
+        </div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:4px;text-align:right">${pct}% billed</div>
+        ${po.notes?`<div style="font-size:12px;color:var(--text-2);margin-top:6px">${po.notes}</div>`:''}
+      </div>`;
+    });
+  }
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
+function openPOModal(id=null){
+  const po = id ? poEntries.find(x=>x.id===id) : null;
+  const isNew = !po;
+  const clientOpts = CLIENTS.map(c=>`<option value="${c}"${po&&po.client===c?' selected':''}>${c}</option>`).join('');
+  const statusOpts = ['Open','Partially Billed','Closed'].map(s=>`<option value="${s}"${po&&po.status===s?' selected':''}>${s}</option>`).join('');
+
+  // Billing log
+  let logHtml = '';
+  if(po && po.billingLog && po.billingLog.length){
+    logHtml = `<div class="log-section"><div class="log-section-title">Billing History</div>`;
+    [...po.billingLog].reverse().forEach((entry,i,arr)=>{
+      const isLast = i===arr.length-1;
+      logHtml += `<div class="log-entry">
+        <div class="log-dot-col"><div class="log-dot" style="background:var(--green)"></div>${!isLast?'<div class="log-line"></div>':''}</div>
+        <div class="log-body">
+          <div class="log-meta"><span>${new Date(entry.ts).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span></div>
+          <div class="log-text"><strong>${poFmt(entry.amount)}</strong> billed${entry.note?' — '+entry.note:''}</div>
+        </div>
+      </div>`;
+    });
+    logHtml += `</div>`;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'po-overlay';
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${isNew?'New PO':'Edit PO'}</div>
+    <div class="form-group">
+      <label class="form-label">Client *</label>
+      <select id="po-client">${clientOpts}</select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">PO Number</label>
+        <input type="text" id="po-number" placeholder="e.g. 2026-001" value="${po?po.poNumber:''}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Date</label>
+        <input type="date" id="po-date" value="${po?po.date:new Date().toISOString().split('T')[0]}">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">PO Amount *</label>
+        <input type="number" id="po-amount" placeholder="0.00" step="0.01" value="${po?po.poAmount:''}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Status</label>
+        <select id="po-status">${statusOpts}</select>
+      </div>
+    </div>
+    ${!isNew?`
+    <div style="background:var(--accent);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px">LOG A BILLING ENTRY</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <label class="form-label">Amount Billed</label>
+          <input type="number" id="po-bill-amount" placeholder="0.00" step="0.01">
+        </div>
+        <div>
+          <label class="form-label">Note (optional)</label>
+          <input type="text" id="po-bill-note" placeholder="Invoice #, description...">
+        </div>
+      </div>
+      <button onclick="addBillingEntry('${id}')" style="margin-top:8px;padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:'DM Sans',sans-serif;cursor:pointer">+ Add Billing Entry</button>
+    </div>`:''}
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <input type="text" id="po-notes" placeholder="Optional notes..." value="${po?po.notes:''}">
+    </div>
+    ${logHtml}
+    <div id="po-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      ${!isNew?`<button class="btn-delete" onclick="deletePOEntry('${id}')">Delete</button>`:''}
+      <button class="btn-cancel" onclick="document.getElementById('po-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="savePOEntry('${id||''}')">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function addBillingEntry(id){
+  const po = poEntries.find(x=>x.id===id);
+  if(!po) return;
+  const amount = parseFloat(document.getElementById('po-bill-amount').value);
+  const note = document.getElementById('po-bill-note').value.trim();
+  if(!amount||amount<=0){ alert('Please enter a valid amount.'); return; }
+  po.billingLog = [...(po.billingLog||[]), {ts:new Date().toISOString(), amount, note}];
+  po.amountBilled = po.billingLog.reduce((s,e)=>s+e.amount,0);
+  po.status = poAutoStatus(po);
+  await dbSavePO(po, id);
+  document.getElementById('po-overlay').remove();
+  openPOModal(id);
+  renderPO();
+}
+
+async function savePOEntry(id){
+  const client = document.getElementById('po-client').value;
+  const poNumber = document.getElementById('po-number').value.trim();
+  const date = document.getElementById('po-date').value;
+  const poAmount = parseFloat(document.getElementById('po-amount').value);
+  const status = document.getElementById('po-status').value;
+  const notes = document.getElementById('po-notes').value.trim();
+  const errEl = document.getElementById('po-error');
+  if(!poAmount||poAmount<=0){ errEl.textContent='Please enter a valid PO amount.'; return; }
+  const btn = document.querySelector('#po-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  try{
+    if(id){
+      const po = poEntries.find(x=>x.id===id);
+      po.client=client; po.poNumber=poNumber; po.date=date;
+      po.poAmount=poAmount; po.status=status; po.notes=notes;
+      await dbSavePO(po, id);
+    } else {
+      const newPO = {client,poNumber,date,poAmount,amountBilled:0,status,billingLog:[],notes};
+      const newId = await dbSavePO(newPO);
+      if(newId){ newPO.id=newId; poEntries.unshift(newPO); }
+    }
+    document.getElementById('po-overlay').remove();
+    renderPO();
+  } catch(e){
+    errEl.textContent='Error saving. Please try again.';
+    btn.disabled=false; btn.textContent='Save';
+  }
+}
+
+async function deletePOEntry(id){
+  if(!confirm('Delete this PO? This cannot be undone.')) return;
+  await dbDeletePO(id);
+  poEntries = poEntries.filter(p=>p.id!==id);
+  document.getElementById('po-overlay').remove();
+  renderPO();
+}
 
 // ── PIPELINE ──────────────────────────────────────────────────
 const STAGES = ['Initial Contact','Site Visit','Proposal','Acceptance','Declined'];
@@ -1277,9 +1527,9 @@ function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-  const idx={week:0,next:1,month:2,list:3,pipeline:4,mileage:5,equipment:6,reports:7,timeoff:8,workorders:9};
+  const idx={week:0,next:1,month:2,list:3,pipeline:4,po:5,mileage:6,equipment:7,reports:8,timeoff:9,workorders:10};
   document.querySelectorAll('.vtab')[idx[v]].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po';
   document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
   document.querySelector('.nav-row').style.display=hideNav?'none':'flex';
   render();
@@ -1305,6 +1555,7 @@ function render(){
   else if(view==='timeoff') renderTimeOff();
   else if(view==='mileage') renderMileage();
   else if(view==='pipeline') renderPipeline();
+  else if(view==='po') renderPO();
   else renderList();
 }
 
@@ -2936,6 +3187,8 @@ function showApp(){
   const plTab2 = document.getElementById('pipeline-tab');
   const PIPELINE_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com'];
   if(plTab2) plTab2.style.display = PIPELINE_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
+  const poTab2 = document.getElementById('po-tab');
+  if(poTab2) poTab2.style.display = PIPELINE_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
   const allTabs = Array.from(document.querySelectorAll('.vtab'));
   const mileageTab = document.getElementById('mileage-tab');
   const timeoffTab = document.getElementById('timeoff-tab');
@@ -2946,7 +3199,7 @@ function showApp(){
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff(); loadMileage(); loadPipelines(); startPolling(); });
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff(); loadMileage(); loadPipelines(); loadPO(); startPolling(); });
   render();
 }
 

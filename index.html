@@ -505,6 +505,7 @@ let pipelines = [];
 let plTab = 'active';
 let poEntries = [];
 let poStatusFilter = 'All';
+let poCatFilter = 'All';
 let plStageFilter = 'All';
 let plSearchQ = '';
 let mileageYearFilter = new Date().getFullYear();
@@ -615,6 +616,7 @@ async function loadPO(){
       date: r.date||'',
       poAmount: Number(r.po_amount)||0,
       amountBilled: Number(r.amount_billed)||0,
+      category: r.category||'',
       status: r.status||'Open',
       billingLog: r.billing_log ? (typeof r.billing_log==='string'?JSON.parse(r.billing_log):r.billing_log) : [],
       notes: r.notes||'',
@@ -627,6 +629,7 @@ async function dbSavePO(obj, id=null){
   const row = {
     client: obj.client, po_number: obj.poNumber, date: obj.date,
     po_amount: obj.poAmount, amount_billed: obj.amountBilled,
+    category: obj.category||'',
     status: obj.status, billing_log: JSON.stringify(obj.billingLog||[]),
     notes: obj.notes||'',
   };
@@ -676,10 +679,15 @@ function renderPO(){
   html += `<div class="filter-row" style="margin-top:12px">
     ${['All','Open','Partially Billed','Closed'].map(s=>`<button class="filter-chip${poStatusFilter===s?' active':''}" onclick="poStatusFilter='${s}';renderPO()">${s}</button>`).join('')}
     <button class="btn-save" style="font-size:12px;padding:5px 14px;margin-left:auto" onclick="openPOModal()">+ Add PO</button>
+  </div>
+  <div class="filter-row">
+    ${['All','Maintenance','Consulting','Construction'].map(c=>`<button class="filter-chip${poCatFilter===c?' active':''}" onclick="poCatFilter='${c}';renderPO()">${c}</button>`).join('')}
   </div>`;
 
   // List
-  let filtered = poStatusFilter==='All' ? poEntries : poEntries.filter(p=>p.status===poStatusFilter);
+  let filtered = poEntries;
+  if(poStatusFilter!=='All') filtered = filtered.filter(p=>p.status===poStatusFilter);
+  if(poCatFilter!=='All') filtered = filtered.filter(p=>p.category===poCatFilter);
 
   if(!filtered.length){
     html += `<div style="text-align:center;padding:48px 24px;color:var(--text-3);font-size:14px">No POs found. Tap "+ Add PO" to get started.</div>`;
@@ -692,7 +700,7 @@ function renderPO(){
         <div class="report-card-header">
           <div>
             <div class="report-card-title">${po.client}${po.poNumber?' <span style="font-size:12px;color:var(--text-3);font-weight:400">· PO #'+po.poNumber+'</span>':''}</div>
-            <div class="report-card-meta">${po.date||'No date'}</div>
+            <div class="report-card-meta">${po.date||'No date'}${po.category?' · <span style="font-size:11px;font-weight:600">'+po.category+'</span>':''}</div>
           </div>
           <span style="font-size:11px;font-weight:600;border-radius:99px;padding:3px 10px;background:${sc.bg};color:${sc.text};white-space:nowrap;flex-shrink:0">${po.status}</span>
         </div>
@@ -757,6 +765,13 @@ function openPOModal(id=null){
         <input type="date" id="po-date" value="${po?po.date:new Date().toISOString().split('T')[0]}">
       </div>
     </div>
+    <div class="form-group">
+      <label class="form-label">Category</label>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px" id="po-cat-grid">
+        ${['Maintenance','Consulting','Construction'].map(c=>`<div class="sel-opt${po&&po.category===c?' picked':''}" onclick="poToggleCat('${c}',this)" style="text-align:center">${c}</div>`).join('')}
+      </div>
+      <input type="hidden" id="po-category" value="${po?po.category:''}">
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="form-group">
         <label class="form-label">PO Amount *</label>
@@ -812,12 +827,24 @@ async function addBillingEntry(id){
   renderPO();
 }
 
+function poToggleCat(cat, el){
+  document.querySelectorAll('#po-cat-grid .sel-opt').forEach(d=>d.classList.remove('picked'));
+  const current = document.getElementById('po-category').value;
+  if(current===cat){
+    document.getElementById('po-category').value='';
+  } else {
+    el.classList.add('picked');
+    document.getElementById('po-category').value=cat;
+  }
+}
+
 async function savePOEntry(id){
   const client = document.getElementById('po-client').value;
   const poNumber = document.getElementById('po-number').value.trim();
   const date = document.getElementById('po-date').value;
   const poAmount = parseFloat(document.getElementById('po-amount').value);
   const status = document.getElementById('po-status').value;
+  const category = document.getElementById('po-category') ? document.getElementById('po-category').value : '';
   const notes = document.getElementById('po-notes').value.trim();
   const errEl = document.getElementById('po-error');
   if(!poAmount||poAmount<=0){ errEl.textContent='Please enter a valid PO amount.'; return; }
@@ -827,10 +854,10 @@ async function savePOEntry(id){
     if(id){
       const po = poEntries.find(x=>x.id===id);
       po.client=client; po.poNumber=poNumber; po.date=date;
-      po.poAmount=poAmount; po.status=status; po.notes=notes;
+      po.poAmount=poAmount; po.category=category; po.status=status; po.notes=notes;
       await dbSavePO(po, id);
     } else {
-      const newPO = {client,poNumber,date,poAmount,amountBilled:0,status,billingLog:[],notes};
+      const newPO = {client,poNumber,date,poAmount,amountBilled:0,category,status,billingLog:[],notes};
       const newId = await dbSavePO(newPO);
       if(newId){ newPO.id=newId; poEntries.unshift(newPO); }
     }

@@ -2462,10 +2462,6 @@ function openReportModal(){
         <textarea id="r-workdone" placeholder="Describe what was completed on site..."></textarea>
       </div>
       <div class="form-group">
-        <label class="form-label">Products used</label>
-
-      </div>
-      <div class="form-group">
         <label class="form-label">Equipment used</label>
         <div class="equip-tabs" id="r-equip-tabs">${buildReportEquipTabs()}</div>
         <div class="equip-grid" id="r-equip-grid">${buildReportEquipGrid()}</div>
@@ -2617,7 +2613,7 @@ async function saveReport(){
   const timeIn=(document.getElementById('r-timein').value||'').trim();
   const timeOut=(document.getElementById('r-timeout').value||'').trim();
   const workDone=(document.getElementById('r-workdone').value||'').trim();
-  const productsUsed=(document.getElementById('r-products').value||'').trim();
+  const productsUsed='';
   const equipUsed=[...pickedEquip];
   const hasIssue=reportIssueOn;
   const issueNotes=hasIssue?(document.getElementById('r-issue-notes').value||'').trim():'';

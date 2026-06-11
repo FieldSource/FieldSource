@@ -368,7 +368,7 @@ main{padding:12px 16px 100px}
   <div class="view-bar-row">
     <button class="vtab" id="pipeline-tab" onclick="setView('pipeline')" style="display:none">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="po-tab" onclick="setView('po')" style="display:none">PO Tracker</button>
-    <button class="vtab" id="mileage-tab" onclick="setView('mileage')">Mileage</button>
+    <button class="vtab" id="mileage-tab" onclick="setView('mileage')" style="display:none">Mileage</button>
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
     <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off</button>
@@ -3218,6 +3218,7 @@ function showApp(){
   if(poTab2) poTab2.style.display = PIPELINE_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
   const allTabs = Array.from(document.querySelectorAll('.vtab'));
   const mileageTab = document.getElementById('mileage-tab');
+  if(mileageTab) mileageTab.style.display = 'none'; // hidden for now
   const timeoffTab = document.getElementById('timeoff-tab');
   const woTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes('workorders'));
   const equipTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes("'equipment'"));

@@ -504,8 +504,8 @@ let timeOffEntries = [];
 let mileageLogs = [];
 let pipelines = [];
 let plTab = 'active';
-let hoursDateMode = 'month'; // 'month', 'year', 'range'
-let hoursMonth = new Date().toISOString().slice(0,7); // YYYY-MM
+let hoursDateMode = 'month';
+let hoursMonth = new Date().toISOString().slice(0,7);
 let hoursYear = new Date().getFullYear();
 let hoursRangeStart = '';
 let hoursRangeEnd = '';
@@ -688,7 +688,7 @@ function renderHours(){
   // Build months/years for selectors
   const allMonths = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,7):null).filter(Boolean))].sort().reverse();
   const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
-  if(!allMonths.includes(hoursMonth) && allMonths.length) hoursMonth = allMonths[0];
+  if(allMonths.length && !allMonths.includes(hoursMonth)) hoursMonth = allMonths[0];
 
   // Filter bar
   html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">

@@ -652,13 +652,46 @@ function getFilteredReports(){
 function renderHours(){
   const filtered = getFilteredReports();
 
+  // ── LAST WEEK SUMMARY ──────────────────────────────────────
+  // Always show last Mon-Sun at the top
+  const todayD = new Date();
+  const dayOfWeek = todayD.getDay(); // 0=Sun
+  const lastMonday = new Date(todayD);
+  lastMonday.setDate(todayD.getDate() - ((dayOfWeek===0?7:dayOfWeek) + 6));
+  const lastSunday = new Date(lastMonday);
+  lastSunday.setDate(lastMonday.getDate() + 6);
+  const lwStart = isoDate(lastMonday);
+  const lwEnd = isoDate(lastSunday);
+  const lastWeekReports = reports.filter(r=>r.reportDate>=lwStart&&r.reportDate<=lwEnd);
+  const lwByPerson = {};
+  lastWeekReports.forEach(r=>{ lwByPerson[r.filedBy]=(lwByPerson[r.filedBy]||0)+1; });
+  const lwSorted = Object.entries(lwByPerson).sort((a,b)=>b[1]-a[1]);
+  // Everyone in crew who should be filing
+  const allCrew2 = CREW.filter(c=>!c.toLowerCase().includes('intern')&&c!=='Penlin');
+
+  let html = `<div style="background:var(--surface);border:1px solid var(--border-2);border-radius:var(--radius);padding:14px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Last Week's Reports</div>
+      <div style="font-size:11px;color:var(--text-3)">${lwStart} – ${lwEnd}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+      ${lwSorted.map(([person,count])=>`
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:13px;color:var(--text)">${person}</span>
+          <span style="font-size:16px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${count}</span>
+        </div>`).join('')}
+      ${lwSorted.length===0?`<div style="font-size:13px;color:var(--text-3);grid-column:1/-1">No reports filed last week.</div>`:''}
+    </div>
+    <div style="margin-top:10px;font-size:12px;color:var(--text-3)">${lastWeekReports.length} total report${lastWeekReports.length!==1?'s':''} filed</div>
+  </div>`;
+
   // Build months/years for selectors
   const allMonths = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,7):null).filter(Boolean))].sort().reverse();
   const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
   if(!allMonths.includes(hoursMonth) && allMonths.length) hoursMonth = allMonths[0];
 
   // Filter bar
-  let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
+  html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
     <div class="filter-row" style="margin-bottom:10px">
       ${['month','year','range'].map(m=>`<button class="filter-chip${hoursDateMode===m?' active':''}" onclick="hoursDateMode='${m}';renderHours()">${m==='month'?'By Month':m==='year'?'By Year':'Date Range'}</button>`).join('')}
     </div>

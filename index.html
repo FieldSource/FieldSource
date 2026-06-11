@@ -366,6 +366,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" onclick="setView('list')">All jobs</button>
   </div>
   <div class="view-bar-row">
+    <button class="vtab" id="hours-tab" onclick="setView('hours')" style="display:none">Hours</button>
     <button class="vtab" id="pipeline-tab" onclick="setView('pipeline')" style="display:none">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="po-tab" onclick="setView('po')" style="display:none">PO Tracker</button>
     <button class="vtab" id="mileage-tab" onclick="setView('mileage')" style="display:none">Mileage</button>
@@ -503,6 +504,12 @@ let timeOffEntries = [];
 let mileageLogs = [];
 let pipelines = [];
 let plTab = 'active';
+let hoursDateMode = 'month'; // 'month', 'year', 'range'
+let hoursMonth = new Date().toISOString().slice(0,7); // YYYY-MM
+let hoursYear = new Date().getFullYear();
+let hoursRangeStart = '';
+let hoursRangeEnd = '';
+let hoursExpandedClient = null;
 let poEntries = [];
 let poStatusFilter = 'All';
 let poCatFilter = 'All';
@@ -604,6 +611,165 @@ async function loadWorkOrders(){
 }
 
 
+
+
+// ── HOURS SUMMARY ─────────────────────────────────────────────
+function parseHoursFromReport(r){
+  // Parse time strings like "8:00 AM", "8:30 AM", "14:00" etc
+  function toMinutes(s){
+    if(!s) return null;
+    s = s.trim().toUpperCase();
+    const ampm = s.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/);
+    if(!ampm) return null;
+    let h = parseInt(ampm[1]);
+    const m = parseInt(ampm[2]);
+    const ap = ampm[3];
+    if(ap==='PM' && h<12) h+=12;
+    if(ap==='AM' && h===12) h=0;
+    return h*60+m;
+  }
+  const inMins = toMinutes(r.timeIn);
+  const outMins = toMinutes(r.timeOut);
+  if(inMins===null||outMins===null) return null;
+  const diff = outMins - inMins;
+  return diff > 0 ? diff/60 : null;
+}
+
+function getFilteredReports(){
+  return reports.filter(r=>{
+    if(!r.reportDate) return false;
+    if(hoursDateMode==='month') return r.reportDate.slice(0,7)===hoursMonth;
+    if(hoursDateMode==='year') return r.reportDate.slice(0,4)===String(hoursYear);
+    if(hoursDateMode==='range'){
+      if(hoursRangeStart && r.reportDate < hoursRangeStart) return false;
+      if(hoursRangeEnd && r.reportDate > hoursRangeEnd) return false;
+      return true;
+    }
+    return true;
+  });
+}
+
+function renderHours(){
+  const filtered = getFilteredReports();
+
+  // Build months/years for selectors
+  const allMonths = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,7):null).filter(Boolean))].sort().reverse();
+  const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
+  if(!allMonths.includes(hoursMonth) && allMonths.length) hoursMonth = allMonths[0];
+
+  // Filter bar
+  let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
+    <div class="filter-row" style="margin-bottom:10px">
+      ${['month','year','range'].map(m=>`<button class="filter-chip${hoursDateMode===m?' active':''}" onclick="hoursDateMode='${m}';renderHours()">${m==='month'?'By Month':m==='year'?'By Year':'Date Range'}</button>`).join('')}
+    </div>
+    ${hoursDateMode==='month'?`<select onchange="hoursMonth=this.value;renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg)">
+      ${allMonths.map(m=>`<option value="${m}"${m===hoursMonth?' selected':''}>${new Date(m+'-01').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</option>`).join('')}
+    </select>`:''}
+    ${hoursDateMode==='year'?`<select onchange="hoursYear=parseInt(this.value);renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg)">
+      ${allYears.map(y=>`<option value="${y}"${y===String(hoursYear)?' selected':''}>${y}</option>`).join('')}
+    </select>`:''}
+    ${hoursDateMode==='range'?`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="date" value="${hoursRangeStart}" onchange="hoursRangeStart=this.value;renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg)">
+      <span style="color:var(--text-3)">to</span>
+      <input type="date" value="${hoursRangeEnd}" onchange="hoursRangeEnd=this.value;renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg)">
+    </div>`:''}
+  </div>`;
+
+  if(!filtered.length){
+    html += `<div style="text-align:center;padding:48px;color:var(--text-3);font-size:14px">No reports found for this period.</div>`;
+    document.getElementById('main-content').innerHTML = html;
+    return;
+  }
+
+  // Aggregate by client
+  const clientMap = {};
+  filtered.forEach(r=>{
+    const hrs = parseHoursFromReport(r);
+    if(!clientMap[r.client]) clientMap[r.client] = {hours:0, reports:[], employees:{}, services:{}};
+    const c = clientMap[r.client];
+    if(hrs!==null) c.hours += hrs;
+    c.reports.push(r);
+    // Employee breakdown
+    if(!c.employees[r.filedBy]) c.employees[r.filedBy] = 0;
+    if(hrs!==null) c.employees[r.filedBy] += hrs;
+    // Service breakdown — from the job field or work_done
+    const svc = r.workDone ? r.workDone.slice(0,40) : 'General';
+    if(!c.services[svc]) c.services[svc] = 0;
+    if(hrs!==null) c.services[svc] += hrs;
+  });
+
+  // Total summary stats
+  const totalHrs = Object.values(clientMap).reduce((s,c)=>s+c.hours,0);
+  const totalReports = filtered.length;
+  const clientCount = Object.keys(clientMap).length;
+
+  html += `<div class="stats-bar" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+    <div class="stat-card"><div class="stat-num">${totalHrs.toFixed(1)}</div><div class="stat-label">Total Hours</div></div>
+    <div class="stat-card"><div class="stat-num">${totalReports}</div><div class="stat-label">Reports Filed</div></div>
+    <div class="stat-card"><div class="stat-num">${clientCount}</div><div class="stat-label">Clients Served</div></div>
+  </div>`;
+
+  // Sort clients by hours descending
+  const sorted = Object.entries(clientMap).sort((a,b)=>b[1].hours-a[1].hours);
+  const maxHrs = sorted.length ? sorted[0][1].hours : 1;
+
+  sorted.forEach(([client, data])=>{
+    const isExpanded = hoursExpandedClient===client;
+    const pct = maxHrs>0 ? (data.hours/maxHrs)*100 : 0;
+    const noTime = data.reports.length > 0 && data.hours===0;
+
+    html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:8px">
+      <div onclick="hoursExpandedClient=hoursExpandedClient==='${client}'?null:'${client}';renderHours()" style="cursor:pointer">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div style="font-weight:600;font-size:15px;color:var(--text)">${client}</div>
+            <div style="font-size:12px;color:var(--text-3);margin-top:2px">${data.reports.length} report${data.reports.length!==1?'s':''}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:20px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${data.hours.toFixed(1)}<span style="font-size:12px;font-weight:400;color:var(--text-3)"> hrs</span></div>
+            ${noTime?'<div style="font-size:10px;color:#d97706">some reports missing time</div>':''}
+          </div>
+        </div>
+        <div style="background:var(--border);border-radius:99px;height:6px;overflow:hidden">
+          <div style="background:var(--green);height:100%;width:${pct}%;border-radius:99px"></div>
+        </div>
+      </div>
+      ${isExpanded?`
+      <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div>
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);letter-spacing:0.5px;margin-bottom:8px">By Employee</div>
+            ${Object.entries(data.employees).sort((a,b)=>b[1]-a[1]).map(([emp,h])=>`
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:13px">
+                <span style="color:var(--text-2)">${emp||'Unknown'}</span>
+                <span style="font-weight:600;font-family:'DM Mono',monospace;color:var(--green-dark)">${h.toFixed(1)}h</span>
+              </div>`).join('')}
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);letter-spacing:0.5px;margin-bottom:8px">By Service</div>
+            ${Object.entries(data.services).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([svc,h])=>`
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border);font-size:12px">
+                <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100px">${svc}</span>
+                <span style="font-weight:600;font-family:'DM Mono',monospace;color:var(--green-dark);flex-shrink:0">${h.toFixed(1)}h</span>
+              </div>`).join('')}
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);letter-spacing:0.5px;margin-bottom:8px">Individual Reports</div>
+          ${data.reports.sort((a,b)=>b.reportDate.localeCompare(a.reportDate)).map(r=>{
+            const h = parseHoursFromReport(r);
+            return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
+              <div><span style="color:var(--text-3);font-family:'DM Mono',monospace">${r.reportDate}</span> <span style="color:var(--text-2)">${r.filedBy||''}</span></div>
+              <span style="font-weight:600;font-family:'DM Mono',monospace;color:${h!==null?'var(--green-dark)':'#d97706'}">${h!==null?h.toFixed(1)+'h':'no time'}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`:''}
+    </div>`;
+  });
+
+  document.getElementById('main-content').innerHTML = html;
+}
 
 // ── PO TRACKER ────────────────────────────────────────────────
 async function loadPO(){
@@ -1554,9 +1720,9 @@ function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-  const idx={week:0,next:1,month:2,list:3,pipeline:4,po:5,mileage:6,equipment:7,reports:8,timeoff:9,workorders:10};
+  const idx={week:0,next:1,month:2,list:3,hours:4,pipeline:5,po:6,mileage:7,equipment:8,reports:9,timeoff:10,workorders:11};
   document.querySelectorAll('.vtab')[idx[v]].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours';
   document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
   document.querySelector('.nav-row').style.display=hideNav?'none':'flex';
   render();
@@ -1581,6 +1747,7 @@ function render(){
   else if(view==='workorders') renderWorkOrders();
   else if(view==='timeoff') renderTimeOff();
   else if(view==='mileage') renderMileage();
+  else if(view==='hours') renderHours();
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
   else renderList();
@@ -2171,8 +2338,13 @@ async function deleteJob(id){
 }
 // ── REPORTS VIEW ──────────────────────────────────────────────
 function renderReports(){
-  const allClients = ['All', ...new Set(reports.map(r=>r.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
-  const filtered = reportSiteFilter==='All' ? reports : reports.filter(r=>r.client===reportSiteFilter);
+  const REPORT_ALL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
+  const canSeeAll = REPORT_ALL_EMAILS.includes((currentUser&&currentUser.email||'').toLowerCase());
+  const myName = getDisplayName(currentUser&&currentUser.email);
+  const visibleReports = canSeeAll ? reports : reports.filter(r=>r.filedBy===myName);
+
+  const allClients = ['All', ...new Set(visibleReports.map(r=>r.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
+  const filtered = reportSiteFilter==='All' ? visibleReports : visibleReports.filter(r=>r.client===reportSiteFilter);
 
   let html = `<div class="site-filter-row">${allClients.map(c=>
     `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${c.replace(/'/g,"\\'")}'">${c}</button>`
@@ -3214,6 +3386,9 @@ function showApp(){
   const plTab2 = document.getElementById('pipeline-tab');
   const PIPELINE_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com'];
   if(plTab2) plTab2.style.display = PIPELINE_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
+  const HOURS_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
+  const hoursTab = document.getElementById('hours-tab');
+  if(hoursTab) hoursTab.style.display = HOURS_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
   const poTab2 = document.getElementById('po-tab');
   if(poTab2) poTab2.style.display = PIPELINE_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
   const allTabs = Array.from(document.querySelectorAll('.vtab'));

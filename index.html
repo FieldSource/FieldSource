@@ -3222,7 +3222,6 @@ function showApp(){
   const timeoffTab = document.getElementById('timeoff-tab');
   const woTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes('workorders'));
   const equipTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes("'equipment'"));
-  if(mileageTab) mileageTab.style.display = isReportOnly ? 'none' : '';
   if(timeoffTab) timeoffTab.style.display = isReportOnly ? 'none' : '';
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';

@@ -2400,7 +2400,7 @@ function renderReports(){
         </div>
         ${r.workDone?`<div class="wo-issue-text">${r.workDone}</div>`:''}
         <div class="report-detail-row">
-          ${r.productsUsed?`<span class="report-pill">🧪 ${r.productsUsed}</span>`:''}
+
           ${equipList?`<span class="report-pill">🔧 ${equipList}</span>`:''}
         </div>
         ${r.hasIssue&&r.issueNotes?`<div style="font-size:12px;color:#991b1b;margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:var(--radius-sm)">⚠ ${r.issueNotes}</div>`:''}
@@ -2463,7 +2463,7 @@ function openReportModal(){
       </div>
       <div class="form-group">
         <label class="form-label">Products used</label>
-        <input type="text" id="r-products" placeholder="e.g. Dimension, 19-0-6, Subdue...">
+
       </div>
       <div class="form-group">
         <label class="form-label">Equipment used</label>
@@ -2670,7 +2670,7 @@ function openReportDetail(id){
         </div>
       </div>
       ${r.workDone?`<div class="form-group"><div class="form-label">Work done</div><div style="font-size:13px;color:var(--text-2);line-height:1.5">${r.workDone}</div></div>`:''}
-      ${r.productsUsed?`<div class="form-group"><div class="form-label">Products used</div><div style="font-size:13px;color:var(--text-2)">${r.productsUsed}</div></div>`:''}
+
       <div class="form-group"><div class="form-label">Equipment used</div><div style="font-size:13px;color:var(--text-2)">${equipList}</div></div>
       ${r.hasIssue&&r.issueNotes?`<div style="background:#fee2e2;border:1.5px solid #fca5a5;border-radius:var(--radius-sm);padding:12px;margin-bottom:14px"><div style="font-size:11px;font-weight:600;color:#991b1b;margin-bottom:4px">ISSUE FLAGGED</div><div style="font-size:13px;color:#7f1d1d">${r.issueNotes}</div></div>`:''}
       ${linkedWo?`<div style="background:var(--green-light);border:1px solid var(--border-2);border-radius:var(--radius-sm);padding:10px;margin-bottom:14px"><div style="font-size:11px;font-weight:600;color:var(--green-dark)">WORK ORDER CREATED</div><div style="font-size:12px;color:var(--text-2);margin-top:2px">Status: ${linkedWo.status.toUpperCase()}${linkedWo.scheduledDate?' · Scheduled '+linkedWo.scheduledDate:''}</div></div>`:''}
@@ -2695,7 +2695,6 @@ function exportReport(id){
   if(r.timeIn&&r.timeOut) parts.push('On site: ' + r.timeIn + ' - ' + r.timeOut);
   parts.push('');
   if(r.workDone) parts.push('*Work Done:*\n' + r.workDone);
-  if(r.productsUsed) parts.push('*Products Used:*\n' + r.productsUsed);
   if(equipList !== '—') parts.push('*Equipment:*\n' + equipList);
   if(r.hasIssue && r.issueNotes) parts.push('*Issue Flagged:*\n' + r.issueNotes);
   const lines = parts.join('\n');

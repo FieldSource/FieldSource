@@ -686,8 +686,9 @@ function renderHours(){
   </div>`;
 
   // Build months/years for selectors
-  const allMonths = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,7):null).filter(Boolean))].sort().reverse();
+  const allMonths = ['2026-04','2026-05','2026-06','2026-07','2026-08','2026-09','2026-10','2026-11','2026-12'];
   const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
+  if(!allYears.includes('2026')) allYears.unshift('2026');
   if(allMonths.length && !allMonths.includes(hoursMonth)) hoursMonth = allMonths[0];
 
   // Filter bar

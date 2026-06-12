@@ -42,6 +42,8 @@ header{background:var(--green-dark);padding:0 16px;display:flex;align-items:cent
 .vtab{flex:1;padding:10px 4px;font-size:12px;font-weight:500;color:var(--text-3);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;font-family:'DM Sans',sans-serif;transition:color .15s;text-align:center}
 .vtab.active{color:var(--green);border-bottom-color:var(--green);font-weight:600}
 .view-bar-row:first-child{border-bottom:1px solid var(--border)}
+.portal-tab{flex:1;padding:10px 4px;font-size:13px;font-weight:600;color:rgba(255,255,255,0.6);border:none;background:none;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;font-family:'DM Sans',sans-serif;transition:color .15s;text-align:center}
+.portal-tab.active{color:#fff;border-bottom-color:#fff}
 .nav-row{display:flex;align-items:center;padding:10px 16px;gap:8px;background:var(--surface);border-bottom:1px solid var(--border)}
 .nav-btn{width:32px;height:32px;border-radius:var(--radius-sm);border:1px solid var(--border-2);background:none;color:var(--green);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .nav-btn:active{background:var(--green-light)}
@@ -358,7 +360,16 @@ main{padding:12px 16px 100px}
 </header>
 
 <div id="app-body" style="display:none">
-<div class="view-bar">
+<!-- PORTAL TABS (in header, added by JS after login) -->
+<div id="portal-bar" style="display:none;background:var(--green-dark);border-bottom:1px solid rgba(255,255,255,0.15)">
+  <div style="display:flex;max-width:100%;overflow-x:auto">
+    <button class="portal-tab active" id="ptab-tracker" onclick="setPortal('tracker')">Tracker</button>
+    <button class="portal-tab" id="ptab-bizops" onclick="setPortal('bizops')" style="display:none">Business Ops</button>
+    <button class="portal-tab" id="ptab-consulting" onclick="setPortal('consulting')" style="display:none">Consulting</button>
+  </div>
+</div>
+
+<div class="view-bar" id="tracker-bar">
   <div class="view-bar-row">
     <button class="vtab active" onclick="setView('week')">This week</button>
     <button class="vtab" onclick="setView('next')">Next week</button>
@@ -366,14 +377,25 @@ main{padding:12px 16px 100px}
     <button class="vtab" onclick="setView('list')">All jobs</button>
   </div>
   <div class="view-bar-row">
-    <button class="vtab" id="hours-tab" onclick="setView('hours')" style="display:none">Hours</button>
-    <button class="vtab" id="pipeline-tab" onclick="setView('pipeline')" style="display:none">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
-    <button class="vtab" id="po-tab" onclick="setView('po')" style="display:none">PO Tracker</button>
     <button class="vtab" id="mileage-tab" onclick="setView('mileage')" style="display:none">Mileage</button>
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
     <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off <span id="timeoff-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
+    <button class="vtab" id="hours-tab" onclick="setView('hours')" style="display:none">Hours</button>
     <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
+  </div>
+</div>
+
+<div class="view-bar" id="bizops-bar" style="display:none">
+  <div class="view-bar-row">
+    <button class="vtab" id="pipeline-tab" onclick="setView('pipeline')">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" id="po-tab" onclick="setView('po')">PO Tracker</button>
+  </div>
+</div>
+
+<div class="view-bar" id="consulting-bar" style="display:none">
+  <div class="view-bar-row">
+    <button class="vtab" onclick="setView('consulting-home')">Overview</button>
   </div>
 </div>
 
@@ -1753,11 +1775,41 @@ function trailerConflictJob(trailerName, startDate, duration, excludeId){
   return null;
 }
 
+let currentPortal = 'tracker';
+
+function setPortal(portal){
+  currentPortal = portal;
+  // Update portal tab active states
+  document.querySelectorAll('.portal-tab').forEach(t=>t.classList.remove('active'));
+  const ptab = document.getElementById('ptab-'+portal);
+  if(ptab) ptab.classList.add('active');
+  // Show/hide view bars
+  document.getElementById('tracker-bar').style.display = portal==='tracker' ? '' : 'none';
+  document.getElementById('bizops-bar').style.display = portal==='bizops' ? '' : 'none';
+  document.getElementById('consulting-bar').style.display = portal==='consulting' ? '' : 'none';
+  // Navigate to default view for portal
+  if(portal==='tracker') setView('week');
+  else if(portal==='bizops') setView('pipeline');
+  else if(portal==='consulting') setView('consulting-home');
+}
+
+function renderConsulting(){
+  document.getElementById('main-content').innerHTML = `
+    <div style="text-align:center;padding:60px 24px">
+      <div style="font-size:48px;margin-bottom:16px;opacity:0.3">🏗️</div>
+      <div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:8px">Consulting Portal</div>
+      <div style="font-size:14px;color:var(--text-3);max-width:400px;margin:0 auto">This section is being built for Brian and the landscape architecture team. Check back soon.</div>
+    </div>`;
+}
+
 function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-  const idx={week:0,next:1,month:2,list:3,hours:4,pipeline:5,po:6,mileage:7,equipment:8,reports:9,timeoff:10,workorders:11};
+  // idx maps to vtab position within the ACTIVE bar
+  const trackerIdx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,hours:8,workorders:9};
+  const bizopsIdx={pipeline:0,po:1};
+  const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   document.querySelectorAll('.vtab')[idx[v]].classList.add('active');
   const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours';
   document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -1787,6 +1839,7 @@ function render(){
   else if(view==='hours') renderHours();
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
+  else if(view==='consulting-home') renderConsulting();
   else renderList();
 }
 
@@ -3501,8 +3554,19 @@ function showApp(){
   // Show/hide tabs based on role
   // Show pipeline tab only for Jake and Ryan
   const plTab2 = document.getElementById('pipeline-tab');
-  const PIPELINE_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com'];
-  if(plTab2) plTab2.style.display = PIPELINE_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
+  const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
+  const CONSULTING_EMAILS = [...PORTAL_EMAILS, 'brian@fieldsourceohio.com'];
+  const userEmail = (currentUser.email||'').toLowerCase();
+  // Show portal bar
+  document.getElementById('portal-bar').style.display = '';
+  // Show/hide portal tabs
+  const bizopsPortalTab = document.getElementById('ptab-bizops');
+  const consultingPortalTab = document.getElementById('ptab-consulting');
+  if(bizopsPortalTab) bizopsPortalTab.style.display = PORTAL_EMAILS.includes(userEmail) ? '' : 'none';
+  if(consultingPortalTab) consultingPortalTab.style.display = CONSULTING_EMAILS.includes(userEmail) ? '' : 'none';
+  // Pipeline/PO only in bizops now
+  const PIPELINE_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
+  if(plTab2) plTab2.style.display = 'none'; // handled by portal
   const HOURS_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const hoursTab = document.getElementById('hours-tab');
   if(hoursTab) hoursTab.style.display = HOURS_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';

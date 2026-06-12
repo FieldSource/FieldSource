@@ -372,7 +372,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="mileage-tab" onclick="setView('mileage')" style="display:none">Mileage</button>
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
-    <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off</button>
+    <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off <span id="timeoff-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
     <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
   </div>
 </div>
@@ -402,6 +402,7 @@ main{padding:12px 16px 100px}
 const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
 const SERVICES=['Mowing','Applications','Contract Maintenance','Core Aeration','Deep Tine Aeration','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Off','Shockwave','Slit Seeding','Broadcast Seeding','Sodding','Sweep','Verti-cut','Vent'];
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Matt','Wes','Cameron','Killer','Sly','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
+const TIME_OFF_CREW=['Ryan','Matt','Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Wes','Cameron','Killer','Sly','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
   Carts:['John Deere Gator TX #1','John Deere Gator TX #2','John Deere Gator HPX #1','2017 Gator John Deere HPX #2','Toro GTX','2019 Toro Workman HDX','John Deere Gator TX #3'],
@@ -1544,7 +1545,9 @@ async function loadTimeOff(){
       person: row.person||'',
       startDate: row.start_date||'',
       endDate: row.end_date||'',
-      note: row.note||''
+      note: row.note||'',
+      status: row.status||'Pending',
+      requestedBy: row.requested_by||''
     }));
   } catch(e) {
     console.warn('Could not load time off — table may not exist yet', e);
@@ -1552,7 +1555,7 @@ async function loadTimeOff(){
   }
 }
 async function dbSaveTimeOff(data, id=null){
-  const row = { person: data.person, start_date: data.startDate, end_date: data.endDate, note: data.note||'' };
+  const row = { person: data.person, start_date: data.startDate, end_date: data.endDate, note: data.note||'', status: data.status||'Pending', requested_by: data.requestedBy||'' };
   if(id){
     await sbFetch('PATCH', `/rest/v1/time_off?id=eq.${id}`, row);
   } else {
@@ -1563,10 +1566,10 @@ async function dbDeleteTimeOff(id){
   await sbFetch('DELETE', `/rest/v1/time_off?id=eq.${id}`);
 }
 function isPersonOff(person, dateStr){
-  return timeOffEntries.some(e => e.person === person && dateStr >= e.startDate && dateStr <= e.endDate);
+  return timeOffEntries.some(e => e.person === person && dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved');
 }
 function getOffPeopleOnDate(dateStr){
-  return timeOffEntries.filter(e => dateStr >= e.startDate && dateStr <= e.endDate).map(e => e.person);
+  return timeOffEntries.filter(e => dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved').map(e => e.person);
 }
 
 async function dbSaveWorkOrder(data, id=null){
@@ -2974,25 +2977,39 @@ async function deleteMileageEntry(id){
 // ── TIME OFF UI ──────────────────────────────────────────────
 let editingTimeOffId = null;
 
+function updateTimeOffBadge(){
+  const pending = timeOffEntries.filter(e=>e.status==='Pending').length;
+  const badge = document.getElementById('timeoff-badge');
+  if(badge){ badge.style.display = (pending && isAdmin) ? '' : 'none'; badge.textContent = pending; }
+}
+
 function renderTimeOff(){
   const today = isoDate(new Date());
-  const upcoming = timeOffEntries.filter(e => e.endDate >= today).sort((a,b)=>a.startDate.localeCompare(b.startDate));
-  const past = timeOffEntries.filter(e => e.endDate < today).sort((a,b)=>b.startDate.localeCompare(a.startDate));
+  const TO_ADMIN_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
+  const canApprove = TO_ADMIN_EMAILS.includes((currentUser&&currentUser.email||'').toLowerCase());
+  const myName = getDisplayName(currentUser&&currentUser.email);
+
+  // What this user can see
+  const visible = canApprove ? timeOffEntries : timeOffEntries.filter(e=>e.person===myName||e.requestedBy===myName);
+  const pending = visible.filter(e=>e.status==='Pending').sort((a,b)=>a.startDate.localeCompare(b.startDate));
+  const approved = visible.filter(e=>e.status==='Approved'&&e.endDate>=today).sort((a,b)=>a.startDate.localeCompare(b.startDate));
+  const past = visible.filter(e=>(e.status==='Approved'&&e.endDate<today)||e.status==='Denied').sort((a,b)=>b.startDate.localeCompare(a.startDate));
 
   let html = '';
-  if(isAdmin){
-    html += `<div style="margin-bottom:16px">
-      <button class="btn-save" style="font-size:13px;padding:8px 18px" onclick="openTimeOffForm()">+ Add time off</button>
-    </div>`;
-  }
 
-  // Form (hidden by default)
+  // Request button (everyone)
+  html += `<div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+    <button class="btn-save" style="font-size:13px;padding:8px 18px" onclick="openTimeOffForm()">+ Request Time Off</button>
+  </div>`;
+
+  // Request form (hidden by default)
+  const crewOpts = canApprove ? TIME_OFF_CREW.map(c=>`<option value="${c}">${c}</option>`).join('') : `<option value="${myName}">${myName}</option>`;
   html += `<div id="timeoff-form" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
-    <div style="font-weight:600;margin-bottom:12px" id="timeoff-form-title">Add Time Off</div>
+    <div style="font-weight:600;margin-bottom:12px" id="timeoff-form-title">Request Time Off</div>
     <div class="form-group">
       <label class="form-label">Person</label>
       <select id="to-person" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg)">
-        ${CREW.map(c=>`<option value="${c}">${c}</option>`).join('')}
+        ${crewOpts}
       </select>
     </div>
     <div class="form-group" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -3010,39 +3027,107 @@ function renderTimeOff(){
       <input type="text" id="to-note" placeholder="Vacation, personal, etc." style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
     </div>
     <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="btn-save" onclick="saveTimeOff()">Save</button>
+      <button class="btn-save" onclick="saveTimeOff()">Submit Request</button>
       <button class="btn-cancel" onclick="closeTimeOffForm()">Cancel</button>
       <button class="btn-delete" id="to-delete-btn" style="display:none" onclick="deleteTimeOffEntry()">Remove</button>
     </div>
     <div id="to-error" style="color:#dc2626;font-size:12px;margin-top:8px"></div>
   </div>`;
 
-  function entryHtml(e){
+  function statusBadge(status){
+    if(status==='Approved') return `<span style="font-size:11px;background:#dcfce7;color:#14532d;border-radius:99px;padding:2px 8px;font-weight:600">Approved</span>`;
+    if(status==='Denied') return `<span style="font-size:11px;background:#fee2e2;color:#991b1b;border-radius:99px;padding:2px 8px;font-weight:600">Denied</span>`;
+    return `<span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:99px;padding:2px 8px;font-weight:600">Pending</span>`;
+  }
+
+  function entryHtml(e, showActions){
     const isCurrent = today >= e.startDate && today <= e.endDate;
     const dateRange = e.startDate === e.endDate ? fmtShort(e.startDate) : `${fmtShort(e.startDate)} – ${fmtShort(e.endDate)}`;
-    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)">
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap">
       <div>
         <span style="font-weight:600">${e.person}</span>
-        ${isCurrent?`<span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:99px;padding:2px 8px;margin-left:6px">Out now</span>`:''}
-        <div style="font-size:12px;color:var(--text-3);margin-top:2px">${dateRange}${e.note?` · ${e.note}`:''}</div>
+        ${isCurrent&&e.status==='Approved'?`<span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:99px;padding:2px 8px;margin-left:6px">Out now</span>`:''}
+        <div style="font-size:12px;color:var(--text-3);margin-top:2px">${dateRange}${e.note?` · ${e.note}`:''}${e.requestedBy&&e.requestedBy!==e.person?` · Requested by ${e.requestedBy}`:''}</div>
       </div>
-      ${isAdmin?`<button onclick="openTimeOffForm('${e.id}')" style="background:none;border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">Edit</button>`:''}
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        ${statusBadge(e.status)}
+        ${showActions&&e.status==='Pending'?`
+          <button onclick="approveTimeOff('${e.id}')" style="background:var(--green);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:600">Approve</button>
+          <button onclick="denyTimeOff('${e.id}')" style="background:#ef4444;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:600">Deny</button>
+        `:''}
+        ${canApprove?`<button onclick="openTimeOffForm('${e.id}')" style="background:none;border:1px solid var(--border);border-radius:8px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">Edit</button>`:''}
+      </div>
     </div>`;
   }
 
-  if(upcoming.length){
-    html += `<div style="font-weight:600;margin-bottom:8px;font-size:13px;color:var(--text-2)">UPCOMING & CURRENT</div>`;
-    html += upcoming.map(entryHtml).join('');
-  } else {
-    html += `<div style="color:var(--text-3);font-size:13px;padding:20px 0">No upcoming time off scheduled.</div>`;
+  // ── ADMIN SUMMARY TABLE ──────────────────────────────────────
+  if(canApprove){
+    const allApproved = timeOffEntries.filter(e=>e.status==='Approved');
+    const byPerson = {};
+    allApproved.forEach(e=>{
+      if(!byPerson[e.person]) byPerson[e.person] = 0;
+      // Count calendar days inclusive
+      const start = new Date(e.startDate);
+      const end = new Date(e.endDate);
+      const days = Math.round((end-start)/86400000)+1;
+      byPerson[e.person] += days;
+    });
+    const sorted = Object.entries(byPerson).sort((a,b)=>b[1]-a[1]);
+    if(sorted.length){
+      html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
+        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);margin-bottom:10px">Time Off Summary — All Time</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+          ${sorted.map(([person,days])=>`
+            <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:13px;color:var(--text)">${person}</span>
+              <span style="font-size:16px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${days}d</span>
+            </div>`).join('')}
+        </div>
+      </div>`;
+    }
   }
 
+  // Pending requests
+  if(pending.length){
+    html += `<div style="font-weight:600;margin-bottom:8px;font-size:13px;color:#92400e">PENDING REQUESTS (${pending.length})</div>`;
+    html += pending.map(e=>entryHtml(e, canApprove)).join('');
+  }
+
+  // Approved upcoming
+  if(approved.length){
+    html += `<div style="font-weight:600;margin:${pending.length?'16px':0} 0 8px;font-size:13px;color:var(--text-2)">APPROVED — UPCOMING</div>`;
+    html += approved.map(e=>entryHtml(e, false)).join('');
+  }
+
+  if(!pending.length && !approved.length){
+    html += `<div style="color:var(--text-3);font-size:13px;padding:20px 0">No upcoming time off.</div>`;
+  }
+
+  // Past/Denied
   if(past.length){
-    html += `<div style="margin-top:16px"><button onclick="document.getElementById('past-timeoff').style.display=document.getElementById('past-timeoff').style.display==='none'?'block':'none';this.textContent=this.textContent.includes('Show')?'Hide past time off':'Show past time off (${past.length})';" style="background:none;border:none;color:var(--text-3);font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">Show past time off (${past.length})</button></div>`;
-    html += `<div id="past-timeoff" style="display:none"><div style="font-weight:600;margin:12px 0 8px;font-size:13px;color:var(--text-3)">PAST</div>${past.map(entryHtml).join('')}</div>`;
+    html += `<div style="margin-top:16px"><button onclick="document.getElementById('past-timeoff').style.display=document.getElementById('past-timeoff').style.display==='none'?'block':'none';this.textContent=this.textContent.includes('Show')?'Hide past':'Show past (${past.length})';" style="background:none;border:none;color:var(--text-3);font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">Show past (${past.length})</button></div>`;
+    html += `<div id="past-timeoff" style="display:none">${past.map(e=>entryHtml(e,false)).join('')}</div>`;
   }
 
   document.getElementById('main-content').innerHTML = html;
+}
+
+async function approveTimeOff(id){
+  const e = timeOffEntries.find(x=>x.id===id);
+  if(!e) return;
+  e.status = 'Approved';
+  await dbSaveTimeOff(e, id);
+  updateTimeOffBadge();
+  renderTimeOff();
+}
+
+async function denyTimeOff(id){
+  const e = timeOffEntries.find(x=>x.id===id);
+  if(!e) return;
+  e.status = 'Denied';
+  await dbSaveTimeOff(e, id);
+  updateTimeOffBadge();
+  renderTimeOff();
 }
 
 function openTimeOffForm(id=null){
@@ -3054,15 +3139,14 @@ function openTimeOffForm(id=null){
   if(id){
     const e = timeOffEntries.find(x=>x.id===id);
     if(!e) return;
-    title.textContent = 'Edit Time Off';
+    title.textContent = 'Edit Request';
     document.getElementById('to-person').value = e.person;
     document.getElementById('to-start').value = e.startDate;
     document.getElementById('to-end').value = e.endDate;
     document.getElementById('to-note').value = e.note||'';
     delBtn.style.display = '';
   } else {
-    title.textContent = 'Add Time Off';
-    document.getElementById('to-person').value = CREW[0];
+    title.textContent = 'Request Time Off';
     document.getElementById('to-start').value = '';
     document.getElementById('to-end').value = '';
     document.getElementById('to-note').value = '';
@@ -3087,8 +3171,12 @@ async function saveTimeOff(){
   if(!startDate || !endDate){ errEl.textContent = 'Please set both start and end dates.'; return; }
   if(endDate < startDate){ errEl.textContent = 'End date must be on or after start date.'; return; }
   try {
-    await dbSaveTimeOff({person, startDate, endDate, note}, editingTimeOffId);
+    const existing = editingTimeOffId ? timeOffEntries.find(x=>x.id===editingTimeOffId) : null;
+    const status = existing ? existing.status : 'Pending';
+    const requestedBy = existing ? existing.requestedBy : getDisplayName(currentUser&&currentUser.email);
+    await dbSaveTimeOff({person, startDate, endDate, note, status, requestedBy}, editingTimeOffId);
     await loadTimeOff();
+    updateTimeOffBadge();
     closeTimeOffForm();
     renderTimeOff();
   } catch(e) {
@@ -3430,7 +3518,7 @@ function showApp(){
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff(); loadMileage(); loadPipelines(); loadPO(); startPolling(); });
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); startPolling(); });
   render();
 }
 

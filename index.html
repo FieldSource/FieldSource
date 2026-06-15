@@ -2262,9 +2262,9 @@ function renderConsulting(){
 
   sorted.forEach(proj=>{
     const sc = CONSULTING_STAGE_COLORS[proj.stage]||{bg:'#f1f5f9',text:'#475569'};
-    const pc = PRIORITY_COLORS[proj.priority]||PRIORITY_COLORS['Medium'];
     const totalH = consultingTotalHours(proj);
     const nextDue = proj.stageDueDates[proj.stage];
+    const projOpenTasks = (proj.tasks||[]).filter(t=>!t.done);
 
     html += `<div class="report-card" style="cursor:pointer;border-left:3px solid ${sc.text}" onclick="openConsultingDetail('${proj.id}')">
       <div class="report-card-header">
@@ -2272,7 +2272,7 @@ function renderConsulting(){
           <div class="report-card-title">${proj.client}${proj.projectName?' — '+proj.projectName:''}</div>
           <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
             <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span>
-            ${openTasks.length?`<span style="font-size:11px;color:var(--text-3)">${openTasks.length} task${openTasks.length!==1?'s':''} open</span>`:''}
+            ${projOpenTasks.length?`<span style="font-size:11px;color:var(--text-3)">${projOpenTasks.length} task${projOpenTasks.length!==1?'s':''} open</span>`:''}
             ${nextDue?`<span style="font-size:11px;color:var(--text-3)">Due ${nextDue}</span>`:''}
           </div>
         </div>

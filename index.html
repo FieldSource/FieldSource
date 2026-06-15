@@ -2184,6 +2184,7 @@ async function loadConsulting(){
       notes: r.notes||'',
       stageDueDates: r.stage_due_dates ? (typeof r.stage_due_dates==='string'?JSON.parse(r.stage_due_dates):r.stage_due_dates) : {},
       hoursLog: r.hours_log ? (typeof r.hours_log==='string'?JSON.parse(r.hours_log):r.hours_log) : [],
+      tasks: r.tasks ? (typeof r.tasks==='string'?JSON.parse(r.tasks):r.tasks) : [],
       createdAt: r.created_at||'',
       updatedAt: r.updated_at||'',
     }));
@@ -2195,10 +2196,11 @@ async function dbSaveConsulting(obj, id=null){
     client: obj.client,
     project_name: obj.projectName,
     stage: obj.stage,
-    priority: obj.priority,
+    priority: obj.priority||'',
     notes: obj.notes||'',
     stage_due_dates: JSON.stringify(obj.stageDueDates||{}),
     hours_log: JSON.stringify(obj.hoursLog||[]),
+    tasks: JSON.stringify(obj.tasks||[]),
     updated_at: new Date().toISOString(),
   };
   if(id){
@@ -2226,8 +2228,8 @@ function renderConsulting(){
   const canLogHours = CONSULTING_LOG_EMAILS.includes(userEmail);
 
   // Priority sort: High first, then Medium, then Low
-  const priorityOrder = {High:0,Medium:1,Low:2};
-  const sorted = [...consultingProjects].sort((a,b)=>(priorityOrder[a.priority]||1)-(priorityOrder[b.priority]||1));
+  // Sort by most recent update
+  const sorted = [...consultingProjects].sort((a,b)=>new Date(b.updatedAt)-new Date(a.updatedAt));
 
   // Stats
   const active = consultingProjects.filter(p=>p.stage!=='Post-Presentation').length;
@@ -2259,7 +2261,7 @@ function renderConsulting(){
           <div class="report-card-title">${proj.client}${proj.projectName?' — '+proj.projectName:''}</div>
           <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
             <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span>
-            <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${pc.bg};color:${pc.text}">${proj.priority} Priority</span>
+            ${openTasks.length?`<span style="font-size:11px;color:var(--text-3)">${openTasks.length} task${openTasks.length!==1?'s':''} open</span>`:''}
             ${nextDue?`<span style="font-size:11px;color:var(--text-3)">Due ${nextDue}</span>`:''}
           </div>
         </div>
@@ -2287,53 +2289,92 @@ function renderConsultingDetail(){
   const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes(userEmail);
   const canLogHours = CONSULTING_LOG_EMAILS.includes(userEmail);
   const sc = CONSULTING_STAGE_COLORS[proj.stage]||{bg:'#f1f5f9',text:'#475569'};
-  const pc = PRIORITY_COLORS[proj.priority]||PRIORITY_COLORS['Medium'];
+  const tasks = proj.tasks||[];
+  const openTasks = tasks.filter(t=>!t.done);
+  const doneTasks = tasks.filter(t=>t.done);
 
   let html = `<div style="margin-bottom:12px">
     <button onclick="renderConsulting()" style="background:none;border:none;color:var(--green-dark);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">← Back to projects</button>
   </div>
+
+  <!-- Project Header -->
   <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;border-left:4px solid ${sc.text}">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
       <div>
         <div style="font-size:18px;font-weight:700;color:var(--text)">${proj.client}</div>
         ${proj.projectName?`<div style="font-size:14px;color:var(--text-2);margin-top:2px">${proj.projectName}</div>`:''}
-        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-          <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span>
-          <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${pc.bg};color:${pc.text}">${proj.priority} Priority</span>
-        </div>
+        <div style="margin-top:8px"><span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span></div>
       </div>
-      <div style="display:flex;gap:6px">
-        ${canEdit?`<button class="btn-save" style="font-size:12px;padding:5px 12px" onclick="openConsultingModal('${proj.id}')">Edit</button>`:''}
-        ${canEdit?`<button class="btn-delete" style="font-size:12px;padding:5px 12px" onclick="deleteConsultingProject('${proj.id}')">Delete</button>`:''}
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        ${canEdit?`<button class="btn-save" style="font-size:12px;padding:5px 12px" onclick="openConsultingModal('${proj.id}')">Edit Project</button>`:''}
       </div>
     </div>
     ${proj.notes?`<div style="margin-top:10px;font-size:13px;color:var(--text-2);border-top:1px solid var(--border);padding-top:10px">${proj.notes}</div>`:''}
   </div>
 
-  <!-- Stage progress -->
+  <!-- Stage Progress -->
   <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
     <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);margin-bottom:12px">Stage Progress</div>
     ${CONSULTING_STAGES.map(stage=>{
       const isActive = stage===proj.stage;
       const isDone = CONSULTING_STAGES.indexOf(stage) < CONSULTING_STAGES.indexOf(proj.stage);
       const stageHrs = consultingTotalHours(proj, stage);
-      const due = proj.stageDueDates[stage];
+      const due = proj.stageDueDates&&proj.stageDueDates[stage];
       const sc2 = CONSULTING_STAGE_COLORS[stage];
+      const stageTasks = tasks.filter(t=>t.stage===stage);
+      const doneCount = stageTasks.filter(t=>t.done).length;
       return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
         <div style="width:20px;height:20px;border-radius:50%;border:2px solid ${isDone?'var(--green)':isActive?sc2.text:'var(--border)'};background:${isDone?'var(--green)':isActive?sc2.bg:'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
           ${isDone?'<span style="color:#fff;font-size:11px">✓</span>':''}
         </div>
         <div style="flex:1">
           <div style="font-size:13px;font-weight:${isActive?'600':'400'};color:${isActive?'var(--text)':'var(--text-3)'}">${stage}</div>
-          ${due?`<div style="font-size:11px;color:var(--text-3)">Due ${due}</div>`:''}
+          <div style="font-size:11px;color:var(--text-3)">${due?'Due '+due:''}${stageTasks.length?' · '+doneCount+'/'+stageTasks.length+' tasks':''}</div>
         </div>
         <div style="font-size:13px;font-weight:600;color:var(--green-dark);font-family:'DM Mono',monospace">${stageHrs>0?stageHrs.toFixed(1)+'h':''}</div>
-        ${canEdit&&isActive?`<button onclick="advanceConsultingStage('${proj.id}')" style="font-size:11px;padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit">Advance →</button>`:''}
+        ${canEdit&&isActive?`<button onclick="advanceConsultingStage('${proj.id}')" style="font-size:11px;padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">Advance →</button>`:''}
       </div>`;
     }).join('')}
   </div>
 
-  <!-- Hours breakdown -->
+  <!-- Tasks -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Tasks (${openTasks.length} open)</div>
+      ${canEdit?`<button onclick="openConsultingTaskModal('${proj.id}')" style="font-size:12px;padding:4px 10px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit;font-weight:600">+ Add Task</button>`:''}
+    </div>
+    ${openTasks.length===0&&doneTasks.length===0?'<div style="font-size:13px;color:var(--text-3);padding:8px 0">No tasks yet.</div>':''}
+    ${openTasks.map(t=>{
+      const pc = PRIORITY_COLORS[t.priority]||PRIORITY_COLORS['Medium'];
+      const isOverdue = t.dueDate && t.dueDate < new Date().toISOString().split('T')[0];
+      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <input type="checkbox" onchange="toggleConsultingTask('${proj.id}','${t.id}',this.checked)" style="margin-top:3px;flex-shrink:0;cursor:pointer">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:500;color:var(--text)">${t.title}</div>
+          <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+            <span style="font-size:10px;font-weight:600;border-radius:99px;padding:1px 7px;background:${pc.bg};color:${pc.text}">${t.priority}</span>
+            <span style="font-size:10px;color:var(--text-3)">${t.stage}</span>
+            ${t.dueDate?`<span style="font-size:10px;color:${isOverdue?'#dc2626':'var(--text-3)'};font-weight:${isOverdue?'600':'400'}">${isOverdue?'⚠ Overdue: ':''} ${t.dueDate}</span>`:''}
+          </div>
+          ${t.notes?`<div style="font-size:11px;color:var(--text-2);margin-top:3px">${t.notes}</div>`:''}
+        </div>
+        ${canEdit?`<button onclick="openConsultingTaskModal('${proj.id}','${t.id}')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;flex-shrink:0">Edit</button>`:''}
+      </div>`;
+    }).join('')}
+    ${doneTasks.length?`
+    <div style="margin-top:8px">
+      <button onclick="document.getElementById('done-tasks').style.display=document.getElementById('done-tasks').style.display==='none'?'block':'none'" style="background:none;border:none;color:var(--text-3);font-size:12px;cursor:pointer;font-family:inherit;text-decoration:underline">Show completed (${doneTasks.length})</button>
+      <div id="done-tasks" style="display:none">
+        ${doneTasks.map(t=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);opacity:0.6">
+          <input type="checkbox" checked onchange="toggleConsultingTask('${proj.id}','${t.id}',this.checked)" style="flex-shrink:0;cursor:pointer">
+          <div style="flex:1;font-size:13px;color:var(--text-2);text-decoration:line-through">${t.title}</div>
+          <span style="font-size:10px;color:var(--text-3)">${t.stage}</span>
+        </div>`).join('')}
+      </div>
+    </div>`:''}
+  </div>
+
+  <!-- Hours Log -->
   <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Hours Log</div>
@@ -2350,7 +2391,7 @@ function renderConsultingDetail(){
         </div>
         <div>
           <label class="form-label">Hours</label>
-          <input type="number" id="ch-hours" placeholder="e.g. 2.5" step="0.5" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+          <input type="number" id="ch-hours" placeholder="e.g. 2.5" step="0.5" min="0.5" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
         </div>
         <div>
           <label class="form-label">Date</label>
@@ -2363,7 +2404,7 @@ function renderConsultingDetail(){
       </div>
       <button onclick="logConsultingHours('${proj.id}')" style="margin-top:8px;padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">+ Log Hours</button>
     </div>`:''}
-    ${[...( proj.hoursLog||[])].reverse().map(e=>`
+    ${[...(proj.hoursLog||[])].reverse().map(e=>`
       <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
         <div>
           <div style="font-weight:500;color:var(--text)">${e.loggedBy||''}${e.note?' — '+e.note:''}</div>
@@ -2375,6 +2416,94 @@ function renderConsultingDetail(){
 
   document.getElementById('main-content').innerHTML = html;
 }
+
+// Task modal
+function openConsultingTaskModal(projId, taskId=null){
+  const proj = consultingProjects.find(p=>p.id===projId);
+  if(!proj) return;
+  const task = taskId ? (proj.tasks||[]).find(t=>t.id===taskId) : null;
+  const stageOpts = CONSULTING_STAGES.map(s=>`<option value="${s}"${task&&task.stage===s?' selected':s===proj.stage&&!task?' selected':''}>${s}</option>`).join('');
+  const prioOpts = ['High','Medium','Low'].map(p=>`<option value="${p}"${task&&task.priority===p?' selected':p==='Medium'&&!task?' selected':''}>${p}</option>`).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'ctask-overlay';
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${task?'Edit Task':'Add Task'}</div>
+    <div class="form-group">
+      <label class="form-label">Task Title *</label>
+      <input type="text" id="ct-title" placeholder="e.g. Complete site survey, Deliver report draft" value="${task?task.title:''}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">Stage</label>
+        <select id="ct-stage">${stageOpts}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Priority</label>
+        <select id="ct-priority">${prioOpts}</select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Due Date</label>
+      <input type="date" id="ct-due" value="${task&&task.dueDate?task.dueDate:''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <input type="text" id="ct-notes" placeholder="Additional details..." value="${task&&task.notes?task.notes:''}">
+    </div>
+    <div id="ct-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      ${task?`<button class="btn-delete" onclick="deleteConsultingTask('${projId}','${taskId}')">Delete</button>`:''}
+      <button class="btn-cancel" onclick="document.getElementById('ctask-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveConsultingTask('${projId}','${taskId||''}')">Save Task</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveConsultingTask(projId, taskId){
+  const proj = consultingProjects.find(p=>p.id===projId);
+  if(!proj) return;
+  const title = document.getElementById('ct-title').value.trim();
+  const stage = document.getElementById('ct-stage').value;
+  const priority = document.getElementById('ct-priority').value;
+  const dueDate = document.getElementById('ct-due').value;
+  const notes = document.getElementById('ct-notes').value.trim();
+  if(!title){ document.getElementById('ct-error').textContent='Title is required.'; return; }
+  const btn = document.querySelector('#ctask-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  if(taskId){
+    const t = (proj.tasks||[]).find(x=>x.id===taskId);
+    if(t) Object.assign(t,{title,stage,priority,dueDate,notes});
+  } else {
+    proj.tasks = [...(proj.tasks||[]), {id: Date.now().toString(), title, stage, priority, dueDate, notes, done:false, createdAt:new Date().toISOString()}];
+  }
+  await dbSaveConsulting(proj, projId);
+  document.getElementById('ctask-overlay').remove();
+  renderConsultingDetail();
+}
+
+async function deleteConsultingTask(projId, taskId){
+  const proj = consultingProjects.find(p=>p.id===projId);
+  if(!proj) return;
+  proj.tasks = (proj.tasks||[]).filter(t=>t.id!==taskId);
+  await dbSaveConsulting(proj, projId);
+  document.getElementById('ctask-overlay').remove();
+  renderConsultingDetail();
+}
+
+async function toggleConsultingTask(projId, taskId, done){
+  const proj = consultingProjects.find(p=>p.id===projId);
+  if(!proj) return;
+  const t = (proj.tasks||[]).find(x=>x.id===taskId);
+  if(t){ t.done=done; t.completedAt=done?new Date().toISOString():null; }
+  await dbSaveConsulting(proj, projId);
+  renderConsultingDetail();
+}
+
 
 async function logConsultingHours(id){
   const proj = consultingProjects.find(p=>p.id===id);
@@ -2430,15 +2559,9 @@ function openConsultingModal(id=null){
       <label class="form-label">Project Name</label>
       <input type="text" id="cp-name" placeholder="e.g. Laser Grade Survey, Turf Feasibility Study" value="${proj?proj.projectName:''}">
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="form-group">
-        <label class="form-label">Current Stage</label>
-        <select id="cp-stage">${stageOpts}</select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Priority</label>
-        <select id="cp-priority">${prioOpts}</select>
-      </div>
+    <div class="form-group">
+      <label class="form-label">Current Stage</label>
+      <select id="cp-stage">${stageOpts}</select>
     </div>
     <div class="form-group">
       <label class="form-label">Due Dates by Stage</label>
@@ -2465,7 +2588,7 @@ async function saveConsultingProject(id){
   const client = document.getElementById('cp-client').value.trim();
   const projectName = document.getElementById('cp-name').value.trim();
   const stage = document.getElementById('cp-stage').value;
-  const priority = document.getElementById('cp-priority').value;
+  const priority = '';
   const notes = document.getElementById('cp-notes').value.trim();
   const errEl = document.getElementById('cp-error');
   if(!client){ errEl.textContent='Client name is required.'; return; }

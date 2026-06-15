@@ -2182,9 +2182,9 @@ async function loadConsulting(){
       stage: r.stage||'Site Discovery',
       priority: r.priority||'Medium',
       notes: r.notes||'',
-      stageDueDates: r.stage_due_dates ? (typeof r.stage_due_dates==='string'?JSON.parse(r.stage_due_dates):r.stage_due_dates) : {},
-      hoursLog: r.hours_log ? (typeof r.hours_log==='string'?JSON.parse(r.hours_log):r.hours_log) : [],
-      tasks: r.tasks ? (typeof r.tasks==='string'?JSON.parse(r.tasks):r.tasks) : [],
+      stageDueDates: r.stage_due_dates || {},
+      hoursLog: r.hours_log || [],
+      tasks: r.tasks || [],
       createdAt: r.created_at||'',
       updatedAt: r.updated_at||'',
     }));
@@ -2198,9 +2198,9 @@ async function dbSaveConsulting(obj, id=null){
     stage: obj.stage,
     priority: obj.priority||'',
     notes: obj.notes||'',
-    stage_due_dates: JSON.stringify(obj.stageDueDates||{}),
-    hours_log: JSON.stringify(obj.hoursLog||[]),
-    tasks: JSON.stringify(obj.tasks||[]),
+    stage_due_dates: obj.stageDueDates||{},
+    hours_log: obj.hoursLog||[],
+    tasks: obj.tasks||[],
     updated_at: new Date().toISOString(),
   };
   if(id){

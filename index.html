@@ -287,7 +287,10 @@ main{padding:12px 16px 100px}
     </div>
     <div class="login-field">
       <label class="login-label">Password</label>
-      <input class="login-input" type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+      <div style="position:relative">
+        <input class="login-input" type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()" style="padding-right:40px">
+        <button type="button" onclick="togglePwVisible('login-password',this)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);font-size:16px;padding:4px">👁</button>
+      </div>
     </div>
     <button class="login-btn" id="login-btn" onclick="doLogin()">Sign in</button>
     <div class="login-error" id="login-error"></div>
@@ -4350,6 +4353,13 @@ let isAdmin = false;
 let isScheduler = false;  // can add jobs + reports + own mileage
 let isReportOnly = false; // reports only
 
+function togglePwVisible(inputId, btn){
+  const inp = document.getElementById(inputId);
+  if(!inp) return;
+  inp.type = inp.type==='password' ? 'text' : 'password';
+  btn.textContent = inp.type==='password' ? '👁' : '🙈';
+}
+
 async function doLogin(){
   const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value;
@@ -4372,9 +4382,9 @@ async function doLogin(){
     isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
-    sessionStorage.setItem('fs_token', currentToken);
+    localStorage.setItem('fs_token', currentToken);
     sessionStorage.setItem('fs_refresh', refreshToken);
-    sessionStorage.setItem('fs_user', JSON.stringify(currentUser));
+    localStorage.setItem('fs_user', JSON.stringify(currentUser));
     showApp();
   } catch(e){
     errEl.textContent = 'Connection error. Please try again.';
@@ -4383,8 +4393,8 @@ async function doLogin(){
 }
 
 function doLogout(){
-  sessionStorage.removeItem('fs_token');
-  sessionStorage.removeItem('fs_user');
+  localStorage.removeItem('fs_token');
+  localStorage.removeItem('fs_user');
   currentUser = null; currentToken = null; isAdmin = false; isScheduler = false; isReportOnly = false;
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('main-header').style.display = 'none';
@@ -4521,7 +4531,7 @@ async function refreshSession(){
     if(!res.ok || data.error){ doLogout(); return; }
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    sessionStorage.setItem('fs_token', currentToken);
+    localStorage.setItem('fs_token', currentToken);
     sessionStorage.setItem('fs_refresh', refreshToken);
   } catch(e){ console.warn('Token refresh failed', e); }
 }
@@ -4703,8 +4713,8 @@ async function doResetPassword(){
     isAdmin = ADMIN_EMAILS.includes((currentUser.email||'').toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes((currentUser.email||'').toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes((currentUser.email||'').toLowerCase());
-    sessionStorage.setItem('fs_token', currentToken);
-    sessionStorage.setItem('fs_user', JSON.stringify(currentUser));
+    localStorage.setItem('fs_token', currentToken);
+    localStorage.setItem('fs_user', JSON.stringify(currentUser));
     resetAccessToken = null;
     history.replaceState(null, '', window.location.pathname);
     setTimeout(()=>{ document.getElementById('reset-screen').style.display='none'; showApp(); }, 1200);

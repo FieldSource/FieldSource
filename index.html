@@ -2154,11 +2154,18 @@ function setView(v){
   const trackerIdx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,hours:8,workorders:9};
   const bizopsIdx={pipeline:0,po:1};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
-  document.querySelectorAll('.vtab')[idx[v]].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours';
-  document.getElementById('legend-bar').style.display=(v==='equipment'||hideNav)?'none':'flex';
-  document.querySelector('.nav-row').style.display=hideNav?'none':'flex';
-  render();
+  // Find the right bar and highlight correct tab
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po'].includes(v)?'bizops-bar':'consulting-bar';
+  const bar = document.getElementById(barId);
+  const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
+  const localIdx = allIdx[v];
+  if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home';
+  const legendBar = document.getElementById('legend-bar');
+  const navRow = document.querySelector('.nav-row');
+  if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
+  if(navRow && currentPortal==='tracker') navRow.style.display=hideNav?'none':'flex';
+  requestAnimationFrame(()=>render());
 }
 function navBack(){
   if(view==='equipment') equipOffset--;

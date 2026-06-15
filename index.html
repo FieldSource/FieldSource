@@ -2258,7 +2258,7 @@ function consultingTotalHours(proj, stage=null){
 function renderConsulting(){
   consultingView = 'board';
   const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
-  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes(userEmail);
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com'].includes(userEmail);
   const canLogHours = CONSULTING_LOG_EMAILS.includes(userEmail);
 
   // Priority sort: High first, then Medium, then Low
@@ -2320,7 +2320,7 @@ function renderConsultingDetail(){
   if(!proj){ renderConsulting(); return; }
   consultingView = 'detail';
   const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
-  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes(userEmail);
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com'].includes(userEmail);
   const canLogHours = CONSULTING_LOG_EMAILS.includes(userEmail);
   const sc = CONSULTING_STAGE_COLORS[proj.stage]||{bg:'#f1f5f9',text:'#475569'};
   const tasks = proj.tasks||[];

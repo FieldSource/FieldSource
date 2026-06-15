@@ -388,15 +388,15 @@ main{padding:12px 16px 100px}
 
 <div class="view-bar" id="bizops-bar" style="display:none">
   <div class="view-bar-row">
-    <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');renderPipeline()">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
-    <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');renderPO()">PO Tracker</button>
-    <button class="vtab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');loadCosts().then(()=>renderCosts())">Direct Costs</button>
+    <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPipeline()">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPO()">PO Tracker</button>
+    <button class="vtab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts())">Direct Costs</button>
   </div>
 </div>
 
 <div class="view-bar" id="consulting-bar" style="display:none">
   <div class="view-bar-row">
-    <button class="vtab" onclick="view='consulting-home';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');renderConsulting()">Overview</button>
+    <button class="vtab" onclick="view='consulting-home';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderConsulting()">Overview</button>
   </div>
 </div>
 

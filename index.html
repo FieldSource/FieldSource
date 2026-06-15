@@ -2629,7 +2629,7 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po'].includes(v)?'bizops-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs'].includes(v)?'bizops-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];

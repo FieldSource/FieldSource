@@ -2157,7 +2157,13 @@ function setPortal(portal){
     loadPipelines().then(()=>{ loadPO().then(()=>{ loadCosts().then(()=>setView('pipeline')); }); });
   }
   else if(portal==='consulting'){
-    loadConsulting().then(()=>setView('consulting-home'));
+    loadConsulting().then(()=>{
+      view='consulting-home';
+      document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
+      const bar = document.getElementById('consulting-bar');
+      if(bar) { const tabs = bar.querySelectorAll('.vtab'); if(tabs[0]) tabs[0].classList.add('active'); }
+      renderConsulting();
+    });
   }
 }
 

@@ -534,6 +534,9 @@ let hoursRangeStart = '';
 let hoursRangeEnd = '';
 let hoursExpandedClient = null;
 let poEntries = [];
+let consultingProjects = [];
+let consultingView = 'board'; // 'board' or 'detail'
+let consultingDetailId = null;
 let poStatusFilter = 'All';
 let poCatFilter = 'All';
 let plStageFilter = 'All';
@@ -1793,14 +1796,346 @@ function setPortal(portal){
   else if(portal==='consulting') setView('consulting-home');
 }
 
-function renderConsulting(){
-  document.getElementById('main-content').innerHTML = `
-    <div style="text-align:center;padding:60px 24px">
-      <div style="font-size:48px;margin-bottom:16px;opacity:0.3">🏗️</div>
-      <div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:8px">Consulting Portal</div>
-      <div style="font-size:14px;color:var(--text-3);max-width:400px;margin:0 auto">This section is being built for Brian and the landscape architecture team. Check back soon.</div>
-    </div>`;
+
+// ── CONSULTING PORTAL ─────────────────────────────────────────
+const CONSULTING_STAGES = ['Site Discovery','Data Capture & Processing','Client Presentation','Post-Presentation'];
+const CONSULTING_STAGE_COLORS = {
+  'Site Discovery':           {bg:'#dbeafe',text:'#1d4ed8'},
+  'Data Capture & Processing':{bg:'#ede9fe',text:'#6d28d9'},
+  'Client Presentation':      {bg:'#fef3c7',text:'#92400e'},
+  'Post-Presentation':        {bg:'#dcfce7',text:'#14532d'},
+};
+const PRIORITY_COLORS = {
+  'High':   {bg:'#fee2e2',text:'#991b1b'},
+  'Medium': {bg:'#fef3c7',text:'#92400e'},
+  'Low':    {bg:'#f1f5f9',text:'#475569'},
+};
+const CONSULTING_LOG_EMAILS = ['ryan@fieldsourceohio.com','brian@fieldsourceohio.com','jake@fieldsourceohio.com','matt@fieldsourceohio.com'];
+
+async function loadConsulting(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/consulting_projects?select=*&order=created_at.desc');
+    consultingProjects = (data||[]).map(r=>({
+      id: String(r.id),
+      client: r.client||'',
+      projectName: r.project_name||'',
+      stage: r.stage||'Site Discovery',
+      priority: r.priority||'Medium',
+      notes: r.notes||'',
+      stageDueDates: r.stage_due_dates ? (typeof r.stage_due_dates==='string'?JSON.parse(r.stage_due_dates):r.stage_due_dates) : {},
+      hoursLog: r.hours_log ? (typeof r.hours_log==='string'?JSON.parse(r.hours_log):r.hours_log) : [],
+      createdAt: r.created_at||'',
+      updatedAt: r.updated_at||'',
+    }));
+  } catch(e){ console.warn('Consulting load failed:', e); consultingProjects=[]; }
 }
+
+async function dbSaveConsulting(obj, id=null){
+  const row = {
+    client: obj.client,
+    project_name: obj.projectName,
+    stage: obj.stage,
+    priority: obj.priority,
+    notes: obj.notes||'',
+    stage_due_dates: JSON.stringify(obj.stageDueDates||{}),
+    hours_log: JSON.stringify(obj.hoursLog||[]),
+    updated_at: new Date().toISOString(),
+  };
+  if(id){
+    await sbFetch('PATCH', `/rest/v1/consulting_projects?id=eq.${id}`, row);
+  } else {
+    row.created_at = new Date().toISOString();
+    const result = await sbFetch('POST', '/rest/v1/consulting_projects', row);
+    return result && result[0] ? String(result[0].id) : null;
+  }
+}
+
+async function dbDeleteConsulting(id){
+  await sbFetch('DELETE', `/rest/v1/consulting_projects?id=eq.${id}`);
+}
+
+function consultingTotalHours(proj, stage=null){
+  const log = proj.hoursLog||[];
+  return log.filter(e=>!stage||e.stage===stage).reduce((s,e)=>s+(Number(e.hours)||0),0);
+}
+
+function renderConsulting(){
+  consultingView = 'board';
+  const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes(userEmail);
+  const canLogHours = CONSULTING_LOG_EMAILS.includes(userEmail);
+
+  // Priority sort: High first, then Medium, then Low
+  const priorityOrder = {High:0,Medium:1,Low:2};
+  const sorted = [...consultingProjects].sort((a,b)=>(priorityOrder[a.priority]||1)-(priorityOrder[b.priority]||1));
+
+  // Stats
+  const active = consultingProjects.filter(p=>p.stage!=='Post-Presentation').length;
+  const totalHrs = consultingProjects.reduce((s,p)=>s+consultingTotalHours(p),0);
+
+  let html = `<div class="stats-bar" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+    <div class="stat-card"><div class="stat-num">${consultingProjects.length}</div><div class="stat-label">Projects</div></div>
+    <div class="stat-card"><div class="stat-num">${active}</div><div class="stat-label">Active</div></div>
+    <div class="stat-card"><div class="stat-num">${totalHrs.toFixed(1)}</div><div class="stat-label">Total Hours</div></div>
+  </div>`;
+
+  html += `<div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+    ${canEdit?`<button class="btn-save" style="font-size:12px;padding:5px 14px" onclick="openConsultingModal()">+ Add Project</button>`:''}
+  </div>`;
+
+  if(!sorted.length){
+    html += `<div style="text-align:center;padding:48px;color:var(--text-3);font-size:14px">No consulting projects yet.</div>`;
+  }
+
+  sorted.forEach(proj=>{
+    const sc = CONSULTING_STAGE_COLORS[proj.stage]||{bg:'#f1f5f9',text:'#475569'};
+    const pc = PRIORITY_COLORS[proj.priority]||PRIORITY_COLORS['Medium'];
+    const totalH = consultingTotalHours(proj);
+    const nextDue = proj.stageDueDates[proj.stage];
+
+    html += `<div class="report-card" style="cursor:pointer;border-left:3px solid ${sc.text}" onclick="openConsultingDetail('${proj.id}')">
+      <div class="report-card-header">
+        <div style="flex:1">
+          <div class="report-card-title">${proj.client}${proj.projectName?' — '+proj.projectName:''}</div>
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span>
+            <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${pc.bg};color:${pc.text}">${proj.priority} Priority</span>
+            ${nextDue?`<span style="font-size:11px;color:var(--text-3)">Due ${nextDue}</span>`:''}
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:18px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${totalH.toFixed(1)}<span style="font-size:11px;font-weight:400;color:var(--text-3)"> hrs</span></div>
+        </div>
+      </div>
+      ${proj.notes?`<div style="font-size:12px;color:var(--text-2);margin-top:6px;border-top:1px solid var(--border);padding-top:6px">${proj.notes}</div>`:''}
+    </div>`;
+  });
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
+function openConsultingDetail(id){
+  consultingDetailId = id;
+  renderConsultingDetail();
+}
+
+function renderConsultingDetail(){
+  const proj = consultingProjects.find(p=>p.id===consultingDetailId);
+  if(!proj){ renderConsulting(); return; }
+  consultingView = 'detail';
+  const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes(userEmail);
+  const canLogHours = CONSULTING_LOG_EMAILS.includes(userEmail);
+  const sc = CONSULTING_STAGE_COLORS[proj.stage]||{bg:'#f1f5f9',text:'#475569'};
+  const pc = PRIORITY_COLORS[proj.priority]||PRIORITY_COLORS['Medium'];
+
+  let html = `<div style="margin-bottom:12px">
+    <button onclick="renderConsulting()" style="background:none;border:none;color:var(--green-dark);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">← Back to projects</button>
+  </div>
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;border-left:4px solid ${sc.text}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:var(--text)">${proj.client}</div>
+        ${proj.projectName?`<div style="font-size:14px;color:var(--text-2);margin-top:2px">${proj.projectName}</div>`:''}
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+          <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span>
+          <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${pc.bg};color:${pc.text}">${proj.priority} Priority</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        ${canEdit?`<button class="btn-save" style="font-size:12px;padding:5px 12px" onclick="openConsultingModal('${proj.id}')">Edit</button>`:''}
+        ${canEdit?`<button class="btn-delete" style="font-size:12px;padding:5px 12px" onclick="deleteConsultingProject('${proj.id}')">Delete</button>`:''}
+      </div>
+    </div>
+    ${proj.notes?`<div style="margin-top:10px;font-size:13px;color:var(--text-2);border-top:1px solid var(--border);padding-top:10px">${proj.notes}</div>`:''}
+  </div>
+
+  <!-- Stage progress -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+    <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);margin-bottom:12px">Stage Progress</div>
+    ${CONSULTING_STAGES.map(stage=>{
+      const isActive = stage===proj.stage;
+      const isDone = CONSULTING_STAGES.indexOf(stage) < CONSULTING_STAGES.indexOf(proj.stage);
+      const stageHrs = consultingTotalHours(proj, stage);
+      const due = proj.stageDueDates[stage];
+      const sc2 = CONSULTING_STAGE_COLORS[stage];
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="width:20px;height:20px;border-radius:50%;border:2px solid ${isDone?'var(--green)':isActive?sc2.text:'var(--border)'};background:${isDone?'var(--green)':isActive?sc2.bg:'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          ${isDone?'<span style="color:#fff;font-size:11px">✓</span>':''}
+        </div>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:${isActive?'600':'400'};color:${isActive?'var(--text)':'var(--text-3)'}">${stage}</div>
+          ${due?`<div style="font-size:11px;color:var(--text-3)">Due ${due}</div>`:''}
+        </div>
+        <div style="font-size:13px;font-weight:600;color:var(--green-dark);font-family:'DM Mono',monospace">${stageHrs>0?stageHrs.toFixed(1)+'h':''}</div>
+        ${canEdit&&isActive?`<button onclick="advanceConsultingStage('${proj.id}')" style="font-size:11px;padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit">Advance →</button>`:''}
+      </div>`;
+    }).join('')}
+  </div>
+
+  <!-- Hours breakdown -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Hours Log</div>
+      <div style="font-size:18px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${consultingTotalHours(proj).toFixed(1)} total hrs</div>
+    </div>
+    ${canLogHours?`<div style="background:var(--accent);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px">Log Hours</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div>
+          <label class="form-label">Stage</label>
+          <select id="ch-stage" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg)">
+            ${CONSULTING_STAGES.map(s=>`<option value="${s}"${s===proj.stage?' selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Hours</label>
+          <input type="number" id="ch-hours" placeholder="e.g. 2.5" step="0.5" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        </div>
+        <div>
+          <label class="form-label">Date</label>
+          <input type="date" id="ch-date" value="${new Date().toISOString().split('T')[0]}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-top:6px">
+        <label class="form-label">Note (optional)</label>
+        <input type="text" id="ch-note" placeholder="What did you work on?" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <button onclick="logConsultingHours('${proj.id}')" style="margin-top:8px;padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">+ Log Hours</button>
+    </div>`:''}
+    ${[...( proj.hoursLog||[])].reverse().map(e=>`
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <div>
+          <div style="font-weight:500;color:var(--text)">${e.loggedBy||''}${e.note?' — '+e.note:''}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.date} · ${e.stage}</div>
+        </div>
+        <div style="font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace;flex-shrink:0">${Number(e.hours).toFixed(1)}h</div>
+      </div>`).join('') || '<div style="font-size:13px;color:var(--text-3);padding:8px 0">No hours logged yet.</div>'}
+  </div>`;
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
+async function logConsultingHours(id){
+  const proj = consultingProjects.find(p=>p.id===id);
+  if(!proj) return;
+  const stage = document.getElementById('ch-stage').value;
+  const hours = parseFloat(document.getElementById('ch-hours').value);
+  const date = document.getElementById('ch-date').value;
+  const note = document.getElementById('ch-note').value.trim();
+  if(!hours||hours<=0){ alert('Please enter valid hours.'); return; }
+  const loggedBy = getDisplayName(currentUser&&currentUser.email);
+  proj.hoursLog = [...(proj.hoursLog||[]), {ts:new Date().toISOString(), date, stage, hours, note, loggedBy}];
+  await dbSaveConsulting(proj, id);
+  renderConsultingDetail();
+}
+
+async function advanceConsultingStage(id){
+  const proj = consultingProjects.find(p=>p.id===id);
+  if(!proj) return;
+  const idx = CONSULTING_STAGES.indexOf(proj.stage);
+  if(idx < CONSULTING_STAGES.length-1){
+    proj.stage = CONSULTING_STAGES[idx+1];
+    proj.updatedAt = new Date().toISOString();
+    await dbSaveConsulting(proj, id);
+    renderConsultingDetail();
+  }
+}
+
+async function deleteConsultingProject(id){
+  if(!confirm('Delete this project? This cannot be undone.')) return;
+  await dbDeleteConsulting(id);
+  consultingProjects = consultingProjects.filter(p=>p.id!==id);
+  renderConsulting();
+}
+
+function openConsultingModal(id=null){
+  const proj = id ? consultingProjects.find(p=>p.id===id) : null;
+  const isNew = !proj;
+  const stageOpts = CONSULTING_STAGES.map(s=>`<option value="${s}"${proj&&proj.stage===s?' selected':''}>${s}</option>`).join('');
+  const prioOpts = ['High','Medium','Low'].map(p=>`<option value="${p}"${proj&&proj.priority===p?' selected':''}>${p}</option>`).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'consulting-overlay';
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${isNew?'New Consulting Project':'Edit Project'}</div>
+    <div class="form-group">
+      <label class="form-label">Client *</label>
+      <input type="text" id="cp-client" placeholder="Client name" value="${proj?proj.client:''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Project Name</label>
+      <input type="text" id="cp-name" placeholder="e.g. Laser Grade Survey, Turf Feasibility Study" value="${proj?proj.projectName:''}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">Current Stage</label>
+        <select id="cp-stage">${stageOpts}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Priority</label>
+        <select id="cp-priority">${prioOpts}</select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Due Dates by Stage</label>
+      ${CONSULTING_STAGES.map(s=>`
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;align-items:center">
+          <div style="font-size:12px;color:var(--text-2)">${s}</div>
+          <input type="date" id="cp-due-${s.replace(/\s+/g,'-')}" value="${proj&&proj.stageDueDates&&proj.stageDueDates[s]?proj.stageDueDates[s]:''}" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;background:var(--bg)">
+        </div>`).join('')}
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <textarea id="cp-notes" rows="3" placeholder="Project details, context..." style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);resize:vertical;box-sizing:border-box">${proj?proj.notes:''}</textarea>
+    </div>
+    <div id="cp-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('consulting-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveConsultingProject('${id||''}')">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveConsultingProject(id){
+  const client = document.getElementById('cp-client').value.trim();
+  const projectName = document.getElementById('cp-name').value.trim();
+  const stage = document.getElementById('cp-stage').value;
+  const priority = document.getElementById('cp-priority').value;
+  const notes = document.getElementById('cp-notes').value.trim();
+  const errEl = document.getElementById('cp-error');
+  if(!client){ errEl.textContent='Client name is required.'; return; }
+  // Collect due dates
+  const stageDueDates = {};
+  CONSULTING_STAGES.forEach(s=>{
+    const val = document.getElementById('cp-due-'+s.replace(/\s+/g,'-'));
+    if(val&&val.value) stageDueDates[s]=val.value;
+  });
+  const btn = document.querySelector('#consulting-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  try{
+    if(id){
+      const proj = consultingProjects.find(p=>p.id===id);
+      Object.assign(proj,{client,projectName,stage,priority,notes,stageDueDates,updatedAt:new Date().toISOString()});
+      await dbSaveConsulting(proj,id);
+    } else {
+      const newP = {client,projectName,stage,priority,notes,stageDueDates,hoursLog:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+      const newId = await dbSaveConsulting(newP);
+      if(newId){ newP.id=newId; consultingProjects.unshift(newP); }
+    }
+    document.getElementById('consulting-overlay').remove();
+    if(consultingView==='detail') renderConsultingDetail();
+    else renderConsulting();
+  } catch(e){
+    errEl.textContent='Error saving. Please try again.';
+    btn.disabled=false; btn.textContent='Save';
+  }
+}
+
 
 function setView(v){
   view=v;
@@ -1840,6 +2175,7 @@ function render(){
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();
+  else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
 }
 
@@ -3555,7 +3891,7 @@ function showApp(){
   // Show pipeline tab only for Jake and Ryan
   const plTab2 = document.getElementById('pipeline-tab');
   const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
-  const CONSULTING_EMAILS = [...PORTAL_EMAILS, 'brian@fieldsourceohio.com'];
+  const CONSULTING_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com'];
   const userEmail = (currentUser.email||'').toLowerCase();
   // Show portal bar
   document.getElementById('portal-bar').style.display = '';
@@ -3582,7 +3918,7 @@ function showApp(){
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); startPolling(); });
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); startPolling(); });
   render();
 }
 

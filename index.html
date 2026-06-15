@@ -2149,12 +2149,16 @@ function setPortal(portal){
   if(legendBar) legendBar.style.display = portal==='tracker' ? '' : 'none';
   // Clear main content when switching away from tracker so old view doesn't show
   if(portal !== 'tracker'){
-    document.getElementById('main-content').innerHTML = '';
+    document.getElementById('main-content').innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-3)">Loading...</div>';
   }
   // Navigate to default view for portal
   if(portal==='tracker') setView('week');
-  else if(portal==='bizops') setView('pipeline');
-  else if(portal==='consulting') setView('consulting-home');
+  else if(portal==='bizops'){
+    loadPipelines().then(()=>{ loadPO().then(()=>{ loadCosts().then(()=>setView('pipeline')); }); });
+  }
+  else if(portal==='consulting'){
+    loadConsulting().then(()=>setView('consulting-home'));
+  }
 }
 
 

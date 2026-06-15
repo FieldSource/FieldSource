@@ -1034,9 +1034,8 @@ async function dbDeleteCost(id){
   await sbFetch('DELETE', `/rest/v1/direct_costs?id=eq.${id}`);
 }
 
-function poFmt(n){ return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-
 function renderCosts(){
+  try {
   const totalAll = costEntries.reduce((s,c)=>s+c.amount,0);
   const allSites = ['All',...new Set(costEntries.map(c=>c.site).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
   const filtered = costSiteFilter==='All' ? costEntries : costEntries.filter(c=>c.site===costSiteFilter);
@@ -1095,9 +1094,10 @@ function renderCosts(){
   }
 
   document.getElementById('main-content').innerHTML = html;
+  } catch(err) {
+    document.getElementById('main-content').innerHTML = '<div style="padding:20px;color:red">Error: '+err.message+'</div>';
+  }
 }
-
-function openCostModal(id=null){
   const c = id ? costEntries.find(x=>x.id===id) : null;
   const isNew = !c;
   const siteOpts = CLIENTS.map(s=>`<option value="${s}"${c&&c.site===s?' selected':''}>${s}</option>`).join('');

@@ -2141,19 +2141,20 @@ function setPortal(portal){
   document.getElementById('tracker-bar').style.display = portal==='tracker' ? '' : 'none';
   document.getElementById('bizops-bar').style.display = portal==='bizops' ? '' : 'none';
   document.getElementById('consulting-bar').style.display = portal==='consulting' ? '' : 'none';
-  // Hide nav-row and legend for non-tracker portals
+  // Hide/show nav elements
   const navRow = document.querySelector('.nav-row');
   const legendBar = document.getElementById('legend-bar');
-  const crewBar = document.getElementById('crew-bar');
+  const crewSection = document.getElementById('crew-section');
   if(navRow) navRow.style.display = portal==='tracker' ? '' : 'none';
   if(legendBar) legendBar.style.display = portal==='tracker' ? '' : 'none';
-  if(crewBar) crewBar.style.display = 'none';
+  // Clear main content when switching away from tracker so old view doesn't show
+  if(portal !== 'tracker'){
+    document.getElementById('main-content').innerHTML = '';
+  }
   // Navigate to default view for portal
   if(portal==='tracker') setView('week');
   else if(portal==='bizops') setView('pipeline');
   else if(portal==='consulting') setView('consulting-home');
-  // Restore nav-row visibility for tracker
-  if(portal==='tracker' && navRow) navRow.style.display = '';
 }
 
 
@@ -2606,7 +2607,7 @@ async function saveConsultingProject(id){
       Object.assign(proj,{client,projectName,stage,priority,notes,stageDueDates,updatedAt:new Date().toISOString()});
       await dbSaveConsulting(proj,id);
     } else {
-      const newP = {client,projectName,stage,priority,notes,stageDueDates,hoursLog:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
+      const newP = {client,projectName,stage,priority,notes,stageDueDates,hoursLog:[],tasks:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
       const newId = await dbSaveConsulting(newP);
       if(newId){ newP.id=newId; consultingProjects.unshift(newP); }
     }

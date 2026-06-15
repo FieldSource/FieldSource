@@ -2047,6 +2047,9 @@ function startPolling(){
       }
       // Don't re-render if mileage modal is open
       if(view==='mileage' && mileageModalOpen) return;
+      // Don't re-render if in consulting detail view or any overlay modal is open
+      if(view==='consulting-home' && consultingView==='detail') return;
+      if(document.querySelector('.modal-overlay')) return;
       // Preserve scroll position during background refresh
       const scrollContainer = document.querySelector('.week-scroll') || document.querySelector('#main-content > div[style*="overflow"]');
       const savedScroll = scrollContainer ? scrollContainer.scrollLeft : 0;

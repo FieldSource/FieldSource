@@ -390,6 +390,7 @@ main{padding:12px 16px 100px}
   <div class="view-bar-row">
     <button class="vtab" id="pipeline-tab" onclick="setView('pipeline')">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="po-tab" onclick="setView('po')">PO Tracker</button>
+    <button class="vtab" onclick="setView('costs')">Direct Costs</button>
   </div>
 </div>
 
@@ -829,6 +830,356 @@ function renderHours(){
   });
 
   document.getElementById('main-content').innerHTML = html;
+}
+
+
+
+// ── DEXT CSV IMPORT ────────────────────────────────────────────
+async function importDextCSV(input){
+  const file = input.files[0];
+  if(!file) return;
+  const text = await file.text();
+  const lines = text.split('\n').filter(l=>l.trim());
+  if(lines.length < 2){ alert('CSV appears empty.'); return; }
+
+  // Parse header
+  const header = parseCSVLine(lines[0]).map(h=>h.trim().toLowerCase());
+  const col = name => header.indexOf(name);
+  const dateCol = col('date');
+  const supplierCol = col('supplier');
+  const categoryCol = col('category');
+  const customerCol = col('customer');
+  const projectCol = col('project');
+  const amountCol = col('total (usd)');
+  const ownerCol = col('owner');
+  const noteCol = col('note');
+  const descCol = col('description');
+
+  // Parse all rows
+  const rows = [];
+  for(let i=1;i<lines.length;i++){
+    const cols = parseCSVLine(lines[i]);
+    if(!cols.length) continue;
+    const amount = parseFloat(cols[amountCol])||0;
+    if(amount<=0) continue; // skip credits/refunds/zero amounts
+    const supplier = (cols[supplierCol]||'').trim();
+    if(!supplier||supplier==='–') continue;
+
+    // Try to match site: Customer field first, then Project field, then fuzzy match
+    const rawCustomer = (cols[customerCol]||'').trim();
+    const rawProject = (cols[projectCol]||'').trim();
+    const siteMatch = matchDextSite(rawCustomer) || matchDextSite(rawProject) || '';
+
+    // Parse date from "DD-Mon-YYYY" format
+    const rawDate = (cols[dateCol]||'').trim();
+    const parsedDate = parseDextDate(rawDate);
+
+    rows.push({
+      date: parsedDate,
+      vendor: supplier,
+      amount,
+      category: (cols[categoryCol]||'').trim(),
+      rawSite: rawCustomer || rawProject || '',
+      site: siteMatch,
+      owner: (cols[ownerCol]||'').trim(),
+      notes: [(cols[noteCol]||'').trim(), (cols[descCol]||'').trim()].filter(Boolean).join(' — '),
+      matched: !!siteMatch,
+    });
+  }
+
+  if(!rows.length){ alert('No valid expense rows found.'); input.value=''; return; }
+
+  // Show review modal
+  showDextReviewModal(rows, input);
+}
+
+function parseCSVLine(line){
+  const result = [];
+  let cur = '', inQ = false;
+  for(let i=0;i<line.length;i++){
+    const c = line[i];
+    if(c==='"'){ inQ=!inQ; }
+    else if(c===','&&!inQ){ result.push(cur); cur=''; }
+    else cur+=c;
+  }
+  result.push(cur);
+  return result;
+}
+
+function parseDextDate(raw){
+  // Dext format: "01-Apr-2026"
+  if(!raw) return '';
+  const months = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+  const m = raw.match(/(\d{2})-([A-Za-z]{3})-(\d{4})/);
+  if(m) return `${m[3]}-${months[m[2].toLowerCase()]||'01'}-${m[1]}`;
+  return raw;
+}
+
+function matchDextSite(raw){
+  if(!raw) return '';
+  const r = raw.toLowerCase().trim();
+  // Direct match
+  const direct = CLIENTS.find(c=>c.toLowerCase()===r);
+  if(direct) return direct;
+  // Partial match — site name contains or is contained in raw
+  const partial = CLIENTS.find(c=>{
+    const cl = c.toLowerCase();
+    return r.includes(cl) || cl.includes(r) || (r.length>4 && cl.startsWith(r.slice(0,5)));
+  });
+  return partial || '';
+}
+
+function showDextReviewModal(rows, input){
+  const matched = rows.filter(r=>r.matched);
+  const unmatched = rows.filter(r=>!r.matched);
+  const siteOpts = `<option value="">— unassigned —</option>${CLIENTS.map(c=>`<option value="${c}">${c}</option>`).join('')}`;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'dext-overlay';
+  overlay.style.cssText = 'align-items:flex-start;padding-top:20px;overflow-y:auto';
+  overlay.innerHTML = `<div class="modal-sheet" style="max-height:85vh;overflow-y:auto;width:min(95vw,700px)">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Review Dext Import</div>
+    <div class="sheet-subtitle">${rows.length} expenses · ${matched.length} matched · ${unmatched.length} need site assignment</div>
+
+    <div style="background:#dcfce7;border:1px solid #86efac;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:#14532d">
+      <strong>${matched.length} auto-matched</strong> — these will be imported as-is.
+    </div>
+
+    ${unmatched.length?`<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:#92400e">
+      <strong>${unmatched.length} unmatched</strong> — assign a site or leave blank to import without one.
+    </div>`:''}
+
+    <div id="dext-rows" style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
+      ${rows.map((r,i)=>`
+        <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start">
+          <div>
+            <div style="font-weight:600;font-size:13px;color:var(--text)">${r.vendor}</div>
+            <div style="font-size:11px;color:var(--text-3);margin-top:2px">${r.date} · ${r.category}${r.owner?' · '+r.owner:''}</div>
+            ${r.rawSite&&!r.matched?`<div style="font-size:11px;color:#d97706;margin-top:2px">Dext project: "${r.rawSite}"</div>`:''}
+            ${r.notes?`<div style="font-size:11px;color:var(--text-2);margin-top:2px">${r.notes.slice(0,80)}</div>`:''}
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-weight:700;color:#dc2626;font-family:'DM Mono',monospace;font-size:14px">${poFmt(r.amount)}</div>
+            <select data-idx="${i}" onchange="dextRows[${i}].site=this.value" style="margin-top:4px;font-size:11px;padding:2px 4px;border:1px solid var(--border);border-radius:4px;background:${r.matched?'#dcfce7':'var(--bg)'}">
+              ${CLIENTS.map(c=>`<option value="${c}"${r.site===c?' selected':''}>${c}</option>`).join('')}
+              <option value=""${!r.site?' selected':''}>— unassigned —</option>
+            </select>
+          </div>
+        </div>`).join('')}
+    </div>
+
+    <div style="margin-top:8px;font-size:12px;color:var(--text-3)">Total: ${poFmt(rows.reduce((s,r)=>s+r.amount,0))}</div>
+    <div id="dext-error" style="color:#dc2626;font-size:12px;margin-top:6px"></div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('dext-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="confirmDextImport()">Import ${rows.length} Expenses</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  window.dextRows = rows;
+  input.value='';
+}
+
+async function confirmDextImport(){
+  const btn = document.querySelector('#dext-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Importing...';
+  let imported=0, errors=0;
+  for(const r of window.dextRows){
+    try{
+      const row = { site: r.site||'Unassigned', vendor: r.vendor, amount: r.amount, date: r.date, notes: [r.category, r.owner, r.notes].filter(Boolean).join(' · ') };
+      const result = await sbFetch('POST', '/rest/v1/direct_costs', {...row, created_at: new Date().toISOString()});
+      if(result&&result[0]) costEntries.unshift({...row, id:String(result[0].id)});
+      imported++;
+    } catch(e){ errors++; }
+  }
+  document.getElementById('dext-overlay').remove();
+  renderCosts();
+  const msg = document.createElement('div');
+  msg.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1f18;color:#fff;padding:10px 20px;border-radius:99px;font-size:13px;font-weight:600;z-index:9999';
+  msg.textContent=`✓ ${imported} expenses imported${errors?' ('+errors+' failed)':''}`;
+  document.body.appendChild(msg);
+  setTimeout(()=>msg.remove(),3000);
+}
+
+// ── DIRECT COSTS ──────────────────────────────────────────────
+async function loadCosts(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/direct_costs?select=*&order=date.desc,created_at.desc');
+    costEntries = (data||[]).map(r=>({
+      id: String(r.id),
+      site: r.site||'',
+      vendor: r.vendor||'',
+      amount: Number(r.amount)||0,
+      date: r.date||'',
+      notes: r.notes||'',
+      createdAt: r.created_at||'',
+    }));
+  } catch(e){ console.warn('Costs load failed:', e); costEntries=[]; }
+}
+
+async function dbSaveCost(obj, id=null){
+  const row = { site: obj.site, vendor: obj.vendor, amount: obj.amount, date: obj.date, notes: obj.notes||'' };
+  if(id){
+    await sbFetch('PATCH', `/rest/v1/direct_costs?id=eq.${id}`, row);
+  } else {
+    row.created_at = new Date().toISOString();
+    const result = await sbFetch('POST', '/rest/v1/direct_costs', row);
+    return result && result[0] ? String(result[0].id) : null;
+  }
+}
+
+async function dbDeleteCost(id){
+  await sbFetch('DELETE', `/rest/v1/direct_costs?id=eq.${id}`);
+}
+
+function renderCosts(){
+  const totalAll = costEntries.reduce((s,c)=>s+c.amount,0);
+  const allSites = ['All',...new Set(costEntries.map(c=>c.site).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
+  const filtered = costSiteFilter==='All' ? costEntries : costEntries.filter(c=>c.site===costSiteFilter);
+  const totalFiltered = filtered.reduce((s,c)=>s+c.amount,0);
+
+  // Site summary cards
+  const bySite = {};
+  costEntries.forEach(c=>{ if(!bySite[c.site]) bySite[c.site]=0; bySite[c.site]+=c.amount; });
+  const siteSorted = Object.entries(bySite).sort((a,b)=>b[1]-a[1]);
+
+  let html = `<div class="stats-bar" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+    <div class="stat-card"><div class="stat-num" style="font-size:15px">${poFmt(totalAll)}</div><div class="stat-label">Total Costs</div></div>
+    <div class="stat-card"><div class="stat-num">${costEntries.length}</div><div class="stat-label">Entries</div></div>
+    <div class="stat-card"><div class="stat-num">${Object.keys(bySite).length}</div><div class="stat-label">Sites</div></div>
+  </div>`;
+
+  // Site breakdown
+  if(siteSorted.length){
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:16px">
+      ${siteSorted.map(([site,amt])=>`
+        <div onclick="costSiteFilter=costSiteFilter==='${site}'?'All':'${site}';renderCosts()" style="background:${costSiteFilter===site?'var(--green-light)':'var(--card)'};border:1px solid ${costSiteFilter===site?'var(--green)':'var(--border)'};border-radius:var(--radius-sm);padding:10px;cursor:pointer">
+          <div style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${site}</div>
+          <div style="font-size:16px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace;margin-top:4px">${poFmt(amt)}</div>
+        </div>`).join('')}
+    </div>`;
+  }
+
+  // Add button + filter
+  html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+    <div style="font-size:13px;color:var(--text-2)">
+      ${costSiteFilter!=='All'?`<strong>${costSiteFilter}</strong>: ${poFmt(totalFiltered)} across ${filtered.length} entr${filtered.length===1?'y':'ies'}`:`All sites: ${poFmt(totalAll)}`}
+    </div>
+    <div style="display:flex;gap:6px">
+      <button class="btn-save" style="font-size:12px;padding:5px 14px;background:var(--text-2)" onclick="document.getElementById('dext-file-input').click()">⬆ Import Dext CSV</button>
+      <input type="file" id="dext-file-input" accept=".csv" style="display:none" onchange="importDextCSV(this)">
+      <button class="btn-save" style="font-size:12px;padding:5px 14px" onclick="openCostModal()">+ Log Cost</button>
+    </div>
+  </div>`;
+
+  // Entries list
+  if(!filtered.length){
+    html += `<div style="text-align:center;padding:40px;color:var(--text-3);font-size:14px">No cost entries${costSiteFilter!=='All'?' for '+costSiteFilter:''}. Tap "+ Log Cost" to add one.</div>`;
+  } else {
+    filtered.forEach(c=>{
+      html += `<div class="report-card" style="cursor:pointer" onclick="openCostModal('${c.id}')">
+        <div class="report-card-header">
+          <div>
+            <div class="report-card-title">${c.vendor}</div>
+            <div class="report-card-meta">${c.site} · ${c.date}</div>
+            ${c.notes?`<div style="font-size:12px;color:var(--text-2);margin-top:4px">${c.notes}</div>`:''}
+          </div>
+          <div style="font-size:20px;font-weight:700;color:#dc2626;font-family:'DM Mono',monospace;flex-shrink:0">${poFmt(c.amount)}</div>
+        </div>
+      </div>`;
+    });
+  }
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
+function openCostModal(id=null){
+  const c = id ? costEntries.find(x=>x.id===id) : null;
+  const isNew = !c;
+  const siteOpts = CLIENTS.map(s=>`<option value="${s}"${c&&c.site===s?' selected':''}>${s}</option>`).join('');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'cost-overlay';
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${isNew?'Log Direct Cost':'Edit Cost Entry'}</div>
+    <div class="form-group">
+      <label class="form-label">Site *</label>
+      <select id="cost-site">
+        <option value="">— select site —</option>
+        ${siteOpts}
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Vendor *</label>
+      <input type="text" id="cost-vendor" placeholder="e.g. Sun Belt Rentals, Advanced Grading" value="${c?c.vendor:''}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">Amount *</label>
+        <input type="number" id="cost-amount" placeholder="0.00" step="0.01" value="${c?c.amount:''}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Date *</label>
+        <input type="date" id="cost-date" value="${c?c.date:new Date().toISOString().split('T')[0]}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <input type="text" id="cost-notes" placeholder="Invoice #, description..." value="${c?c.notes:''}">
+    </div>
+    <div id="cost-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      ${!isNew?`<button class="btn-delete" onclick="deleteCostEntry('${id}')">Delete</button>`:''}
+      <button class="btn-cancel" onclick="document.getElementById('cost-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveCostEntry('${id||''}')">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveCostEntry(id){
+  const site = document.getElementById('cost-site').value;
+  const vendor = document.getElementById('cost-vendor').value.trim();
+  const amount = parseFloat(document.getElementById('cost-amount').value);
+  const date = document.getElementById('cost-date').value;
+  const notes = document.getElementById('cost-notes').value.trim();
+  const errEl = document.getElementById('cost-error');
+  errEl.textContent='';
+  if(!site){ errEl.textContent='Please select a site.'; return; }
+  if(!vendor){ errEl.textContent='Vendor is required.'; return; }
+  if(!amount||amount<=0){ errEl.textContent='Please enter a valid amount.'; return; }
+  if(!date){ errEl.textContent='Date is required.'; return; }
+  const btn = document.querySelector('#cost-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  try{
+    if(id){
+      const c = costEntries.find(x=>x.id===id);
+      Object.assign(c,{site,vendor,amount,date,notes});
+      await dbSaveCost(c,id);
+    } else {
+      const newC = {site,vendor,amount,date,notes};
+      const newId = await dbSaveCost(newC);
+      if(newId){ newC.id=newId; costEntries.unshift(newC); }
+    }
+    document.getElementById('cost-overlay').remove();
+    renderCosts();
+  } catch(e){
+    errEl.textContent='Error saving. Please try again.';
+    btn.disabled=false; btn.textContent='Save';
+  }
+}
+
+async function deleteCostEntry(id){
+  if(!confirm('Delete this cost entry?')) return;
+  await dbDeleteCost(id);
+  costEntries = costEntries.filter(c=>c.id!==id);
+  document.getElementById('cost-overlay').remove();
+  renderCosts();
 }
 
 // ── PO TRACKER ────────────────────────────────────────────────
@@ -2152,7 +2503,7 @@ function setView(v){
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
   // idx maps to vtab position within the ACTIVE bar
   const trackerIdx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,hours:8,workorders:9};
-  const bizopsIdx={pipeline:0,po:1};
+  const bizopsIdx={pipeline:0,po:1,costs:2};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
   const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po'].includes(v)?'bizops-bar':'consulting-bar';
@@ -2160,7 +2511,7 @@ function setView(v){
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='costs';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -2191,6 +2542,7 @@ function render(){
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();
+  else if(view==='costs') renderCosts();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
 }
@@ -3934,8 +4286,13 @@ function showApp(){
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); startPolling(); });
-  render();
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); startPolling(); });
+  // Default portal based on user
+  if(userEmail==='brian@fieldsourceohio.com'){
+    setPortal('consulting');
+  } else {
+    render();
+  }
 }
 
 // Override sbFetch to use auth token when available

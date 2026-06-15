@@ -296,6 +296,7 @@ main{padding:12px 16px 100px}
     <div class="login-error" id="login-error"></div>
     <div style="text-align:center;margin-top:14px">
       <button onclick="showForgotPassword()" style="background:none;border:none;color:var(--text-3);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">Forgot password?</button>
+      <button onclick="showRequestAccess()" style="background:none;border:none;color:var(--text-3);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline;margin-top:6px">Request access</button>
     </div>
   </div>
 </div>
@@ -314,6 +315,34 @@ main{padding:12px 16px 100px}
     <button class="login-btn" id="forgot-btn" onclick="doForgotPassword()">Send reset link</button>
     <div class="login-error" id="forgot-error"></div>
     <div class="reset-success" id="forgot-success"></div>
+    <div style="text-align:center;margin-top:14px">
+      <button onclick="showLogin()" style="background:none;border:none;color:var(--text-3);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">Back to sign in</button>
+    </div>
+  </div>
+</div>
+
+<!-- REQUEST ACCESS SCREEN -->
+<div class="login-screen" id="request-screen" style="display:none">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="login-logo-text">Field Source</div>
+      <div class="login-logo-sub">Request Access</div>
+    </div>
+    <div class="login-field">
+      <label class="login-label">Your Name</label>
+      <input class="login-input" type="text" id="req-name" placeholder="First and last name">
+    </div>
+    <div class="login-field">
+      <label class="login-label">Email Address</label>
+      <input class="login-input" type="email" id="req-email" placeholder="your@email.com">
+    </div>
+    <div class="login-field">
+      <label class="login-label">Role / Why you need access</label>
+      <input class="login-input" type="text" id="req-role" placeholder="e.g. Crew member, subcontractor...">
+    </div>
+    <button class="login-btn" id="req-btn" onclick="submitAccessRequest()">Submit Request</button>
+    <div class="login-error" id="req-error"></div>
+    <div class="reset-success" id="req-success"></div>
     <div style="text-align:center;margin-top:14px">
       <button onclick="showLogin()" style="background:none;border:none;color:var(--text-3);font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">Back to sign in</button>
     </div>
@@ -4400,7 +4429,7 @@ async function doLogin(){
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);
-    sessionStorage.setItem('fs_refresh', refreshToken);
+    localStorage.setItem('fs_refresh', refreshToken);
     localStorage.setItem('fs_user', JSON.stringify(currentUser));
     showApp();
   } catch(e){
@@ -4505,9 +4534,9 @@ async function sbFetch(method, path, body=null){
 
 // Check for existing session on load
 function checkSession(){
-  const token = sessionStorage.getItem('fs_token');
-  const refresh = sessionStorage.getItem('fs_refresh');
-  const user = sessionStorage.getItem('fs_user');
+  const token = localStorage.getItem('fs_token');
+  const refresh = localStorage.getItem('fs_refresh');
+  const user = localStorage.getItem('fs_user');
   if(token && user){
     try{
       currentToken = token;
@@ -4549,7 +4578,7 @@ async function refreshSession(){
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
     localStorage.setItem('fs_token', currentToken);
-    sessionStorage.setItem('fs_refresh', refreshToken);
+    localStorage.setItem('fs_refresh', refreshToken);
   } catch(e){ console.warn('Token refresh failed', e); }
 }
 
@@ -4660,10 +4689,62 @@ function getCrewColor(crew, service){
   return null;
 }
 // ── PASSWORD RESET FLOW ──────────────────────────────────────────
+
+function showRequestAccess(){
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('forgot-screen').style.display='none';
+  document.getElementById('request-screen').style.display='flex';
+  document.getElementById('req-error').textContent='';
+  document.getElementById('req-success').textContent='';
+  document.getElementById('req-name').value='';
+  document.getElementById('req-email').value='';
+  document.getElementById('req-role').value='';
+}
+
+async function submitAccessRequest(){
+  const name = document.getElementById('req-name').value.trim();
+  const email = document.getElementById('req-email').value.trim();
+  const role = document.getElementById('req-role').value.trim();
+  const errEl = document.getElementById('req-error');
+  const sucEl = document.getElementById('req-success');
+  const btn = document.getElementById('req-btn');
+  errEl.textContent=''; sucEl.textContent='';
+  if(!name){ errEl.textContent='Please enter your name.'; return; }
+  if(!email){ errEl.textContent='Please enter your email.'; return; }
+  btn.disabled=true; btn.textContent='Submitting...';
+  try{
+    // Save to Supabase
+    await fetch(SUPABASE_URL+'/rest/v1/access_requests', {
+      method:'POST',
+      headers:{
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({ name, email, role: role||'', requested_at: new Date().toISOString(), status: 'pending' })
+    });
+    // Notify via Slack
+    try{
+      await fetch('https://hooks.slack.com/services/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', {
+        method:'POST', mode:'no-cors',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ text: '*New Access Request*\n*Name:* '+name+'\n*Email:* '+email+'\n*Role:* '+(role||'Not specified')+'\n\nLog in to the tracker to approve or deny.' })
+      });
+    } catch(e){}
+    sucEl.textContent="Request submitted! You'll be contacted when access is granted.";
+    btn.textContent='Submitted!';
+  } catch(e){
+    errEl.textContent='Error submitting. Please try again.';
+    btn.disabled=false; btn.textContent='Submit Request';
+  }
+}
+
 function showLogin(){
   document.getElementById('login-screen').style.display='flex';
   document.getElementById('forgot-screen').style.display='none';
   document.getElementById('reset-screen').style.display='none';
+  if(document.getElementById('request-screen')) document.getElementById('request-screen').style.display='none';
 }
 function showForgotPassword(){
   document.getElementById('login-screen').style.display='none';

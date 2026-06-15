@@ -538,7 +538,7 @@ let poEntries = [];
 let consultingProjects = [];
 let consultingView = 'board'; // 'board' or 'detail'
 let consultingDetailId = null;
-let poStatusFilter = 'All';
+let poStatusFilter = 'Open';
 let poCatFilter = 'All';
 let plStageFilter = 'All';
 let plSearchQ = '';
@@ -1262,7 +1262,7 @@ function renderPO(){
 
   // Filters + add button
   html += `<div class="filter-row" style="margin-top:12px">
-    ${['All','Open','Partially Billed','Closed'].map(s=>`<button class="filter-chip${poStatusFilter===s?' active':''}" onclick="poStatusFilter='${s}';renderPO()">${s}</button>`).join('')}
+    ${[['Open','Open (All Active)'],['Not Billed','Not Billed'],['Partially Billed','Partially Billed'],['Closed','Closed']].map(([val,label])=>`<button class="filter-chip${poStatusFilter===val?' active':''}" onclick="poStatusFilter='${val}';renderPO()">${label}</button>`).join('')}
     <button class="btn-save" style="font-size:12px;padding:5px 14px;margin-left:auto" onclick="openPOModal()">+ Add PO</button>
   </div>
   <div class="filter-row">
@@ -1271,7 +1271,10 @@ function renderPO(){
 
   // List
   let filtered = poEntries;
-  if(poStatusFilter!=='All') filtered = filtered.filter(p=>p.status===poStatusFilter);
+  if(poStatusFilter==='Open') filtered = filtered.filter(p=>p.status!=='Closed');
+  else if(poStatusFilter==='Not Billed') filtered = filtered.filter(p=>p.amountBilled<=0&&p.status!=='Closed');
+  else if(poStatusFilter==='Partially Billed') filtered = filtered.filter(p=>p.status==='Partially Billed');
+  else if(poStatusFilter==='Closed') filtered = filtered.filter(p=>p.status==='Closed');
   if(poCatFilter!=='All') filtered = filtered.filter(p=>p.category===poCatFilter);
 
   if(!filtered.length){

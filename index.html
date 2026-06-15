@@ -1790,10 +1790,19 @@ function setPortal(portal){
   document.getElementById('tracker-bar').style.display = portal==='tracker' ? '' : 'none';
   document.getElementById('bizops-bar').style.display = portal==='bizops' ? '' : 'none';
   document.getElementById('consulting-bar').style.display = portal==='consulting' ? '' : 'none';
+  // Hide nav-row and legend for non-tracker portals
+  const navRow = document.querySelector('.nav-row');
+  const legendBar = document.getElementById('legend-bar');
+  const crewBar = document.getElementById('crew-bar');
+  if(navRow) navRow.style.display = portal==='tracker' ? '' : 'none';
+  if(legendBar) legendBar.style.display = portal==='tracker' ? '' : 'none';
+  if(crewBar) crewBar.style.display = 'none';
   // Navigate to default view for portal
   if(portal==='tracker') setView('week');
   else if(portal==='bizops') setView('pipeline');
   else if(portal==='consulting') setView('consulting-home');
+  // Restore nav-row visibility for tracker
+  if(portal==='tracker' && navRow) navRow.style.display = '';
 }
 
 

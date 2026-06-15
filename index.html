@@ -1034,6 +1034,10 @@ async function dbDeleteCost(id){
   await sbFetch('DELETE', `/rest/v1/direct_costs?id=eq.${id}`);
 }
 
+let costEntries = [];
+let costSiteFilter = 'All';
+function poFmt(n){ return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+
 function renderCosts(){
   try {
   const totalAll = costEntries.reduce((s,c)=>s+c.amount,0);

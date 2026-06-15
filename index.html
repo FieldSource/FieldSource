@@ -390,7 +390,7 @@ main{padding:12px 16px 100px}
   <div class="view-bar-row">
     <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');renderPipeline()">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');renderPO()">PO Tracker</button>
-    <button class="vtab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');renderCosts()">Direct Costs</button>
+    <button class="vtab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');loadCosts().then(()=>renderCosts())">Direct Costs</button>
   </div>
 </div>
 
@@ -4408,14 +4408,13 @@ function showApp(){
   const consultingPortalTab = document.getElementById('ptab-consulting');
   if(bizopsPortalTab) bizopsPortalTab.style.display = PORTAL_EMAILS.includes(userEmail) ? '' : 'none';
   if(consultingPortalTab) consultingPortalTab.style.display = CONSULTING_EMAILS.includes(userEmail) ? '' : 'none';
-  // Pipeline/PO only in bizops now
-  const PIPELINE_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
-  if(plTab2) plTab2.style.display = 'none'; // handled by portal
+  // Pipeline/PO only in bizops now — tabs are inside bizops-bar which is hidden by default
+  if(plTab2) plTab2.style.display = ''; // visible inside bizops-bar
   const HOURS_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const hoursTab = document.getElementById('hours-tab');
   if(hoursTab) hoursTab.style.display = HOURS_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
   const poTab2 = document.getElementById('po-tab');
-  if(poTab2) poTab2.style.display = PIPELINE_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
+  if(poTab2) poTab2.style.display = ''; // visible inside bizops-bar
   const allTabs = Array.from(document.querySelectorAll('.vtab'));
   const mileageTab = document.getElementById('mileage-tab');
   if(mileageTab) mileageTab.style.display = 'none'; // hidden for now

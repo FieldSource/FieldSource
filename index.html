@@ -1098,6 +1098,8 @@ function renderCosts(){
     document.getElementById('main-content').innerHTML = '<div style="padding:20px;color:red">Error: '+err.message+'</div>';
   }
 }
+
+function openCostModal(id=null){
   const c = id ? costEntries.find(x=>x.id===id) : null;
   const isNew = !c;
   const siteOpts = CLIENTS.map(s=>`<option value="${s}"${c&&c.site===s?' selected':''}>${s}</option>`).join('');

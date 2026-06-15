@@ -2366,7 +2366,10 @@ function renderConsultingDetail(){
           <div style="font-size:11px;color:var(--text-3)">${due?'Due '+due:''}${stageTasks.length?' · '+doneCount+'/'+stageTasks.length+' tasks':''}</div>
         </div>
         <div style="font-size:13px;font-weight:600;color:var(--green-dark);font-family:'DM Mono',monospace">${stageHrs>0?stageHrs.toFixed(1)+'h':''}</div>
-        ${canEdit&&isActive?`<button onclick="advanceConsultingStage('${proj.id}')" style="font-size:11px;padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">Advance →</button>`:''}
+        ${canEdit&&isActive?`<div style="display:flex;gap:4px">
+          ${CONSULTING_STAGES.indexOf(stage)>0?`<button onclick="goBackConsultingStage('${proj.id}')" style="font-size:11px;padding:3px 8px;background:none;color:var(--text-3);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-family:inherit">← Back</button>`:''}
+          <button onclick="advanceConsultingStage('${proj.id}')" style="font-size:11px;padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">Advance →</button>
+        </div>`:''}
       </div>`;
     }).join('')}
   </div>
@@ -2559,6 +2562,18 @@ async function advanceConsultingStage(id){
   const idx = CONSULTING_STAGES.indexOf(proj.stage);
   if(idx < CONSULTING_STAGES.length-1){
     proj.stage = CONSULTING_STAGES[idx+1];
+    proj.updatedAt = new Date().toISOString();
+    await dbSaveConsulting(proj, id);
+    renderConsultingDetail();
+  }
+}
+
+async function goBackConsultingStage(id){
+  const proj = consultingProjects.find(p=>p.id===id);
+  if(!proj) return;
+  const idx = CONSULTING_STAGES.indexOf(proj.stage);
+  if(idx > 0){
+    proj.stage = CONSULTING_STAGES[idx-1];
     proj.updatedAt = new Date().toISOString();
     await dbSaveConsulting(proj, id);
     renderConsultingDetail();

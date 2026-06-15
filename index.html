@@ -4330,6 +4330,7 @@ const USER_DISPLAY_NAMES = {
   'jake@fieldsourceohio.com': 'Jake',
   'ryan@fieldsourceohio.com': 'Ryan',
   'matt@fieldsourceohio.com': 'Matt',
+  'gibson@fieldsourceohio.com': 'Gibson',
   'jones@fieldsourceohio.com': 'Cameron',
   'badenhop@fieldsourceohio.com': 'Badenhop',
   'kaleb@fieldsourceohio.com': 'Kaleb',
@@ -4409,7 +4410,7 @@ function showApp(){
   // Show/hide tabs based on role
   // Show pipeline tab only for Jake and Ryan
   const plTab2 = document.getElementById('pipeline-tab');
-  const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
+  const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com'];
   const CONSULTING_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com'];
   const userEmail = (currentUser.email||'').toLowerCase();
   // Show portal bar
@@ -4440,6 +4441,8 @@ function showApp(){
   // Default portal based on user
   if(userEmail==='brian@fieldsourceohio.com'){
     setPortal('consulting');
+  } else if(userEmail==='gibson@fieldsourceohio.com'){
+    setPortal('bizops');
   } else {
     render();
   }

@@ -1084,13 +1084,14 @@ async function loadCosts(){
       amount: Number(r.amount)||0,
       date: r.date||'',
       notes: r.notes||'',
+      invoiceNum: r.invoice_num||'',
       createdAt: r.created_at||'',
     }));
   } catch(e){ console.warn('Costs load failed:', e); costEntries=[]; }
 }
 
 async function dbSaveCost(obj, id=null){
-  const row = { site: obj.site, vendor: obj.vendor, amount: obj.amount, date: obj.date, notes: obj.notes||'' };
+  const row = { site: obj.site, vendor: obj.vendor, amount: obj.amount, date: obj.date, notes: obj.notes||'', invoice_num: obj.invoiceNum||'' };
   if(id){
     await sbFetch('PATCH', `/rest/v1/direct_costs?id=eq.${id}`, row);
   } else {
@@ -1158,7 +1159,7 @@ function renderCosts(){
         <div class="report-card-header">
           <div>
             <div class="report-card-title">${c.vendor}</div>
-            <div class="report-card-meta">${c.site} · ${c.date}</div>
+            <div class="report-card-meta">${c.site} · ${c.date}${c.invoiceNum?' · <span style="font-family:monospace">'+c.invoiceNum+'</span>':''}</div>
             ${c.notes?`<div style="font-size:12px;color:var(--text-2);margin-top:4px">${c.notes}</div>`:''}
           </div>
           <div style="font-size:20px;font-weight:700;color:#dc2626;font-family:'DM Mono',monospace;flex-shrink:0">${poFmt(c.amount)}</div>
@@ -1207,8 +1208,12 @@ function openCostModal(id=null){
       </div>
     </div>
     <div class="form-group">
-      <label class="form-label">Notes</label>
-      <input type="text" id="cost-notes" placeholder="Invoice #, description..." value="${c?c.notes:''}">
+      <label class="form-label">Invoice # <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+      <input type="text" id="cost-invoice" placeholder="e.g. INV-2026-001" value="${c?c.invoiceNum||'':''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+      <input type="text" id="cost-notes" placeholder="Description, project details..." value="${c?c.notes:''}">
     </div>
     <div id="cost-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
     <div class="sheet-actions">
@@ -1226,6 +1231,7 @@ async function saveCostEntry(id){
   const amount = parseFloat(document.getElementById('cost-amount').value);
   const date = document.getElementById('cost-date').value;
   const notes = document.getElementById('cost-notes').value.trim();
+  const invoiceNum = document.getElementById('cost-invoice') ? document.getElementById('cost-invoice').value.trim() : '';
   const errEl = document.getElementById('cost-error');
   errEl.textContent='';
   if(!site){ errEl.textContent='Please select a site.'; return; }
@@ -1237,10 +1243,10 @@ async function saveCostEntry(id){
   try{
     if(id){
       const c = costEntries.find(x=>x.id===id);
-      Object.assign(c,{site,vendor,amount,date,notes});
+      Object.assign(c,{site,vendor,amount,date,notes,invoiceNum});
       await dbSaveCost(c,id);
     } else {
-      const newC = {site,vendor,amount,date,notes};
+      const newC = {site,vendor,amount,date,notes,invoiceNum};
       const newId = await dbSaveCost(newC);
       if(newId){ newC.id=newId; costEntries.unshift(newC); }
     }
@@ -1275,6 +1281,7 @@ async function loadPO(){
       status: r.status||'Open',
       billingLog: r.billing_log ? (typeof r.billing_log==='string'?JSON.parse(r.billing_log):r.billing_log) : [],
       notes: r.notes||'',
+      invoiceNum: r.invoice_num||'',
       createdAt: r.created_at||'',
     }));
   } catch(e){ console.warn('PO load failed:', e); poEntries=[]; }

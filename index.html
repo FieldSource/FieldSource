@@ -409,7 +409,6 @@ main{padding:12px 16px 100px}
     <button class="vtab" onclick="setView('list')">All jobs</button>
   </div>
   <div class="view-bar-row">
-    <button class="vtab" id="clients-tab" onclick="setView('clients')" style="display:none">Clients</button>
     <button class="vtab" id="mileage-tab" onclick="setView('mileage')" style="display:none">Mileage</button>
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
@@ -424,6 +423,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPipeline()">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPO()">PO Tracker</button>
     <button class="vtab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts())">Direct Costs</button>
+    <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()">Clients</button>
   </div>
 </div>
 
@@ -455,7 +455,7 @@ main{padding:12px 16px 100px}
 </div><!-- end app-body -->
 
 <script>
-const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
+const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Ohio State ATI','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
 const SERVICES=['Mowing','Applications','Contract Maintenance','Core Aeration','Deep Tine Aeration','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Off','Shockwave','Slit Seeding','Broadcast Seeding','Sodding','Sweep','Verti-cut','Vent'];
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Matt','Wes','Cameron','Killer','Sly','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 
@@ -484,6 +484,7 @@ const CLIENT_ADDRESSES = {
   'North Union': '401 N Franklin St, Richwood, OH 43344',
   'Oakwood': '30 Park Ave, Oakwood, OH 45419',
   'Ohio Premier': '8820 US-42, Plain City, OH 43064',
+  'Ohio State ATI': '1328 Dover Road, Wooster, OH 44691',
   'Pickerington': '90 North East Street, Pickerington, OH',
   'Reynoldsburg Schools': '7244 E Main Street, Reynoldsburg, OH 43068',
   'Sharon': '1129 E State St, Sharon, PA 16146',
@@ -2766,11 +2767,11 @@ function setView(v){
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
   // idx maps to vtab position within the ACTIVE bar
-  const trackerIdx={week:0,next:1,month:2,list:3,clients:4,mileage:5,equipment:6,reports:7,timeoff:8,hours:9,workorders:10};
-  const bizopsIdx={pipeline:0,po:1,costs:2};
+  const trackerIdx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,hours:8,workorders:9};
+  const bizopsIdx={pipeline:0,po:1,costs:2,clients:3};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs'].includes(v)?'bizops-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients'].includes(v)?'bizops-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
@@ -4553,9 +4554,7 @@ function showApp(){
   const allTabs = Array.from(document.querySelectorAll('.vtab'));
   const mileageTab = document.getElementById('mileage-tab');
   if(mileageTab) mileageTab.style.display = 'none'; // hidden for now
-  const clientsTab = document.getElementById('clients-tab');
-  const CLIENT_TAB_EMAILS = ['jake@fieldsourceohio.com','ali@fieldsourceohio.com'];
-  if(clientsTab) clientsTab.style.display = CLIENT_TAB_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
+  // clients tab visibility handled by bizops-bar
   const timeoffTab = document.getElementById('timeoff-tab');
   const woTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes('workorders'));
   const equipTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes("'equipment'"));

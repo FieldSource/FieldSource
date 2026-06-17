@@ -423,6 +423,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPipeline()">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPO()">PO Tracker</button>
     <button class="vtab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts())">Direct Costs</button>
+    <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting())">Job Costing</button>
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
     <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()">Clients</button>
   </div>
@@ -608,7 +609,8 @@ let hoursRangeStart = '';
 let hoursRangeEnd = '';
 let hoursExpandedClient = null;
 let poEntries = [];
-let laborRates = {}; // {name: rate}
+let laborRates = {};
+let costingMonth = new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0'); // {name: rate}
 let laborSiteFilter = 'All';
 let laborDateMode = 'month';
 let laborMonth = new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0');
@@ -1077,6 +1079,117 @@ async function confirmDextImport(){
   setTimeout(()=>msg.remove(),3000);
 }
 
+
+
+// ── JOB COSTING ───────────────────────────────────────────────
+function renderCosting(){
+  const now2 = new Date();
+  const curMonth = now2.getFullYear()+'-'+String(now2.getMonth()+1).padStart(2,'0');
+  const months = ['2026-12','2026-11','2026-10','2026-09','2026-08','2026-07','2026-06','2026-05','2026-04'].filter(m=>m<=curMonth);
+
+  // Labor from reports filtered by month
+  const monthReports = reports.filter(r=>r.reportDate&&r.reportDate.slice(0,7)===costingMonth);
+  // Material costs filtered by month
+  const monthCosts = costEntries.filter(c=>c.date&&c.date.slice(0,7)===costingMonth);
+
+  // Build per-site aggregates
+  const sites = {};
+  function getSite(name){
+    if(!sites[name]) sites[name]={labor:0,laborHrs:0,materials:0,laborDetail:{},materialDetail:[]};
+    return sites[name];
+  }
+
+  // Labor
+  monthReports.forEach(r=>{
+    const hrs = parseHoursFromReport(r);
+    if(!hrs||!r.client) return;
+    const rate = laborRates[r.filedBy]||0;
+    const cost = hrs*rate;
+    const s = getSite(r.client);
+    s.labor += cost;
+    s.laborHrs += hrs;
+    if(!s.laborDetail[r.filedBy]) s.laborDetail[r.filedBy]={hrs:0,cost:0};
+    s.laborDetail[r.filedBy].hrs += hrs;
+    s.laborDetail[r.filedBy].cost += cost;
+  });
+
+  // Materials
+  monthCosts.forEach(c=>{
+    if(!c.site) return;
+    const s = getSite(c.site);
+    s.materials += c.amount;
+    s.materialDetail.push(c);
+  });
+
+  // PO lookup by client
+  const poByClient = {};
+  poEntries.forEach(p=>{ if(!poByClient[p.client]) poByClient[p.client]=[]; poByClient[p.client].push(p); });
+
+  const sorted = Object.entries(sites).sort((a,b)=>(b[1].labor+b[1].materials)-(a[1].labor+a[1].materials));
+  const totalLabor = sorted.reduce((s,[,v])=>s+v.labor,0);
+  const totalMaterials = sorted.reduce((s,[,v])=>s+v.materials,0);
+  const totalCost = totalLabor+totalMaterials;
+
+  let html = `<div class="stats-bar" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
+    <div class="stat-card"><div class="stat-num" style="font-size:15px;color:#dc2626">${poFmt(totalCost)}</div><div class="stat-label">Total Cost</div></div>
+    <div class="stat-card"><div class="stat-num" style="font-size:15px">${poFmt(totalLabor)}</div><div class="stat-label">Labor</div></div>
+    <div class="stat-card"><div class="stat-num" style="font-size:15px">${poFmt(totalMaterials)}</div><div class="stat-label">Materials</div></div>
+    <div class="stat-card"><div class="stat-num">${sorted.length}</div><div class="stat-label">Sites</div></div>
+  </div>`;
+
+  // Month filter
+  html += `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">
+    ${months.map(m=>`<button onclick="costingMonth='${m}';renderCosting()" style="padding:4px 12px;border-radius:99px;border:1px solid ${m===costingMonth?'var(--green)':'var(--border)'};background:${m===costingMonth?'var(--green)':'var(--bg)'};color:${m===costingMonth?'#fff':'var(--text-2)'};font-size:12px;font-weight:500;font-family:inherit;cursor:pointer">${new Date(m+'-15').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</button>`).join('')}
+  </div>`;
+
+  if(!sorted.length){
+    html += `<div style="text-align:center;padding:40px;color:var(--text-3);font-size:14px">No cost data for this period.</div>`;
+  }
+
+  sorted.forEach(([site, data])=>{
+    const total = data.labor+data.materials;
+    const pos = poByClient[site]||[];
+    const poTotal = pos.reduce((s,p)=>s+p.poAmount,0);
+    const poBilled = pos.reduce((s,p)=>s+p.amountBilled,0);
+    const margin = poTotal > 0 ? poTotal - total : null;
+
+    html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <div>
+          <div style="font-weight:700;font-size:16px;color:var(--text)">${site}</div>
+          ${pos.length?`<div style="font-size:12px;color:var(--text-3);margin-top:2px">PO: ${poFmt(poTotal)} · Billed: ${poFmt(poBilled)}</div>`:''}
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:22px;font-weight:700;color:#dc2626;font-family:'DM Mono',monospace">${poFmt(total)}</div>
+          ${margin!==null?`<div style="font-size:12px;font-weight:600;color:${margin>=0?'var(--green-dark)':'#dc2626'}">${margin>=0?'+':''}${poFmt(margin)} margin</div>`:''}
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <!-- Labor -->
+        <div style="background:var(--surface);border-radius:8px;padding:10px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);letter-spacing:0.5px;margin-bottom:6px">Labor — ${poFmt(data.labor)} (${data.laborHrs.toFixed(1)}h)</div>
+          ${Object.entries(data.laborDetail).sort((a,b)=>b[1].cost-a[1].cost).map(([p,d])=>`
+            <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)">
+              <span style="color:var(--text-2)">${p}</span>
+              <span style="font-family:'DM Mono',monospace;color:var(--text)">${poFmt(d.cost)} <span style="color:var(--text-3)">${d.hrs.toFixed(1)}h</span></span>
+            </div>`).join('')||'<div style="font-size:12px;color:var(--text-3)">No labor logged</div>'}
+        </div>
+        <!-- Materials -->
+        <div style="background:var(--surface);border-radius:8px;padding:10px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);letter-spacing:0.5px;margin-bottom:6px">Materials — ${poFmt(data.materials)}</div>
+          ${data.materialDetail.sort((a,b)=>b.amount-a.amount).map(c=>`
+            <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)">
+              <span style="color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px">${c.vendor}</span>
+              <span style="font-family:'DM Mono',monospace;color:var(--text);flex-shrink:0">${poFmt(c.amount)}</span>
+            </div>`).join('')||'<div style="font-size:12px;color:var(--text-3)">No materials logged</div>'}
+        </div>
+      </div>
+    </div>`;
+  });
+
+  document.getElementById('main-content').innerHTML = html;
+}
 
 // ── LABOR COSTS ───────────────────────────────────────────────
 async function loadLaborRates(){
@@ -2899,15 +3012,15 @@ function setView(v){
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
   // idx maps to vtab position within the ACTIVE bar
   const trackerIdx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,hours:8,workorders:9};
-  const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4};
+  const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor'].includes(v)?'bizops-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing'].includes(v)?'bizops-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='costs'||v==='clients'||v==='labor';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='costs'||v==='clients'||v==='labor'||v==='costing';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -2937,6 +3050,7 @@ function render(){
   else if(view==='hours') renderHours();
   else if(view==='clients') renderClients();
   else if(view==='labor') renderLabor();
+  else if(view==='costing') renderCosting();
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();

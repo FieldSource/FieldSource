@@ -751,9 +751,9 @@ function renderHours(){
   const allMonths = ['2026-12','2026-11','2026-10','2026-09','2026-08','2026-07','2026-06','2026-05','2026-04'];
   const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
   if(!allYears.includes('2026')) allYears.unshift('2026');
-  // Always default to current month when first opening
+  // Only set to current month if not already set to a valid month
   const currentMonth = new Date().toISOString().slice(0,7);
-  if(allMonths.includes(currentMonth)) hoursMonth = currentMonth;
+  if(!allMonths.includes(hoursMonth)) hoursMonth = currentMonth;
 
   const filtered = getFilteredReports();
   // Always show last Mon-Sun at the top

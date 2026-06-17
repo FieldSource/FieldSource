@@ -413,7 +413,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
     <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off <span id="timeoff-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
-    <button class="vtab" id="hours-tab" onclick="hoursTabOpened=false;loadReports().then(()=>setView('hours'))" style="display:none">Hours</button>
+    <button class="vtab" id="hours-tab" onclick="const _n=new Date();hoursMonth=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0');loadReports().then(()=>setView('hours'))" style="display:none">Hours</button>
     <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
   </div>
 </div>
@@ -600,7 +600,7 @@ let mileageLogs = [];
 let pipelines = [];
 let plTab = 'active';
 let hoursDateMode = 'month';
-const _hn = new Date(); let hoursMonth = _hn.getFullYear()+'-'+String(_hn.getMonth()+1).padStart(2,'0');
+const _hn = new Date(); let hoursMonth = '2026-06';
 let hoursTabOpened = false;
 let hoursYear = new Date().getFullYear();
 let hoursRangeStart = '';
@@ -757,12 +757,6 @@ function renderHours(){
   const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
   if(!allYears.includes('2026')) allYears.unshift('2026');
   // Only set to current month if not already set to a valid month
-  if(!hoursTabOpened){
-    const now = new Date();
-    hoursMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
-    hoursTabOpened = true;
-  }
-
   const filtered = getFilteredReports(hoursDateMode==='month' ? hoursMonth : null);
   // Always show last Mon-Sun at the top
   const todayD = new Date();

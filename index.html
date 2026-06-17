@@ -2410,7 +2410,7 @@ function startPolling(){
 }
 
 let view='week',offset=0,editId=null,crewFilter='All',weekViewMode='site';
-let pickedCrew=[],pickedEquip=[],touchUpOn=false,activeEquipTab=EQUIP_CATS[0];
+let pickedCrew=[],pickedEquip=[],pickedServices=[],touchUpOn=false,activeEquipTab=EQUIP_CATS[0];
 let equipOffset=0;
 function today(){const d=new Date();d.setHours(0,0,0,0);return d}
 function isoDate(d){return d.toISOString().slice(0,10)}
@@ -3441,8 +3441,8 @@ function refreshEquipConflicts(){
   w.innerHTML=warnings;
 }
 
-function buildServiceGrid(pre=[]){
-  pickedServices = pre && pre.length ? [...pre] : [];
+function buildServiceGrid(pre=null){
+  if(pre !== null) pickedServices = pre.length ? [...pre] : [];
   const hasOther = pickedServices.some(s=>!SERVICES.includes(s));
   const otherVal = hasOther ? pickedServices.find(s=>!SERVICES.includes(s)) : '';
   const otherPicked = pickedServices.includes('Other') || hasOther;
@@ -3467,7 +3467,7 @@ function toggleServiceOther(){
     pickedServices = [...pickedServices.filter(s=>SERVICES.includes(s)), 'Other'];
   }
   const g = document.getElementById('f-service-grid');
-  if(g) g.innerHTML = buildServiceGrid(pickedServices);
+  if(g) g.innerHTML = buildServiceGrid();
   // focus the text input
   setTimeout(()=>{ const inp=document.getElementById('f-service-other'); if(inp&&!hasOther) inp.focus(); },50);
 }
@@ -3595,7 +3595,7 @@ function updateDuration(){
 function maybeClose(e){if(e.target.classList.contains('modal-overlay')) closeModal()}
 function closeModal(){
   document.getElementById('modal-root').innerHTML='';
-  editId=null;pickedCrew=[];pickedEquip=[];touchUpOn=false;activeEquipTab=EQUIP_CATS[0];
+  editId=null;pickedCrew=[];pickedEquip=[];pickedServices=[];touchUpOn=false;activeEquipTab=EQUIP_CATS[0];
 }
 async function saveJob(){
   const client=getClientValue();

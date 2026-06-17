@@ -413,7 +413,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" onclick="setView('equipment')">Equipment</button>
     <button class="vtab" onclick="setView('reports')">Daily Reports</button>
     <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off <span id="timeoff-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
-    <button class="vtab" id="hours-tab" onclick="setView('hours')" style="display:none">Hours</button>
+    <button class="vtab" id="hours-tab" onclick="loadReports().then(()=>setView('hours'))" style="display:none">Hours</button>
     <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
   </div>
 </div>
@@ -456,7 +456,7 @@ main{padding:12px 16px 100px}
 
 <script>
 const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Ohio State ATI','Pickerington','Reynoldsburg Schools','Sharon','Shop','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
-const SERVICES=['Mowing','Applications','Contract Maintenance','Core Aeration','Deep Tine Aeration','Equipment Repair/Maintenance','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Off','Shockwave','Slit Seeding','Broadcast Seeding','Sodding','Sweep','Verti-cut','Vent'];
+const SERVICES=['Mowing','Applications','Construction','Contract Maintenance','Core Aeration','Deep Tine Aeration','Equipment Repair/Maintenance','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Off','Shockwave','Slit Seeding','Broadcast Seeding','Sodding','Sweep','Verti-cut','Vent'];
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Matt','Wes','Cameron','Killer','Sly','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 
 const CLIENT_ADDRESSES = {

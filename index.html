@@ -423,6 +423,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPipeline()">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPO()">PO Tracker</button>
     <button class="vtab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts())">Direct Costs</button>
+    <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
     <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()">Clients</button>
   </div>
 </div>
@@ -607,6 +608,10 @@ let hoursRangeStart = '';
 let hoursRangeEnd = '';
 let hoursExpandedClient = null;
 let poEntries = [];
+let laborRates = {}; // {name: rate}
+let laborSiteFilter = 'All';
+let laborDateMode = 'month';
+let laborMonth = new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0');
 let consultingProjects = [];
 let consultingView = 'board'; // 'board' or 'detail'
 let consultingDetailId = null;
@@ -1070,6 +1075,126 @@ async function confirmDextImport(){
   msg.textContent=`✓ ${imported} expenses imported${errors?' ('+errors+' failed)':''}`;
   document.body.appendChild(msg);
   setTimeout(()=>msg.remove(),3000);
+}
+
+
+// ── LABOR COSTS ───────────────────────────────────────────────
+async function loadLaborRates(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/labor_rates?select=*');
+    laborRates = {};
+    (data||[]).forEach(r=>{ laborRates[r.person] = Number(r.rate)||0; });
+  } catch(e){ console.warn('Labor rates load failed:', e); laborRates={}; }
+}
+
+async function saveLaborRate(person, rate){
+  try {
+    // Upsert by person name
+    const existing = await sbFetch('GET', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}&select=id`);
+    if(existing && existing.length){
+      await sbFetch('PATCH', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}`, {rate: Number(rate)});
+    } else {
+      await sbFetch('POST', '/rest/v1/labor_rates', {person, rate: Number(rate)});
+    }
+    laborRates[person] = Number(rate);
+  } catch(e){ alert('Error saving rate. Please try again.'); }
+}
+
+function getLaborFilteredReports(){
+  return reports.filter(r=>{
+    if(!r.reportDate) return false;
+    if(laborDateMode==='month') return r.reportDate.slice(0,7)===laborMonth;
+    return true;
+  });
+}
+
+function renderLabor(){
+  const allCrew = [...CREW, 'Ryan','Matt','Jake'].filter((v,i,a)=>a.indexOf(v)===i);
+  const filtered = getLaborFilteredReports();
+
+  // Build month buttons
+  const now2 = new Date();
+  const curMonth = now2.getFullYear()+'-'+String(now2.getMonth()+1).padStart(2,'0');
+  const months = ['2026-12','2026-11','2026-10','2026-09','2026-08','2026-07','2026-06','2026-05','2026-04'].filter(m=>m<=curMonth);
+
+  // Aggregate labor cost by site
+  const bySite = {};
+  filtered.forEach(r=>{
+    const hrs = parseHoursFromReport(r);
+    if(!hrs) return;
+    const rate = laborRates[r.filedBy]||0;
+    const cost = hrs * rate;
+    if(!bySite[r.client]) bySite[r.client] = {cost:0, hours:0, breakdown:{}};
+    bySite[r.client].cost += cost;
+    bySite[r.client].hours += hrs;
+    if(!bySite[r.client].breakdown[r.filedBy]) bySite[r.client].breakdown[r.filedBy]={cost:0,hours:0};
+    bySite[r.client].breakdown[r.filedBy].cost += cost;
+    bySite[r.client].breakdown[r.filedBy].hours += hrs;
+  });
+
+  const totalCost = Object.values(bySite).reduce((s,v)=>s+v.cost,0);
+  const totalHrs = Object.values(bySite).reduce((s,v)=>s+v.hours,0);
+  const siteSorted = Object.entries(bySite).sort((a,b)=>b[1].cost-a[1].cost);
+
+  let html = `<div class="stats-bar" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
+    <div class="stat-card"><div class="stat-num" style="font-size:15px">${poFmt(totalCost)}</div><div class="stat-label">Total Labor Cost</div></div>
+    <div class="stat-card"><div class="stat-num">${totalHrs.toFixed(1)}</div><div class="stat-label">Total Hours</div></div>
+    <div class="stat-card"><div class="stat-num">${siteSorted.length}</div><div class="stat-label">Sites</div></div>
+  </div>`;
+
+  // Month filter
+  html += `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">
+    ${months.map(m=>`<button onclick="laborMonth='${m}';renderLabor()" style="padding:4px 12px;border-radius:99px;border:1px solid ${m===laborMonth?'var(--green)':'var(--border)'};background:${m===laborMonth?'var(--green)':'var(--bg)'};color:${m===laborMonth?'#fff':'var(--text-2)'};font-size:12px;font-weight:500;font-family:inherit;cursor:pointer">${new Date(m+'-15').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</button>`).join('')}
+  </div>`;
+
+  // Rates editor
+  html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
+    <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);margin-bottom:10px">Hourly Rates</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
+      ${allCrew.map(person=>`
+        <div style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 10px">
+          <span style="font-size:13px;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${person}</span>
+          <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+            <span style="font-size:12px;color:var(--text-3)">$</span>
+            <input type="number" value="${laborRates[person]||''}" placeholder="0" min="0" step="5"
+              onchange="saveLaborRate('${person}',this.value).then(()=>renderLabor())"
+              style="width:60px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);text-align:right">
+            <span style="font-size:11px;color:var(--text-3)">/hr</span>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+
+  // Cost by site
+  if(!siteSorted.length){
+    html += `<div style="text-align:center;padding:40px;color:var(--text-3);font-size:14px">No reports with time data for this period.</div>`;
+  } else {
+    const maxCost = siteSorted[0][1].cost || 1;
+    siteSorted.forEach(([site, data])=>{
+      const pct = (data.cost/maxCost)*100;
+      html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div>
+            <div style="font-weight:600;font-size:15px">${site}</div>
+            <div style="font-size:12px;color:var(--text-3)">${data.hours.toFixed(1)} hrs</div>
+          </div>
+          <div style="font-size:20px;font-weight:700;color:#dc2626;font-family:'DM Mono',monospace">${poFmt(data.cost)}</div>
+        </div>
+        <div style="background:var(--border);border-radius:99px;height:6px;overflow:hidden;margin-bottom:10px">
+          <div style="background:#dc2626;height:100%;width:${pct}%;border-radius:99px"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px">
+          ${Object.entries(data.breakdown).sort((a,b)=>b[1].cost-a[1].cost).map(([person,d])=>`
+            <div style="font-size:12px;display:flex;justify-content:space-between;padding:4px 8px;background:var(--surface);border-radius:6px">
+              <span style="color:var(--text-2)">${person}</span>
+              <span style="font-family:'DM Mono',monospace;color:#dc2626;font-weight:600">${poFmt(d.cost)} <span style="color:var(--text-3);font-weight:400">${d.hours.toFixed(1)}h</span></span>
+            </div>`).join('')}
+        </div>
+      </div>`;
+    });
+  }
+
+  document.getElementById('main-content').innerHTML = html;
 }
 
 // ── DIRECT COSTS ──────────────────────────────────────────────
@@ -2774,15 +2899,15 @@ function setView(v){
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
   // idx maps to vtab position within the ACTIVE bar
   const trackerIdx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,hours:8,workorders:9};
-  const bizopsIdx={pipeline:0,po:1,costs:2,clients:3};
+  const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients'].includes(v)?'bizops-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor'].includes(v)?'bizops-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='costs'||v==='clients';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='costs'||v==='clients'||v==='labor';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -2811,6 +2936,7 @@ function render(){
   else if(view==='mileage') renderMileage();
   else if(view==='hours') renderHours();
   else if(view==='clients') renderClients();
+  else if(view==='labor') renderLabor();
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();
@@ -4568,7 +4694,7 @@ function showApp(){
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); startPolling(); });
+  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates(); startPolling(); });
   // Default portal based on user
   if(userEmail==='brian@fieldsourceohio.com'){
     setPortal('consulting');

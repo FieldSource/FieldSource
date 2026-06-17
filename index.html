@@ -900,11 +900,11 @@ function renderHours(){
   });
 
   document.getElementById('main-content').innerHTML = html;
-  // Force dropdown to correct month after render
-  requestAnimationFrame(()=>{
+  // Force dropdown to show correct month after render
+  setTimeout(()=>{
     const sel = document.getElementById('hours-month-sel');
-    if(sel) sel.value = hoursMonth;
-  });
+    if(sel && sel.value !== hoursMonth) sel.value = hoursMonth;
+  }, 50);
 }
 async function importDextCSV(input){
   const file = input.files[0];

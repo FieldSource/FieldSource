@@ -455,7 +455,7 @@ main{padding:12px 16px 100px}
 </div><!-- end app-body -->
 
 <script>
-const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Ohio State ATI','Pickerington','Reynoldsburg Schools','Sharon','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
+const CLIENTS=['Adena','Alder','Athens CC','Canal Winchester','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Eastmoor','Elgin','Fairbanks','Grove City','Indian Hills','Kenton','Logan Elm','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Ohio State ATI','Pickerington','Reynoldsburg Schools','Sharon','Shop','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
 const SERVICES=['Mowing','Applications','Contract Maintenance','Core Aeration','Deep Tine Aeration','Topdressing','Grading','Irrigation Check','Irrigation Repair','Mobilization','Off','Shockwave','Slit Seeding','Broadcast Seeding','Sodding','Sweep','Verti-cut','Vent'];
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Matt','Wes','Cameron','Killer','Sly','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 
@@ -488,6 +488,7 @@ const CLIENT_ADDRESSES = {
   'Pickerington': '90 North East Street, Pickerington, OH',
   'Reynoldsburg Schools': '7244 E Main Street, Reynoldsburg, OH 43068',
   'Sharon': '1129 E State St, Sharon, PA 16146',
+  'Shop': 'Shop',
   'Tree of Life': '4099 Karl Rd, Columbus, OH 43224',
   'University of Dayton': '300 College Park, Dayton, OH 45469',
   'Upper Arlington Schools': '1625 Zollinger Rd, Upper Arlington, OH 43221',
@@ -500,21 +501,21 @@ const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
   Carts:['John Deere Gator TX #1','John Deere Gator TX #2','John Deere Gator HPX #1','2017 Gator John Deere HPX #2','Toro GTX','2019 Toro Workman HDX','John Deere Gator TX #3'],
   Attachments:['Toro ProForce Blower #1','Toro ProForce Blower #2','Buffalo Blower #1','Buffalo Blower #2','Agrimetal 3500 Blower','LitterKat','Redexim VT-1500','Greens Groomer #1','Greens Groomer #2','Turfco Topdresser #1','Turfco Topdresser #2','2021 Woodbay FDS 6000 Dethatcher','Vredo Overseeder DZ5','Imants Shockwave 2.1','Turfco Torrent 2','2025 Snow Dogg','Level Best'],
-  Specialty:['ABI Force','FS Skid Sprayer','Smithco Spray Star 2000','2024 John Deere 4066R','Kubota Tractor','Wacker Neuson Roller','Old Steel Green','New Steel Green','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift'],
+  Specialty:['ABI Force','FS Skid Sprayer','Smithco Spray Star 2000','2024 John Deere 4066R','Kubota Tractor','Wacker Neuson Roller','Steel Green SG52','Steel Green SG52 #2','Steel Green SG52 #3','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift'],
   'Hand Tools':['Green Push Spreader','Stihl Backpack Blower #1','Stihl Backpack Blower #2','Stihl Backpack Blower #3','Stihl Combi','Stihl String Trimmer #1','Stihl String Trimmer #2','Little Wonder Pro Edger','Jumping Jack Tamper','MQ Plate Compactor','Ryan Sod Cutter','Dewalt Hammer Drill','Stihl RB 400','Honda EU 2200i','Husqvarna Trimmer','Billy Goat Sod Cutter','Mi-T-M GH-3003','Stihl ST 500i']
 };
 // Trucks shown only on daily reports, not in scheduling modal
 const TRUCKS=[
-  'Chevrolet Silverado 2500 HD LT (Matt)',
-  'Chevrolet Silverado 2500 HD (Dan Sr.)',
-  'Chevrolet Silverado 1500 RST Duramax (Brandon)',
+  '2026 Chevrolet Silverado 2500HD (Matt)',
+  '2026 Chevrolet Silverado 3500HD (Dan Sr.)',
+  '2024 Chevrolet Silverado 1500 RST Duramax (Brandon Stith)',
   '2026 Chevrolet Silverado 3500HD (Brandon Moore)',
-  'Chevrolet Silverado 1500 LT Duramax (Greg)',
-  'Chevrolet Silverado 1500 LT Duramax (Wes)',
-  'GMC Sierra 1500 SLT (Ryan)',
-  'Ford F550 Dump Truck',
-  'Ford F450 (Jr)',
-  'Chevrolet Silverado 2500 (Spare)'
+  '2025 Chevrolet Silverado 1500 LT Duramax (Greg)',
+  '2023 Chevrolet Silverado 1500 LT Duramax (Wes)',
+  '2026 GMC Sierra 1500 SLT (Ryan)',
+  '2017 Ford F550 Dump Truck',
+  '2024 Ford F450 (Jr)',
+  '2024 Chevrolet Silverado 2500 HD (Spare)'
 ];
 // Categories for scheduling modal (no trucks)
 const EQUIP_CATS=Object.keys(EQUIPMENT);
@@ -1812,12 +1813,12 @@ async function plRestoreProject(id){
 
 // ── MILEAGE ───────────────────────────────────────────────────
 const MILEAGE_VEHICLES = [
-  {id:'TR1',  label:'2024 Chevrolet Silverado 2500 HD LT (Matt)'},
+  {id:'TR1',  label:'2026 Chevrolet Silverado 2500HD (Matt)'},
   {id:'TR3',  label:'2023 Chevrolet Silverado 1500 LT Duramax (Wes)'},
-  {id:'TR4',  label:'2024 Chevrolet Silverado 2500 HD (Dan Sr.)'},
+  {id:'TR4',  label:'2026 Chevrolet Silverado 3500HD (Dan Sr.)'}, 
   {id:'TR5',  label:'2024 Chevrolet Silverado 1500 RST Duramax (Brandon Stith)'},
   {id:'TR6',  label:'2025 Chevrolet Silverado 1500 LT Duramax (Greg)'},
-  {id:'TR7',  label:'2015 Chevrolet Silverado 2500 (Spare)'},
+  {id:'TR7',  label:'2024 Chevrolet Silverado 2500 HD (Spare)'},
   {id:'TR9',  label:'2024 Ford F-450 (Jr)'},
   {id:'TR10', label:'2017 Ford F-550 Dump'},
   {id:'TR11', label:'2026 GMC Sierra 1500 SLT (Ryan)'},

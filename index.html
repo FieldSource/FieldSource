@@ -3452,8 +3452,14 @@ function buildServiceGrid(pre=[]){
 }
 function toggleService(s){
   pickedServices = pickedServices.includes(s) ? pickedServices.filter(x=>x!==s) : [...pickedServices,s];
+  // Update just the class instead of rebuilding the whole grid
   const g = document.getElementById('f-service-grid');
-  if(g) g.innerHTML = buildServiceGrid(pickedServices);
+  if(g){
+    g.querySelectorAll('.sel-opt').forEach(el=>{
+      const svc = el.textContent.trim();
+      el.classList.toggle('picked', pickedServices.includes(svc));
+    });
+  }
 }
 function toggleServiceOther(){
   const hasOther = pickedServices.includes('Other') || pickedServices.some(s=>!SERVICES.includes(s));

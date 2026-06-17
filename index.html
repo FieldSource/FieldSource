@@ -734,10 +734,14 @@ function parseHoursFromReport(r){
   return diff > 0 ? diff/60 : null;
 }
 
-function getFilteredReports(){
+function getFilteredReports(overrideMonth){
+  const month = overrideMonth || hoursMonth;
   return reports.filter(r=>{
     if(!r.reportDate) return false;
-    if(hoursDateMode==='month') return r.reportDate.slice(0,7)===hoursMonth;
+    if(hoursDateMode==='month'){
+      const d = r.reportDate.slice(0,7);
+      return d===month;
+    }
     if(hoursDateMode==='year') return r.reportDate.slice(0,4)===String(hoursYear);
     if(hoursDateMode==='range'){
       if(hoursRangeStart && r.reportDate < hoursRangeStart) return false;
@@ -759,7 +763,7 @@ function renderHours(){
     hoursTabOpened = true;
   }
 
-  const filtered = getFilteredReports();
+  const filtered = getFilteredReports(hoursDateMode==='month' ? hoursMonth : null);
   // Always show last Mon-Sun at the top
   const todayD = new Date();
   const dayOfWeek = todayD.getDay(); // 0=Sun

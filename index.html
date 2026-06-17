@@ -793,9 +793,9 @@ function renderHours(){
     <div class="filter-row" style="margin-bottom:10px">
       ${['month','year','range'].map(m=>`<button class="filter-chip${hoursDateMode===m?' active':''}" onclick="hoursDateMode='${m}';renderHours()">${m==='month'?'By Month':m==='year'?'By Year':'Date Range'}</button>`).join('')}
     </div>
-    ${hoursDateMode==='month'?`<select onchange="hoursMonth=this.value;renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg)">
+    ${hoursDateMode==='month'?`<select id="hours-month-sel" onchange="hoursMonth=this.value;renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg)">
       ${allMonths.map(m=>`<option value="${m}"${m===hoursMonth?' selected':''}>${new Date(m+'-01').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</option>`).join('')}
-    </select>`:''}
+    </select><script>document.getElementById('hours-month-sel').value='${hoursMonth}';</script>`:''}
     ${hoursDateMode==='year'?`<select onchange="hoursYear=parseInt(this.value);renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg)">
       ${allYears.map(y=>`<option value="${y}"${y===String(hoursYear)?' selected':''}>${y}</option>`).join('')}
     </select>`:''}

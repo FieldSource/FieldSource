@@ -3446,18 +3446,16 @@ function buildServiceGrid(pre=[]){
   const hasOther = pickedServices.some(s=>!SERVICES.includes(s));
   const otherVal = hasOther ? pickedServices.find(s=>!SERVICES.includes(s)) : '';
   const otherPicked = pickedServices.includes('Other') || hasOther;
-  return SERVICES.map(s=>`<div class="sel-opt${pickedServices.includes(s)?' picked':''}" onclick="toggleService('${s}')">${s}</div>`).join('')
+  return SERVICES.map(s=>`<div class="sel-opt${pickedServices.includes(s)?' picked':''}" data-svc="${s}" onclick="toggleService('${s}')">${s}</div>`).join('')
     + `<div class="sel-opt${otherPicked?' picked':''}" onclick="toggleServiceOther()">Other</div>`
     + `<div id="f-service-other-wrap" style="display:${otherPicked?'block':'none'};grid-column:1/-1;margin-top:4px"><input type="text" id="f-service-other" placeholder="Describe other service..." value="${otherVal}" style="width:100%;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);box-sizing:border-box"></div>`;
 }
 function toggleService(s){
   pickedServices = pickedServices.includes(s) ? pickedServices.filter(x=>x!==s) : [...pickedServices,s];
-  // Update just the class instead of rebuilding the whole grid
   const g = document.getElementById('f-service-grid');
   if(g){
-    g.querySelectorAll('.sel-opt').forEach(el=>{
-      const svc = el.textContent.trim();
-      el.classList.toggle('picked', pickedServices.includes(svc));
+    g.querySelectorAll('.sel-opt[data-svc]').forEach(el=>{
+      el.classList.toggle('picked', pickedServices.includes(el.dataset.svc));
     });
   }
 }

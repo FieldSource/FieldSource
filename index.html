@@ -748,9 +748,14 @@ function getFilteredReports(){
 }
 
 function renderHours(){
-  const filtered = getFilteredReports();
+  const allMonths = ['2026-04','2026-05','2026-06','2026-07','2026-08','2026-09','2026-10','2026-11','2026-12'];
+  const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
+  if(!allYears.includes('2026')) allYears.unshift('2026');
+  // Always default to current month when first opening
+  const currentMonth = new Date().toISOString().slice(0,7);
+  if(allMonths.includes(currentMonth)) hoursMonth = currentMonth;
 
-  // ── LAST WEEK SUMMARY ──────────────────────────────────────
+  const filtered = getFilteredReports();
   // Always show last Mon-Sun at the top
   const todayD = new Date();
   const dayOfWeek = todayD.getDay(); // 0=Sun
@@ -782,14 +787,6 @@ function renderHours(){
     </div>
     <div style="margin-top:10px;font-size:12px;color:var(--text-3)">${lastWeekReports.length} total report${lastWeekReports.length!==1?'s':''} filed</div>
   </div>`;
-
-  // Build months/years for selectors
-  const allMonths = ['2026-04','2026-05','2026-06','2026-07','2026-08','2026-09','2026-10','2026-11','2026-12'];
-  const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
-  if(!allYears.includes('2026')) allYears.unshift('2026');
-  // Always default to current month
-  const currentMonth = new Date().toISOString().slice(0,7);
-  if(allMonths.includes(currentMonth)) hoursMonth = currentMonth;
 
   // Filter bar
   html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">

@@ -600,7 +600,7 @@ let mileageLogs = [];
 let pipelines = [];
 let plTab = 'active';
 let hoursDateMode = 'month';
-let hoursMonth = new Date().toISOString().slice(0,7);
+const _hn = new Date(); let hoursMonth = _hn.getFullYear()+'-'+String(_hn.getMonth()+1).padStart(2,'0');
 let hoursYear = new Date().getFullYear();
 let hoursRangeStart = '';
 let hoursRangeEnd = '';
@@ -752,7 +752,8 @@ function renderHours(){
   const allYears = [...new Set(reports.map(r=>r.reportDate?r.reportDate.slice(0,4):null).filter(Boolean))].sort().reverse();
   if(!allYears.includes('2026')) allYears.unshift('2026');
   // Only set to current month if not already set to a valid month
-  const currentMonth = new Date().toISOString().slice(0,7);
+  const now = new Date();
+  const currentMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
   if(!allMonths.includes(hoursMonth)) hoursMonth = currentMonth;
 
   const filtered = getFilteredReports();
@@ -794,7 +795,7 @@ function renderHours(){
       ${['month','year','range'].map(m=>`<button class="filter-chip${hoursDateMode===m?' active':''}" onclick="hoursDateMode='${m}';renderHours()">${m==='month'?'By Month':m==='year'?'By Year':'Date Range'}</button>`).join('')}
     </div>
     ${hoursDateMode==='month'?`<select id="hours-month-sel" onchange="hoursMonth=this.value;renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg)">
-      ${allMonths.map(m=>`<option value="${m}">${new Date(m+'-01').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</option>`).join('')}
+      ${allMonths.map(m=>`<option value="${m}"${m===hoursMonth?' selected':''}>${new Date(m+'-01').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</option>`).join('')}
     </select>`:''}
     ${hoursDateMode==='year'?`<select onchange="hoursYear=parseInt(this.value);renderHours()" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'DM Sans',sans-serif;font-size:13px;background:var(--bg)">
       ${allYears.map(y=>`<option value="${y}"${y===String(hoursYear)?' selected':''}>${y}</option>`).join('')}

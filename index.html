@@ -3846,8 +3846,8 @@ function renderReportSiteContent(siteId){
     <div class="form-group">
       <label class="form-label">Equipment used</label>
       <div class="equip-tabs">${equipTabsHtml}</div>
-      <div class="equip-grid">${equipGridHtml}</div>
-      <div id="r-equip-sel-${siteId}">${equipSelHtml}</div>
+      <div class="sel-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:5px;max-height:200px;overflow-y:auto;padding-right:2px;margin-top:6px">${equipGridHtml}</div>
+      <div id="r-equip-sel-${siteId}" style="margin-top:6px">${equipSelHtml}</div>
     </div>
     <div class="form-group" style="margin-bottom:0">
       <label class="form-label">Issue to flag?</label>

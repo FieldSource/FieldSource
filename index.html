@@ -3781,9 +3781,7 @@ function openReportModal(){
         </div>
       </div>
 
-      <div id="report-sites-container">
-        ${buildReportSiteCard(1, true)}
-      </div>
+      <div id="report-sites-container"></div>
 
       <button onclick="addReportSite()" style="width:100%;padding:10px;background:none;border:2px dashed var(--border);border-radius:var(--radius-sm);color:var(--text-3);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;margin-top:8px;margin-bottom:16px">+ Add another site</button>
 
@@ -3797,6 +3795,11 @@ function openReportModal(){
   pickedEquip=[];
   reportIssueOn=false;
   activeReportSite=1;
+  // Insert first site card after modal is in DOM
+  requestAnimationFrame(()=>{
+    const container = document.getElementById('report-sites-container');
+    if(container){ container.innerHTML = buildReportSiteCard(1, true); }
+  });
 }
 
 let reportSites = [];

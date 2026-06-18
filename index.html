@@ -3969,6 +3969,7 @@ function buildReportEquipSelectedForSite(siteId){
 }
 
 function toggleReportEquipSite(siteId, e, el){
+  console.log('toggleReportEquipSite called, siteId:', siteId, typeof siteId, 'reportSites:', reportSites);
   let site = reportSites.find(s=>s.id===siteId||s.id===Number(siteId));
   if(!site){
     // Site not in array yet, add it

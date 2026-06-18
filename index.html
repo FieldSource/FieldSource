@@ -2703,17 +2703,17 @@ function renderConsulting(){
   sorted.forEach(proj=>{
     const sc = CONSULTING_STAGE_COLORS[proj.stage]||{bg:'#f1f5f9',text:'#475569'};
     const totalH = consultingTotalHours(proj);
-    const nextDue = proj.stageDueDates[proj.stage];
-    const projOpenTasks = (proj.tasks||[]).filter(t=>!t.done);
+    const projOpenTasks = (proj.tasks||[]).filter(t=>t.type!=='milestone'&&!t.done);
+    const phaseEndDate = (proj.phaseDates||{})[proj.stage]?.end || proj.stageDueDates[proj.stage];
 
     html += `<div class="report-card" style="cursor:pointer;border-left:3px solid ${sc.text}" onclick="openConsultingDetail('${proj.id}')">
       <div class="report-card-header">
         <div style="flex:1">
           <div class="report-card-title">${proj.client}${proj.projectName?' — '+proj.projectName:''}</div>
-          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
-            <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span>
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center">
+            <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${cEsc(proj.stage)}</span>
+            ${phaseEndDate?`<span style="font-size:11px;color:var(--text-3)">ends ${phaseEndDate}</span>`:''}
             ${projOpenTasks.length?`<span style="font-size:11px;color:var(--text-3)">${projOpenTasks.length} task${projOpenTasks.length!==1?'s':''} open</span>`:''}
-            ${nextDue?`<span style="font-size:11px;color:var(--text-3)">Due ${nextDue}</span>`:''}
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -2790,6 +2790,15 @@ function renderConsultingDetail(){
   html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;border-left:4px solid ${sc.text}">
     <div style="font-size:18px;font-weight:700;color:var(--text)">${cEsc(proj.client)}</div>
     ${proj.projectName?`<div style="font-size:14px;color:var(--text-2);margin-top:2px">${cEsc(proj.projectName)}</div>`:''}
+    <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label style="font-size:12px;font-weight:600;color:var(--text-2)">Active Phase:</label>
+      ${canEdit
+        ? `<select onchange="setConsultingActivePhase('${proj.id}',this.value)" style="padding:4px 10px;border:1px solid var(--border-2);border-radius:6px;font-size:13px;font-family:inherit;background:${sc.bg};color:${sc.text};font-weight:600;cursor:pointer">
+            ${phases.map(p=>`<option value="${cEsc(p)}"${p===proj.stage?' selected':''} >${cEsc(p)}</option>`).join('')}
+          </select>`
+        : `<span style="font-size:13px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text}">${cEsc(proj.stage)}</span>`
+      }
+    </div>
     ${proj.notes?`<div style="margin-top:10px;font-size:13px;color:var(--text-2);border-top:1px solid var(--border);padding-top:10px">${cEsc(proj.notes)}</div>`:''}
   </div>`;
 
@@ -2807,17 +2816,22 @@ function renderConsultingDetail(){
     const openCount = phaseTasks.filter(t=>!t.done).length;
     const doneCount = phaseTasks.filter(t=>t.done).length;
     const sc2 = CONSULTING_STAGE_COLORS[phase]||{bg:'#f1f5f9',text:'#475569'};
+    const pd = (proj.phaseDates||{})[phase]||{};
+    const dateLabel = pd.start||pd.end ? (pd.start||'?')+' → '+(pd.end||'?') : '';
 
     html += `<div style="border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;overflow:hidden">
       <div onclick="toggleConsultingPhase('${phaseKey}')" style="display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;background:${sc2.bg};user-select:none">
         <span style="font-size:13px;transition:transform .2s;display:inline-block;transform:${isExpanded?'rotate(90deg)':'rotate(0deg)'}" id="arrow-${phaseKey}">▶</span>
         <div style="flex:1">
           <div style="font-size:13px;font-weight:600;color:${sc2.text}">${cEsc(phase)}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:2px">${phaseTasks.length?`${openCount} open · ${doneCount} done`:'No tasks yet'}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:2px;display:flex;gap:10px;flex-wrap:wrap">
+            ${phaseTasks.length?`<span>${openCount} open · ${doneCount} done</span>`:`<span>No tasks yet</span>`}
+            ${dateLabel?`<span>📅 ${dateLabel}</span>`:''}
+          </div>
         </div>
+        ${canEdit?`<button onclick="event.stopPropagation();openEditPhaseModal('${proj.id}',${phaseIdx})" style="background:none;border:1px solid ${sc2.text}40;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-family:inherit;color:${sc2.text};flex-shrink:0">Edit</button>`:''}
         ${canEdit?`<button onclick="event.stopPropagation();removeConsultingPhase('${proj.id}',${phaseIdx})" style="background:none;border:none;color:var(--text-3);font-size:16px;cursor:pointer;line-height:1;padding:0 4px" title="Remove phase">×</button>`:''}
       </div>
-      <div id="phase-body-${phaseKey}" style="display:${isExpanded?'block':'none'};padding:12px 14px;background:var(--surface)">`;
 
     // Tasks in this phase
     if(phaseTasks.length===0){
@@ -2944,18 +2958,40 @@ function toggleConsultingPhase(key){
   if(arrow) arrow.style.transform = consultingExpandedPhases[key] ? 'rotate(90deg)' : 'rotate(0deg)';
 }
 
-async function removeConsultingPhase(projId, phaseIdx){
+function removeConsultingPhase(projId, phaseIdx){
   const proj = consultingProjects.find(p=>p.id===projId);
   if(!proj) return;
   const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
   const phaseName = phases[phaseIdx];
   const hasTasks = (proj.tasks||[]).some(t=>t.phase===phaseName);
-  if(hasTasks && !confirm(`Remove "${phaseName}"? This will also delete its tasks.`)) return;
-  if(!hasTasks && !confirm(`Remove "${phaseName}"?`)) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'delphase-overlay';
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:400px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title" style="color:#dc2626">Delete Phase</div>
+    <p style="font-size:14px;color:var(--text);margin-bottom:8px">Are you sure you want to delete <strong>${cEsc(phaseName)}</strong>?</p>
+    ${hasTasks?`<p style="font-size:13px;color:#dc2626;background:#fee2e2;padding:10px 12px;border-radius:var(--radius-sm);margin-bottom:12px">⚠ This phase has tasks that will also be permanently deleted.</p>`:`<p style="font-size:13px;color:var(--text-2);margin-bottom:12px">This cannot be undone.</p>`}
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('delphase-overlay').remove()">Cancel</button>
+      <button class="btn-delete" onclick="confirmRemovePhase('${projId}',${phaseIdx})">Delete Phase</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function confirmRemovePhase(projId, phaseIdx){
+  const proj = consultingProjects.find(p=>p.id===projId);
+  if(!proj) return;
+  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
+  const phaseName = phases[phaseIdx];
   proj.phases = phases.filter((_,i)=>i!==phaseIdx);
   proj.tasks = (proj.tasks||[]).filter(t=>t.phase!==phaseName);
+  if(proj.stage===phaseName) proj.stage = proj.phases[0]||'';
   proj.updatedAt = new Date().toISOString();
   await dbSaveConsulting(proj, projId);
+  document.getElementById('delphase-overlay').remove();
   consultingExpandedPhases = {};
   renderConsultingDetail();
 }
@@ -3290,6 +3326,15 @@ async function logConsultingHours(id){
   proj.hoursLog = [...(proj.hoursLog||[]), {ts:new Date().toISOString(), date, stage, hours, note, loggedBy}];
   proj.updatedAt = new Date().toISOString();
   await dbSaveConsulting(proj, id);
+  renderConsultingDetail();
+}
+
+async function setConsultingActivePhase(projId, phase){
+  const proj = consultingProjects.find(p=>p.id===projId);
+  if(!proj) return;
+  proj.stage = phase;
+  proj.updatedAt = new Date().toISOString();
+  await dbSaveConsulting(proj, projId);
   renderConsultingDetail();
 }
 

@@ -3808,7 +3808,7 @@ function renderReportSiteContent(siteId){
   ].join('');
   const timeIn = buildTimeOptions(site.timeIn);
   const timeOut = buildTimeOptions(site.timeOut);
-  const equipTabsHtml = REPORT_EQUIP_CATS.map(cat=>`<button class="equip-tab${cat===activeEquipTab?' active':''}" onclick="setReportEquipTab(${siteId},'${cat}')">${cat}</button>`).join('');
+  const equipTabsHtml = REPORT_EQUIP_CATS.map(cat=>`<button class="etab${cat===activeEquipTab?' active':''}" onclick="setReportEquipTab(${siteId},'${cat}')">${cat}</button>`).join('');
   const equipGridHtml = (REPORT_EQUIPMENT[activeEquipTab]||[]).map(e=>{
     const picked=(site.equip||[]).includes(e);
     return `<div class="sel-opt${picked?' picked':''}" data-eq="${e.replace(/"/g,'&quot;')}" onclick="toggleREquip(${siteId},this.dataset.eq,this)">${e}</div>`;

@@ -9,7 +9,6 @@
 <meta name="apple-mobile-web-app-title" content="Field Source">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#2a6a22">
-<link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -5351,12 +5350,6 @@ function checkForRecoveryToken(){
 // Init
 if(!checkForRecoveryToken()) checkSession();
 
-// Register service worker for PWA
-if('serviceWorker' in navigator){
-  window.addEventListener('load', ()=>{
-    navigator.serviceWorker.register('/sw.js').catch(()=>{});
-  });
-}
 </script>
 </body>
 </html>

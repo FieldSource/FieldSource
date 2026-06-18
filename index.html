@@ -3811,7 +3811,7 @@ function renderReportSiteContent(siteId){
   const equipTabsHtml = REPORT_EQUIP_CATS.map(cat=>`<button class="equip-tab${cat===activeEquipTab?' active':''}" onclick="setReportEquipTab(${siteId},'${cat}')">${cat}</button>`).join('');
   const equipGridHtml = (REPORT_EQUIPMENT[activeEquipTab]||[]).map(e=>{
     const picked=(site.equip||[]).includes(e);
-    return `<div class="equip-chip${picked?' picked':''}" data-eq="${e.replace(/"/g,'&quot;')}" onclick="toggleREquip(${siteId},this.dataset.eq,this)">${e}</div>`;
+    return `<div class="sel-opt${picked?' picked':''}" data-eq="${e.replace(/"/g,'&quot;')}" onclick="toggleREquip(${siteId},this.dataset.eq,this)">${e}</div>`;
   }).join('');
   const equipSelHtml = (site.equip||[]).length ? site.equip.map(e=>`<span class="report-pill">🔧 ${e}</span>`).join('') : '<div style="font-size:12px;color:var(--text-3)">None selected</div>';
 

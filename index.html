@@ -1265,7 +1265,7 @@ async function saveLaborRate(person, rate){
   if(isNaN(num)) return;
   try {
     // Use Supabase upsert via POST with on-conflict header
-    await fetch(SUPABASE_URL + '/rest/v1/labor_rates', {
+    await fetch(SUPABASE_URL + '/rest/v1/labor_rates?on_conflict=person', {
       method: 'POST',
       headers: {
         'apikey': SUPABASE_KEY,

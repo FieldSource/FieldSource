@@ -3798,7 +3798,7 @@ function openReportModal(){
   // Insert first site card after modal is in DOM
   requestAnimationFrame(()=>{
     const container = document.getElementById('report-sites-container');
-    if(container){ container.innerHTML = buildReportSiteCard(1, true); }
+    if(container){ container.innerHTML=''; container.appendChild(buildReportSiteCard(1, true)); }
   });
 }
 
@@ -3807,60 +3807,103 @@ let reportSiteCount = 0;
 let activeReportSite = 1;
 
 function buildReportSiteCard(siteId, isFirst=false){
-  const clientOpts = CLIENTS.map(c=>`<option value="${c}">${c}</option>`).join('');
-  return `<div id="report-site-${siteId}" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:10px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-      <div style="font-size:13px;font-weight:600;color:var(--text-2)">Site ${siteId}</div>
-      ${!isFirst?`<button onclick="removeReportSite(${siteId})" style="background:none;border:none;color:var(--text-3);font-size:18px;cursor:pointer;line-height:1;padding:0">×</button>`:''}
-    </div>
-    <div class="form-group">
-      <label class="form-label">Site / client</label>
-      <select id="r-client-${siteId}" onchange="updateReportSite(${siteId},'client',this.value)">
-        <option value="">— pick a site —</option>
-        ${clientOpts}
-        <option value="__custom__">Other</option>
-      </select>
-      <input type="text" id="r-client-custom-${siteId}" placeholder="Type site name..." style="display:none;margin-top:6px" oninput="updateReportSite(${siteId},'clientCustom',this.value)">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Field / location</label>
-      <input type="text" id="r-field-${siteId}" placeholder="e.g. Soccer field 1" oninput="updateReportSite(${siteId},'field',this.value)">
-    </div>
+  const wrapper = document.createElement('div');
+  wrapper.id = 'report-site-'+siteId;
+  wrapper.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;margin-bottom:10px';
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px';
+  hdr.innerHTML = '<div style="font-size:13px;font-weight:600;color:var(--text-2)">Site '+siteId+'</div>';
+  if(!isFirst){
+    const rmBtn = document.createElement('button');
+    rmBtn.textContent='×';
+    rmBtn.style.cssText='background:none;border:none;color:var(--text-3);font-size:18px;cursor:pointer;line-height:1;padding:0';
+    rmBtn.onclick=()=>removeReportSite(siteId);
+    hdr.appendChild(rmBtn);
+  }
+  wrapper.appendChild(hdr);
+
+  // Client select
+  const clientGrp = document.createElement('div');
+  clientGrp.className='form-group';
+  const clientLabel = document.createElement('label');
+  clientLabel.className='form-label'; clientLabel.textContent='Site / client';
+  const clientSel = document.createElement('select');
+  clientSel.id='r-client-'+siteId;
+  clientSel.onchange=()=>updateReportSite(siteId,'client',clientSel.value);
+  const blankOpt = document.createElement('option');
+  blankOpt.value=''; blankOpt.textContent='— pick a site —';
+  clientSel.appendChild(blankOpt);
+  CLIENTS.forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; clientSel.appendChild(o); });
+  const customOpt = document.createElement('option');
+  customOpt.value='__custom__'; customOpt.textContent='Other';
+  clientSel.appendChild(customOpt);
+  const customInp = document.createElement('input');
+  customInp.type='text'; customInp.id='r-client-custom-'+siteId;
+  customInp.placeholder='Type site name...';
+  customInp.style.cssText='display:none;margin-top:6px;width:100%;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box';
+  customInp.oninput=()=>updateReportSite(siteId,'clientCustom',customInp.value);
+  clientGrp.appendChild(clientLabel);
+  clientGrp.appendChild(clientSel);
+  clientGrp.appendChild(customInp);
+  wrapper.appendChild(clientGrp);
+
+  // Field input
+  const fieldGrp = document.createElement('div');
+  fieldGrp.className='form-group';
+  const fieldLabel = document.createElement('label');
+  fieldLabel.className='form-label'; fieldLabel.textContent='Field / location';
+  const fieldInp = document.createElement('input');
+  fieldInp.type='text'; fieldInp.id='r-field-'+siteId;
+  fieldInp.placeholder='e.g. Soccer field 1, Baseball diamond';
+  fieldInp.oninput=()=>updateReportSite(siteId,'field',fieldInp.value);
+  fieldGrp.appendChild(fieldLabel);
+  fieldGrp.appendChild(fieldInp);
+  wrapper.appendChild(fieldGrp);
+
+  // Now add the rest as innerHTML (no nested dynamic content)
+  const rest = document.createElement('div');
+  rest.innerHTML = `
     <div class="form-group">
       <label class="form-label">Time on site</label>
       <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:end">
-        <div>
-          <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Arrived</div>
-          <select id="r-timein-${siteId}" onchange="updateReportSite(${siteId},'timeIn',this.value)">${buildTimeOptions()}</select>
+        <div><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Arrived</div>
+          <select id="r-timein-SITEID" onchange="updateReportSite(SITEID,'timeIn',this.value)">${buildTimeOptions()}</select>
         </div>
         <div class="date-sep">→</div>
-        <div>
-          <div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Left</div>
-          <select id="r-timeout-${siteId}" onchange="updateReportSite(${siteId},'timeOut',this.value)">${buildTimeOptions()}</select>
+        <div><div style="font-size:11px;color:var(--text-3);margin-bottom:4px">Left</div>
+          <select id="r-timeout-SITEID" onchange="updateReportSite(SITEID,'timeOut',this.value)">${buildTimeOptions()}</select>
         </div>
       </div>
     </div>
     <div class="form-group">
       <label class="form-label">Work done</label>
-      <textarea id="r-workdone-${siteId}" placeholder="Describe what was completed..." oninput="updateReportSite(${siteId},'workDone',this.value)"></textarea>
+      <textarea id="r-workdone-SITEID" placeholder="Describe what was completed..." oninput="updateReportSite(SITEID,'workDone',this.value)"></textarea>
     </div>
     <div class="form-group">
       <label class="form-label">Equipment used</label>
-      <div class="equip-tabs" id="r-equip-tabs-${siteId}">${buildReportEquipTabsForSite(siteId)}</div>
-      <div class="equip-grid" id="r-equip-grid-${siteId}">${buildReportEquipGridForSite(siteId)}</div>
-      <div id="r-equip-selected-${siteId}">${buildReportEquipSelectedForSite(siteId)}</div>
+      <div class="equip-tabs" id="r-equip-tabs-SITEID"></div>
+      <div class="equip-grid" id="r-equip-grid-SITEID"></div>
+      <div id="r-equip-selected-SITEID"></div>
     </div>
     <div class="form-group" style="margin-bottom:0">
       <label class="form-label">Issue to flag?</label>
-      <div class="issue-toggle" id="r-issue-toggle-${siteId}" onclick="toggleReportIssueSite(${siteId})">
+      <div class="issue-toggle" id="r-issue-toggle-SITEID" onclick="toggleReportIssueSite(SITEID)">
         <div class="toggle-track"><div class="toggle-thumb"></div></div>
         <span class="toggle-label">No issue — all good</span>
       </div>
-      <div id="r-issue-section-${siteId}" style="display:none;margin-top:8px">
-        <textarea id="r-issue-notes-${siteId}" placeholder="What did you find?" oninput="updateReportSite(${siteId},'issueNotes',this.value)"></textarea>
+      <div id="r-issue-section-SITEID" style="display:none;margin-top:8px">
+        <textarea id="r-issue-notes-SITEID" placeholder="What did you find?" oninput="updateReportSite(SITEID,'issueNotes',this.value)"></textarea>
       </div>
-    </div>
-  </div>`;
+    </div>`.replace(/SITEID/g, siteId);
+  wrapper.appendChild(rest);
+  // Populate equip tabs/grid
+  const tabsEl = wrapper.querySelector('#r-equip-tabs-'+siteId);
+  const gridEl = wrapper.querySelector('#r-equip-grid-'+siteId);
+  if(tabsEl) tabsEl.innerHTML = buildReportEquipTabsForSite(siteId);
+  if(gridEl) gridEl.innerHTML = buildReportEquipGridForSite(siteId);
+  return wrapper;
 }
 
 function addReportSite(){
@@ -3868,9 +3911,7 @@ function addReportSite(){
   const id = reportSiteCount;
   reportSites.push({id, client:'', field:'', timeIn:'', timeOut:'', workDone:'', equip:[], hasIssue:false, issueNotes:''});
   const container = document.getElementById('report-sites-container');
-  const div = document.createElement('div');
-  div.innerHTML = buildReportSiteCard(id, false);
-  container.appendChild(div.firstElementChild);
+  container.appendChild(buildReportSiteCard(id, false));
 }
 
 function removeReportSite(siteId){

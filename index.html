@@ -3921,8 +3921,11 @@ function removeReportSite(siteId){
 }
 
 function updateReportSite(siteId, field, value){
-  const site = reportSites.find(s=>s.id===siteId);
-  if(!site) return;
+  let site = reportSites.find(s=>s.id===siteId||s.id===Number(siteId));
+  if(!site){
+    site = {id:Number(siteId), client:'', field:'', timeIn:'', timeOut:'', workDone:'', equip:[], hasIssue:false, issueNotes:''};
+    reportSites.push(site);
+  }
   if(field==='client'){
     if(value==='__custom__'){
       document.getElementById('r-client-custom-'+siteId).style.display='';
@@ -3966,8 +3969,13 @@ function buildReportEquipSelectedForSite(siteId){
 }
 
 function toggleReportEquipSite(siteId, e, el){
-  const site = reportSites.find(s=>s.id===siteId);
-  if(!site) return;
+  let site = reportSites.find(s=>s.id===siteId||s.id===Number(siteId));
+  if(!site){
+    // Site not in array yet, add it
+    site = {id:Number(siteId), client:'', field:'', timeIn:'', timeOut:'', workDone:'', equip:[], hasIssue:false, issueNotes:''};
+    reportSites.push(site);
+  }
+  if(!site.equip) site.equip = [];
   if(site.equip.includes(e)){
     site.equip = site.equip.filter(x=>x!==e);
     el.classList.remove('picked');
@@ -3980,8 +3988,11 @@ function toggleReportEquipSite(siteId, e, el){
 }
 
 function toggleReportIssueSite(siteId){
-  const site = reportSites.find(s=>s.id===siteId);
-  if(!site) return;
+  let site = reportSites.find(s=>s.id===siteId||s.id===Number(siteId));
+  if(!site){
+    site = {id:Number(siteId), client:'', field:'', timeIn:'', timeOut:'', workDone:'', equip:[], hasIssue:false, issueNotes:''};
+    reportSites.push(site);
+  }
   site.hasIssue = !site.hasIssue;
   const tog = document.getElementById('r-issue-toggle-'+siteId);
   const sec = document.getElementById('r-issue-section-'+siteId);

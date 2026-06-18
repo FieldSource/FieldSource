@@ -431,6 +431,7 @@ main{padding:12px 16px 100px}
 <div class="view-bar" id="consulting-bar" style="display:none">
   <div class="view-bar-row">
     <button class="vtab" onclick="view='consulting-home';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderConsulting()">Overview</button>
+    <button class="vtab" onclick="setView('consulting-deadlines')">Deadlines</button>
   </div>
 </div>
 
@@ -2728,6 +2729,108 @@ function renderConsulting(){
 }
 
 
+function renderConsultingDeadlines(){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const in7 = new Date(today); in7.setDate(in7.getDate()+7);
+  const todayStr = today.toISOString().split('T')[0];
+  const in7Str = in7.toISOString().split('T')[0];
+
+  // Collect all deadline items across all projects
+  const items = [];
+  consultingProjects.forEach(proj=>{
+    const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
+    const phaseDates = proj.phaseDates||{};
+
+    // Phase end dates
+    phases.forEach(phase=>{
+      const pd = phaseDates[phase]||{};
+      if(pd.end && pd.end >= todayStr && pd.end <= in7Str){
+        items.push({date:pd.end, type:'phase', label:phase, proj, sub:'Phase end date'});
+      }
+    });
+
+    // Tasks
+    (proj.tasks||[]).forEach(t=>{
+      if(t.type==='milestone'){
+        if(t.date && t.date >= todayStr && t.date <= in7Str){
+          items.push({date:t.date, type:'milestone', label:t.title, proj, sub:'Milestone'});
+        }
+      } else {
+        if(t.endDate && t.endDate >= todayStr && t.endDate <= in7Str && !t.done){
+          items.push({date:t.endDate, type:'task', label:t.title, proj, sub:t.phase, done:t.done});
+        }
+        // Subtasks
+        (t.subtasks||[]).forEach(s=>{
+          // subtasks don't have dates currently — skip
+        });
+      }
+    });
+  });
+
+  // Sort by date
+  items.sort((a,b)=>a.date.localeCompare(b.date));
+
+  const ITEM_COLORS = {
+    phase:     {bg:'#dbeafe', text:'#1d4ed8', label:'Phase'},
+    task:      {bg:'#dcfce7', text:'#14532d', label:'Task'},
+    milestone: {bg:'#fef3c7', text:'#92400e', label:'Milestone'},
+  };
+
+  const fmtDate = d => {
+    const dt = new Date(d+'T12:00:00');
+    const diff = Math.round((dt-today)/(1000*60*60*24));
+    const dayName = dt.toLocaleDateString('en-US',{weekday:'short'});
+    const mon = dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+    if(diff===0) return {label:`Today · ${mon}`, urgent:true};
+    if(diff===1) return {label:`Tomorrow · ${mon}`, urgent:true};
+    return {label:`${dayName} · ${mon} (${diff}d)`, urgent:false};
+  };
+
+  let html = `<div style="margin-bottom:16px">
+    <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px">Upcoming Deadlines</div>
+    <div style="font-size:13px;color:var(--text-3)">Next 7 days across all projects</div>
+  </div>`;
+
+  if(!items.length){
+    html += `<div style="text-align:center;padding:48px 24px;color:var(--text-3)">
+      <div style="font-size:32px;margin-bottom:12px">✅</div>
+      <div style="font-size:15px;font-weight:600">Nothing due in the next 7 days</div>
+    </div>`;
+  } else {
+    // Group by date
+    const byDate = {};
+    items.forEach(item=>{
+      if(!byDate[item.date]) byDate[item.date]=[];
+      byDate[item.date].push(item);
+    });
+
+    Object.keys(byDate).sort().forEach(date=>{
+      const {label:dateLabel, urgent} = fmtDate(date);
+      html += `<div style="margin-bottom:20px">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${urgent?'#dc2626':'var(--text-2)'};margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid ${urgent?'#fca5a5':'var(--border)'}">${dateLabel}</div>`;
+
+      byDate[date].forEach(item=>{
+        const c = ITEM_COLORS[item.type];
+        const sc = CONSULTING_STAGE_COLORS[item.proj.stage]||{bg:'#f1f5f9',text:'#475569'};
+        html += `<div onclick="openConsultingDetail('${item.proj.id}')" style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;cursor:pointer;border-left:3px solid ${c.text}">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">
+              <span style="font-size:10px;font-weight:700;border-radius:99px;padding:1px 7px;background:${c.bg};color:${c.text}">${c.label}</span>
+              <span style="font-size:10px;font-weight:600;border-radius:99px;padding:1px 7px;background:${sc.bg};color:${sc.text}">${cEsc(item.proj.stage)}</span>
+            </div>
+            <div style="font-size:14px;font-weight:600;color:var(--text)">${cEsc(item.label)}</div>
+            <div style="font-size:12px;color:var(--text-3);margin-top:2px">${cEsc(item.proj.client)}${item.proj.projectName?' — '+cEsc(item.proj.projectName):''}${item.sub?' · '+cEsc(item.sub):''}</div>
+          </div>
+          <div style="font-size:12px;font-weight:700;color:${urgent?'#dc2626':'var(--green-dark)'};flex-shrink:0;margin-top:2px">${date}</div>
+        </div>`;
+      });
+      html += `</div>`;
+    });
+  }
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
 function openConsultingDetail(id){
   consultingDetailId = id;
   consultingExpandedPhases = {};
@@ -3587,14 +3690,14 @@ function setView(v){
   // idx maps to vtab position within the ACTIVE bar
   const trackerIdx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,hours:8,workorders:9};
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
-  const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
+  const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0,'consulting-deadlines':1};
   // Find the right bar and highlight correct tab
   const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing'].includes(v)?'bizops-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='costs'||v==='clients'||v==='labor'||v==='costing';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -3628,6 +3731,7 @@ function render(){
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();
+  else if(view==='consulting-deadlines') renderConsultingDeadlines();
   else if(view==='costs') renderCosts();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();

@@ -533,11 +533,12 @@ const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsZGx2dGxiZ3hpemJwcGFsaWFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NzI5NDEsImV4cCI6MjA5MzE0ODk0MX0.uihnFIhsnPWiCg-O9Et7vJOHw_G8OacdDkQ7JNtw8Bg';
 
 async function sbFetch(method, path, body=null){
+  const token = currentToken || SUPABASE_KEY;
   const opts = {
     method,
     headers: {
       'apikey': SUPABASE_KEY,
-      'Authorization': 'Bearer ' + SUPABASE_KEY,
+      'Authorization': 'Bearer ' + token,
       'Content-Type': 'application/json',
       'Prefer': method==='POST'?'return=representation':'',
     }
@@ -1614,7 +1615,6 @@ async function dbDeletePO(id){
   await sbFetch('DELETE', `/rest/v1/po_tracker?id=eq.${id}`);
 }
 
-function poFmt(n){ return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function poStatusColor(s){
   if(s==='Open') return {bg:'#dbeafe',text:'#1d4ed8'};
   if(s==='Partially Billed') return {bg:'#fef3c7',text:'#92400e'};
@@ -2786,18 +2786,14 @@ function renderConsultingDetail(){
     </div>
   </div>`;
 
+
   // --- Header card ---
   html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;border-left:4px solid ${sc.text}">
     <div style="font-size:18px;font-weight:700;color:var(--text)">${cEsc(proj.client)}</div>
     ${proj.projectName?`<div style="font-size:14px;color:var(--text-2);margin-top:2px">${cEsc(proj.projectName)}</div>`:''}
     <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <label style="font-size:12px;font-weight:600;color:var(--text-2)">Active Phase:</label>
-      ${canEdit
-        ? `<select onchange="setConsultingActivePhase('${proj.id}',this.value)" style="padding:4px 10px;border:1px solid var(--border-2);border-radius:6px;font-size:13px;font-family:inherit;background:${sc.bg};color:${sc.text};font-weight:600;cursor:pointer">
-            ${phases.map(p=>`<option value="${cEsc(p)}"${p===proj.stage?' selected':''} >${cEsc(p)}</option>`).join('')}
-          </select>`
-        : `<span style="font-size:13px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text}">${cEsc(proj.stage)}</span>`
-      }
+      ${canEdit ? `<select onchange="setConsultingActivePhase('${proj.id}',this.value)" style="padding:4px 10px;border:1px solid var(--border-2);border-radius:6px;font-size:13px;font-family:inherit;background:${sc.bg};color:${sc.text};font-weight:600;cursor:pointer">${phases.map(p=>`<option value="${cEsc(p)}"${p===proj.stage?' selected':''} >${cEsc(p)}</option>`).join('')}</select>` : `<span style="font-size:13px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text}">${cEsc(proj.stage)}</span>`}
     </div>
     ${proj.notes?`<div style="margin-top:10px;font-size:13px;color:var(--text-2);border-top:1px solid var(--border);padding-top:10px">${cEsc(proj.notes)}</div>`:''}
   </div>`;
@@ -2832,6 +2828,7 @@ function renderConsultingDetail(){
         ${canEdit?`<button onclick="event.stopPropagation();openEditPhaseModal('${proj.id}',${phaseIdx})" style="background:none;border:1px solid ${sc2.text}40;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;font-family:inherit;color:${sc2.text};flex-shrink:0">Edit</button>`:''}
         ${canEdit?`<button onclick="event.stopPropagation();removeConsultingPhase('${proj.id}',${phaseIdx})" style="background:none;border:none;color:var(--text-3);font-size:16px;cursor:pointer;line-height:1;padding:0 4px" title="Remove phase">×</button>`:''}
       </div>
+      <div id="phase-body-${phaseKey}" style="display:${isExpanded?'block':'none'};padding:12px 14px;background:var(--surface)">`;
 
     // Tasks in this phase
     if(phaseTasks.length===0){
@@ -5524,30 +5521,6 @@ function showApp(){
   }
 }
 
-// Override sbFetch to use auth token when available
-const _origSbFetch = sbFetch;
-async function sbFetch(method, path, body=null){
-  const token = currentToken || SUPABASE_KEY;
-  const opts = {
-    method,
-    headers: {
-      'apikey': SUPABASE_KEY,
-      'Authorization': 'Bearer ' + token,
-      'Content-Type': 'application/json',
-      'Prefer': method==='POST'?'return=representation':'',
-    }
-  };
-  if(body) opts.body = JSON.stringify(body);
-  const res = await fetch(SUPABASE_URL + path, opts);
-  if(!res.ok){
-    const t=await res.text();
-    console.error('Supabase error:', method, path, t);
-    if(t.includes('JWT expired')){ doLogout(); return null; }
-    throw new Error(t);
-  }
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
-}
 
 // Check for existing session on load
 function checkSession(){

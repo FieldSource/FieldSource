@@ -624,6 +624,7 @@ let mileageYearFilter = new Date().getFullYear();
 let mileagePersonFilter = 'All';
 let mileageTripFilter = 'All';
 let reportSiteFilter = 'All';
+let reportEmployeeFilter = 'All';
 let woSiteFilter = 'All';
 let woStatusFilter = 'open';
 
@@ -3723,14 +3724,30 @@ function renderReports(){
   const REPORT_ALL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const canSeeAll = REPORT_ALL_EMAILS.includes((currentUser&&currentUser.email||'').toLowerCase());
   const myName = getDisplayName(currentUser&&currentUser.email);
-  const visibleReports = canSeeAll ? reports : reports.filter(r=>r.filedBy===myName);
+  const emailFallback = (currentUser&&currentUser.email||'').split('@')[0];
+  const visibleReports = canSeeAll ? reports : reports.filter(r=>r.filedBy===myName||r.filedBy===emailFallback);
 
   const allClients = ['All', ...new Set(visibleReports.map(r=>r.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
-  const filtered = reportSiteFilter==='All' ? visibleReports : visibleReports.filter(r=>r.client===reportSiteFilter);
+  const allEmployees = ['All', ...new Set(visibleReports.map(r=>r.filedBy).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
 
-  let html = `<div class="site-filter-row">${allClients.map(c=>
-    `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${c.replace(/'/g,"\\'")}'">${c}</button>`
-  ).join('')}</div>`;
+  // reset filters if they no longer apply
+  if(!allClients.includes(reportSiteFilter)) reportSiteFilter='All';
+  if(!allEmployees.includes(reportEmployeeFilter)) reportEmployeeFilter='All';
+
+  let afterSite = reportEmployeeFilter==='All' ? visibleReports : visibleReports.filter(r=>r.filedBy===reportEmployeeFilter);
+  const filtered = reportSiteFilter==='All' ? afterSite : afterSite.filter(r=>r.client===reportSiteFilter);
+
+  let html = `<div class="site-filter-row">${allClients.map(c=>{
+    const safe = c.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${safe}')">${c}</button>`;
+  }).join('')}</div>`;
+
+  if(canSeeAll && allEmployees.length > 2){
+    html += `<div class="site-filter-row" style="margin-top:4px">${allEmployees.map(e=>{
+      const safe = e.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      return `<button class="site-chip${reportEmployeeFilter===e?' active':''}" onclick="setReportEmployee('${safe}')">${e}</button>`;
+    }).join('')}</div>`;
+  }
 
   if(!filtered.length){
     html += `<div class="empty-state"><p>No daily reports yet.<br>Tap "+ File report" to submit one.</p></div>`;
@@ -3758,6 +3775,7 @@ function renderReports(){
   document.getElementById('main-content').innerHTML = html;
 }
 function setReportSite(c){ reportSiteFilter=c; renderReports(); }
+function setReportEmployee(e){ reportEmployeeFilter=e; renderReports(); }
 
 function openReportModal(){
   const todayStr = isoDate(today());

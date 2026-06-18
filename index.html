@@ -3666,6 +3666,7 @@ async function saveJob(){
     }
     return s;
   });
+  console.log('pickedServices at save time:', pickedServices, 'services:', services);
   const task = document.getElementById('f-task') ? document.getElementById('f-task').value.trim() : '';
   const rentalEquip = document.getElementById('f-rental-equip') ? document.getElementById('f-rental-equip').value.trim() : '';
   const createdBy = editId ? (jobs.find(j=>j.id===editId)||{}).createdBy||'' : getDisplayName(currentUser&&currentUser.email);

@@ -1330,10 +1330,10 @@ function renderLabor(){
           <span style="font-size:13px;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${person}</span>
           <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
             <span style="font-size:12px;color:var(--text-3)">$</span>
-            <input type="number" value="${laborRates[person]||''}" placeholder="0" min="0" step="5"
-              onchange="saveLaborRate('${person}',this.value)"
+            <input type="number" id="rate-${person.replace(/\s+/g,'-')}" value="${laborRates[person]||''}" placeholder="0" min="0" step="5"
               style="width:60px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);text-align:right">
             <span style="font-size:11px;color:var(--text-3)">/hr</span>
+            <button onclick="const inp=document.getElementById('rate-${person.replace(/\s+/g,'-')}');saveLaborRate('${person}',inp.value);inp.style.borderColor='var(--green)';setTimeout(()=>inp.style.borderColor='',1500)" style="padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>
           </div>
         </div>`).join('')}
     </div>

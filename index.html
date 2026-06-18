@@ -646,6 +646,7 @@ async function loadReports(){
       equipUsed: row.equip_used||[],
       hasIssue: row.has_issue||false,
       issueNotes: row.issue_notes||'',
+      additionalCrew: row.additional_crew||[],
       createdAt: row.created_at||''
     }));
   } catch(e) {
@@ -667,7 +668,8 @@ async function dbSaveReport(data){
     products_used: data.productsUsed,
     equip_used: data.equipUsed,
     has_issue: data.hasIssue,
-    issue_notes: data.issueNotes
+    issue_notes: data.issueNotes,
+    additional_crew: data.additionalCrew||[]
   };
   const result = await sbFetch('POST', '/rest/v1/field_reports', row);
   // Sync to Google Sheets
@@ -1098,14 +1100,18 @@ function renderCosting(){
   allReports.forEach(r=>{
     const hrs = parseHoursFromReport(r);
     if(!hrs||!r.client) return;
-    const rate = laborRates[r.filedBy]||0;
-    const cost = hrs*rate;
-    const s = getSite(r.client);
-    s.labor += cost;
-    s.laborHrs += hrs;
-    if(!s.laborDetail[r.filedBy]) s.laborDetail[r.filedBy]={hrs:0,cost:0};
-    s.laborDetail[r.filedBy].hrs += hrs;
-    s.laborDetail[r.filedBy].cost += cost;
+    // Primary person
+    const allPeople = [r.filedBy, ...(r.additionalCrew||[])].filter(Boolean);
+    allPeople.forEach(person=>{
+      const rate = laborRates[person]||0;
+      const cost = hrs*rate;
+      const s = getSite(r.client);
+      s.labor += cost;
+      s.laborHrs += hrs;
+      if(!s.laborDetail[person]) s.laborDetail[person]={hrs:0,cost:0};
+      s.laborDetail[person].hrs += hrs;
+      s.laborDetail[person].cost += cost;
+    });
   });
 
   allCosts.forEach(c=>{
@@ -3729,7 +3735,7 @@ function renderReports(){
         <div class="report-card-header">
           <div>
             <div class="report-card-title">${r.client}${r.field?' · '+r.field:''}</div>
-            <div class="report-card-meta">${r.reportDate} · Filed by ${r.filedBy}${r.timeIn&&r.timeOut?' · '+r.timeIn+'–'+r.timeOut:''}</div>
+            <div class="report-card-meta">${r.reportDate} · Filed by ${r.filedBy}${r.additionalCrew&&r.additionalCrew.length?' · with '+r.additionalCrew.join(', '):''}${r.timeIn&&r.timeOut?' · '+r.timeIn+'–'+r.timeOut:''}</div>
           </div>
           ${issueFlag}
         </div>
@@ -3749,7 +3755,7 @@ function setReportSite(c){ reportSiteFilter=c; renderReports(); }
 function openReportModal(){
   const todayStr = isoDate(today());
   const myName = getDisplayName(currentUser&&currentUser.email);
-  reportSites = [{id:1,client:'',field:'',timeIn:'',timeOut:'',workDone:'',equip:[],hasIssue:false,issueNotes:''}];
+  reportSites = [{id:1,client:'',field:'',timeIn:'',timeOut:'',workDone:'',equip:[],hasIssue:false,issueNotes:'',additionalCrew:[]}];
   reportSiteCount = 1;
 
   document.getElementById('modal-root').innerHTML=`<div class="modal-overlay" onclick="maybeClose(event)">
@@ -3846,6 +3852,13 @@ function renderReportSiteContent(siteId){
       <textarea oninput="setRSiteField(${siteId},'workDone',this.value)" placeholder="Describe what was completed...">${site.workDone}</textarea>
     </div>
     <div class="form-group">
+      <label class="form-label">Additional crew on site <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px">
+        ${CREW.filter(c=>c!==site.filedBy).map(c=>`<div class="sel-opt${(site.additionalCrew||[]).includes(c)?' picked':''}" onclick="toggleRCrew(${siteId},'${c}',this)" style="font-size:12px;text-align:center">${c}</div>`).join('')}
+      </div>
+      <div id="r-crew-sel-${siteId}" style="margin-top:4px;font-size:12px;color:var(--text-3)">${(site.additionalCrew||[]).length?'With: '+(site.additionalCrew||[]).join(', '):'No additional crew'}</div>
+    </div>
+    <div class="form-group">
       <label class="form-label">Equipment used</label>
       <div class="equip-tabs">${equipTabsHtml}</div>
       <div class="sel-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:5px;max-height:200px;overflow-y:auto;padding-right:2px;margin-top:6px">${equipGridHtml}</div>
@@ -3887,6 +3900,21 @@ function setReportEquipTab(siteId, cat){
   renderReportSiteContent(siteId);
 }
 
+function toggleRCrew(siteId, person, el){
+  const site = reportSites.find(s=>s.id===siteId);
+  if(!site) return;
+  if(!site.additionalCrew) site.additionalCrew=[];
+  if(site.additionalCrew.includes(person)){
+    site.additionalCrew=site.additionalCrew.filter(x=>x!==person);
+    el.classList.remove('picked');
+  } else {
+    site.additionalCrew.push(person);
+    el.classList.add('picked');
+  }
+  const sel=document.getElementById('r-crew-sel-'+siteId);
+  if(sel) sel.textContent=site.additionalCrew.length?'With: '+site.additionalCrew.join(', '):'No additional crew';
+}
+
 function toggleREquip(siteId, e, el){
   const site = reportSites.find(s=>s.id===siteId);
   if(!site) return;
@@ -3911,7 +3939,7 @@ function toggleRIssue(siteId){
 
 function addReportSite(){
   reportSiteCount++;
-  const newSite={id:reportSiteCount,client:'',field:'',timeIn:'',timeOut:'',workDone:'',equip:[],hasIssue:false,issueNotes:''};
+  const newSite={id:reportSiteCount,client:'',field:'',timeIn:'',timeOut:'',workDone:'',equip:[],hasIssue:false,issueNotes:'',additionalCrew:[]};
   reportSites.push(newSite);
   const container=document.getElementById('report-sites-container');
   if(!container) return;

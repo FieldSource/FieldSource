@@ -2425,13 +2425,16 @@ function startPolling(){
         client: row.client||'',
         field: row.field||'',
         service: row.service||'',
+        services: row.services||(row.service?[row.service]:[]),
         startDate: row.start_date||'',
         duration: row.duration||1,
         crew: row.crew||[],
         equip: row.equip||[],
         touchUp: row.touch_up||false,
+        task: row.task||'',
         notes: row.notes||'',
         createdBy: row.created_by||'',
+        rentalEquip: row.rental_equip||'',
         includeWeekends: row.include_weekends||false
       }));
       save();

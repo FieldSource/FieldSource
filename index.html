@@ -2628,6 +2628,7 @@ async function loadConsulting(){
       priority: r.priority||'Medium',
       notes: r.notes||'',
       phases: r.stage_due_dates && r.stage_due_dates.__phases ? r.stage_due_dates.__phases : [...CONSULTING_STAGES_DEFAULT],
+      phaseDates: r.stage_due_dates && r.stage_due_dates.__phaseDates ? r.stage_due_dates.__phaseDates : {},
       stageDueDates: r.stage_due_dates || {},
       hoursLog: r.hours_log || [],
       tasks: r.tasks || [],
@@ -2641,6 +2642,7 @@ async function loadConsulting(){
 async function dbSaveConsulting(obj, id=null){
   const sdd = Object.assign({}, obj.stageDueDates||{});
   sdd.__phases = obj.phases || [...CONSULTING_STAGES_DEFAULT];
+  sdd.__phaseDates = obj.phaseDates || {};
   const row = {
     client: obj.client,
     project_name: obj.projectName,
@@ -2963,14 +2965,24 @@ function openAddPhaseModal(projId){
   overlay.className = 'modal-overlay';
   overlay.id = 'addphase-overlay';
   overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
-  overlay.innerHTML = `<div class="modal-sheet" style="max-width:400px">
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:420px">
     <div class="sheet-handle"></div>
     <div class="sheet-title">Add Phase</div>
     <div class="form-group">
       <label class="form-label">Phase Name *</label>
       <input type="text" id="aphase-name" placeholder="e.g. Planning & Analysis">
     </div>
-    <div id="aphase-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Start Date <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+        <input type="date" id="aphase-start">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">End Date <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+        <input type="date" id="aphase-end">
+      </div>
+    </div>
+    <div id="aphase-error" style="color:#dc2626;font-size:12px;margin-top:8px;margin-bottom:8px"></div>
     <div class="sheet-actions">
       <button class="btn-cancel" onclick="document.getElementById('addphase-overlay').remove()">Cancel</button>
       <button class="btn-save" onclick="saveAddPhase('${projId}')">Add Phase</button>
@@ -2982,12 +2994,79 @@ function openAddPhaseModal(projId){
 async function saveAddPhase(projId){
   const name = document.getElementById('aphase-name').value.trim();
   if(!name){ document.getElementById('aphase-error').textContent='Phase name required.'; return; }
+  const start = document.getElementById('aphase-start').value;
+  const end = document.getElementById('aphase-end').value;
   const proj = consultingProjects.find(p=>p.id===projId);
   if(!proj) return;
   proj.phases = [...(proj.phases||[...CONSULTING_STAGES_DEFAULT]), name];
+  if(start||end){
+    proj.phaseDates = Object.assign({}, proj.phaseDates||{});
+    proj.phaseDates[name] = {start, end};
+  }
   proj.updatedAt = new Date().toISOString();
   await dbSaveConsulting(proj, projId);
   document.getElementById('addphase-overlay').remove();
+  renderConsultingDetail();
+}
+
+function openEditPhaseModal(projId, phaseIdx){
+  const proj = consultingProjects.find(p=>p.id===projId);
+  if(!proj) return;
+  const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
+  const phase = phases[phaseIdx];
+  const pd = (proj.phaseDates||{})[phase]||{};
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'editphase-overlay';
+  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:420px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Edit Phase</div>
+    <div class="form-group">
+      <label class="form-label">Phase Name *</label>
+      <input type="text" id="ephase-name" value="${phase.replace(/"/g,'&quot;')}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Start Date <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+        <input type="date" id="ephase-start" value="${pd.start||''}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">End Date <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
+        <input type="date" id="ephase-end" value="${pd.end||''}">
+      </div>
+    </div>
+    <div id="ephase-error" style="color:#dc2626;font-size:12px;margin-top:8px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('editphase-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveEditPhase('${projId}',${phaseIdx})">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveEditPhase(projId, phaseIdx){
+  const newName = document.getElementById('ephase-name').value.trim();
+  if(!newName){ document.getElementById('ephase-error').textContent='Phase name required.'; return; }
+  const start = document.getElementById('ephase-start').value;
+  const end = document.getElementById('ephase-end').value;
+  const proj = consultingProjects.find(p=>p.id===projId);
+  if(!proj) return;
+  const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
+  const oldName = phases[phaseIdx];
+  // Rename phase in phases array
+  proj.phases = phases.map((p,i)=>i===phaseIdx?newName:p);
+  // Rename in tasks
+  (proj.tasks||[]).forEach(t=>{ if(t.phase===oldName) t.phase=newName; });
+  // Update phaseDates
+  proj.phaseDates = Object.assign({}, proj.phaseDates||{});
+  delete proj.phaseDates[oldName];
+  proj.phaseDates[newName] = {start, end};
+  // Update active stage if it matched
+  if(proj.stage===oldName) proj.stage=newName;
+  proj.updatedAt = new Date().toISOString();
+  await dbSaveConsulting(proj, projId);
+  document.getElementById('editphase-overlay').remove();
   renderConsultingDetail();
 }
 
@@ -3257,9 +3336,11 @@ function exportConsultingGantt(projId){
 
   // Collect all dated items to find date range
   const allDates = [];
+  const phaseDates = proj.phaseDates||{};
   tasks.forEach(t=>{ if(t.startDate) allDates.push(t.startDate); if(t.endDate) allDates.push(t.endDate); });
   milestones.forEach(m=>{ if(m.date) allDates.push(m.date); });
-  if(!allDates.length){ alert('No tasks with dates to export. Add start/end dates to tasks first.'); return; }
+  phases.forEach(p=>{ const pd=phaseDates[p]||{}; if(pd.start) allDates.push(pd.start); if(pd.end) allDates.push(pd.end); });
+  if(!allDates.length){ alert('No tasks or phases with dates to export. Add dates first.'); return; }
 
   const minDate = allDates.reduce((a,b)=>a<b?a:b);
   const maxDate = allDates.reduce((a,b)=>a>b?a:b);
@@ -3286,7 +3367,8 @@ function exportConsultingGantt(projId){
   // Build rows
   let rows = [];
   phases.forEach((phase, pi)=>{
-    rows.push({type:'phase', label:phase, color: phaseColors[phase]||defaultColors[pi%defaultColors.length]});
+    const pd = phaseDates[phase]||{};
+    rows.push({type:'phase', label:phase, color: phaseColors[phase]||defaultColors[pi%defaultColors.length], startDate:pd.start, endDate:pd.end});
     tasks.filter(t=>t.phase===phase).forEach(t=>{
       rows.push({type:'task', label:t.title, startDate:t.startDate, endDate:t.endDate, done:t.done, color: phaseColors[phase]||defaultColors[pi%defaultColors.length]});
     });
@@ -3325,6 +3407,15 @@ function exportConsultingGantt(projId){
     if(row.type==='phase'){
       rowsSvg += `<rect x="0" y="${y}" width="${TOTAL_W}" height="${ROW_H}" fill="${row.color}18"/>`;
       rowsSvg += `<text x="12" y="${y+21}" font-size="11" font-weight="700" fill="${row.color}" font-family="DM Sans,sans-serif">${row.label.toUpperCase()}</text>`;
+      if(row.startDate && row.endDate){
+        const x1 = xPos(row.startDate);
+        const x2 = Math.max(xPos(row.endDate), x1+8);
+        const barY = y + 6;
+        const barH = ROW_H - 12;
+        rowsSvg += `<rect x="${x1}" y="${barY}" width="${x2-x1}" height="${barH}" rx="3" fill="${row.color}" opacity="0.3"/>`;
+        rowsSvg += `<rect x="${x1}" y="${barY}" width="3" height="${barH}" rx="1" fill="${row.color}"/>`;
+        rowsSvg += `<rect x="${x2-3}" y="${barY}" width="3" height="${barH}" rx="1" fill="${row.color}"/>`;
+      }
     } else if(row.type==='task'){
       rowsSvg += `<text x="24" y="${y+21}" font-size="12" fill="${row.done?'#94a3b8':'#1e293b'}" font-family="DM Sans,sans-serif" text-decoration="${row.done?'line-through':''}">${row.label.length>28?row.label.slice(0,27)+'…':row.label}</text>`;
       if(row.startDate && row.endDate){

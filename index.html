@@ -1255,15 +1255,18 @@ async function loadLaborRates(){
 
 async function saveLaborRate(person, rate){
   try {
-    // Upsert by person name
-    const existing = await sbFetch('GET', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}&select=id`);
-    if(existing && existing.length){
-      await sbFetch('PATCH', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}`, {rate: Number(rate)});
-    } else {
-      await sbFetch('POST', '/rest/v1/labor_rates', {person, rate: Number(rate)});
-    }
+    await sbFetch('POST', '/rest/v1/labor_rates', {person, rate: Number(rate)});
     laborRates[person] = Number(rate);
-  } catch(e){ alert('Error saving rate. Please try again.'); }
+  } catch(e){
+    // Try PATCH if POST fails (already exists)
+    try {
+      await sbFetch('PATCH', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}`, {rate: Number(rate)});
+      laborRates[person] = Number(rate);
+    } catch(e2){
+      console.error('Labor rate save error:', e2);
+      alert('Error saving rate. Please try again.');
+    }
+  }
 }
 
 function getLaborFilteredReports(){

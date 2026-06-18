@@ -2729,11 +2729,13 @@ function renderConsulting(){
 }
 
 
+let deadlineWindow = 7;
+
 function renderConsultingDeadlines(){
   const today = new Date(); today.setHours(0,0,0,0);
-  const in7 = new Date(today); in7.setDate(in7.getDate()+7);
+  const endDate = new Date(today); endDate.setDate(endDate.getDate()+deadlineWindow);
   const todayStr = today.toISOString().split('T')[0];
-  const in7Str = in7.toISOString().split('T')[0];
+  const endStr = endDate.toISOString().split('T')[0];
 
   // Collect all deadline items across all projects
   const items = [];
@@ -2744,30 +2746,25 @@ function renderConsultingDeadlines(){
     // Phase end dates
     phases.forEach(phase=>{
       const pd = phaseDates[phase]||{};
-      if(pd.end && pd.end >= todayStr && pd.end <= in7Str){
+      if(pd.end && pd.end >= todayStr && pd.end <= endStr){
         items.push({date:pd.end, type:'phase', label:phase, proj, sub:'Phase end date'});
       }
     });
 
-    // Tasks
+    // Tasks & milestones
     (proj.tasks||[]).forEach(t=>{
       if(t.type==='milestone'){
-        if(t.date && t.date >= todayStr && t.date <= in7Str){
+        if(t.date && t.date >= todayStr && t.date <= endStr){
           items.push({date:t.date, type:'milestone', label:t.title, proj, sub:'Milestone'});
         }
       } else {
-        if(t.endDate && t.endDate >= todayStr && t.endDate <= in7Str && !t.done){
-          items.push({date:t.endDate, type:'task', label:t.title, proj, sub:t.phase, done:t.done});
+        if(t.endDate && t.endDate >= todayStr && t.endDate <= endStr && !t.done){
+          items.push({date:t.endDate, type:'task', label:t.title, proj, sub:t.phase});
         }
-        // Subtasks
-        (t.subtasks||[]).forEach(s=>{
-          // subtasks don't have dates currently — skip
-        });
       }
     });
   });
 
-  // Sort by date
   items.sort((a,b)=>a.date.localeCompare(b.date));
 
   const ITEM_COLORS = {
@@ -2786,18 +2783,24 @@ function renderConsultingDeadlines(){
     return {label:`${dayName} · ${mon} (${diff}d)`, urgent:false};
   };
 
-  let html = `<div style="margin-bottom:16px">
-    <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:4px">Upcoming Deadlines</div>
-    <div style="font-size:13px;color:var(--text-3)">Next 7 days across all projects</div>
+  const windowLabels = {7:'1 Week', 14:'2 Weeks', 30:'1 Month'};
+
+  let html = `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+    <div>
+      <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:2px">Upcoming Deadlines</div>
+      <div style="font-size:13px;color:var(--text-3)">${items.length} item${items.length!==1?'s':''} across all projects</div>
+    </div>
+    <div style="display:flex;gap:6px">
+      ${[7,14,30].map(w=>`<button onclick="deadlineWindow=${w};renderConsultingDeadlines()" style="padding:5px 14px;border-radius:99px;border:1.5px solid ${deadlineWindow===w?'var(--green)':'var(--border)'};background:${deadlineWindow===w?'var(--green)':'var(--surface)'};color:${deadlineWindow===w?'#fff':'var(--text-2)'};font-size:12px;font-weight:600;font-family:inherit;cursor:pointer">${windowLabels[w]}</button>`).join('')}
+    </div>
   </div>`;
 
   if(!items.length){
     html += `<div style="text-align:center;padding:48px 24px;color:var(--text-3)">
       <div style="font-size:32px;margin-bottom:12px">✅</div>
-      <div style="font-size:15px;font-weight:600">Nothing due in the next 7 days</div>
+      <div style="font-size:15px;font-weight:600;color:var(--text)">Nothing due in the next ${windowLabels[deadlineWindow].toLowerCase()}</div>
     </div>`;
   } else {
-    // Group by date
     const byDate = {};
     items.forEach(item=>{
       if(!byDate[item.date]) byDate[item.date]=[];

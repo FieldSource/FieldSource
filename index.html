@@ -1262,15 +1262,16 @@ async function loadLaborRates(){
 async function saveLaborRate(person, rate){
   if(!rate || isNaN(Number(rate))) return;
   try {
-    await sbFetch('POST', '/rest/v1/labor_rates', {person, rate: Number(rate)});
+    // Try PATCH first (update existing)
+    const res = await sbFetch('PATCH', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}`, {rate: Number(rate)});
+    // If no rows updated, do a POST
+    const check = await sbFetch('GET', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}&select=id`);
+    if(!check || !check.length){
+      await sbFetch('POST', '/rest/v1/labor_rates', {person, rate: Number(rate)});
+    }
     laborRates[person] = Number(rate);
   } catch(e){
-    try {
-      await sbFetch('PATCH', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}`, {rate: Number(rate)});
-      laborRates[person] = Number(rate);
-    } catch(e2){
-      console.error('Labor rate save error:', e, e2);
-    }
+    console.error('Labor rate save error:', e);
   }
 }
 

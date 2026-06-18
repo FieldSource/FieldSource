@@ -4045,18 +4045,12 @@ async function saveReport(){
   if(!reportDate){alert('Please pick a date.');return;}
   if(!filedBy){alert('Please select who is filing this.');return;}
 
-  // Collect final state from DOM for each site
+  // Use reportSites array which is kept in sync via setRSiteClient/setRSiteField
   const sitesToSave = reportSites.map(site=>{
-    const clientEl = document.getElementById('r-client-'+site.id);
-    const customEl = document.getElementById('r-client-custom-'+site.id);
-    const client = clientEl && clientEl.value==='__custom__' ? (customEl?customEl.value.trim():'') : (clientEl?clientEl.value:'');
-    const field = (document.getElementById('r-field-'+site.id)||{}).value||'';
-    const timeIn = (document.getElementById('r-timein-'+site.id)||{}).value||'';
-    const timeOut = (document.getElementById('r-timeout-'+site.id)||{}).value||'';
-    const workDone = (document.getElementById('r-workdone-'+site.id)||{}).value||'';
-    const issueNotes = (document.getElementById('r-issue-notes-'+site.id)||{}).value||'';
-    return {...site, client, field, timeIn, timeOut, workDone, issueNotes};
-  }).filter(s=>s.client);
+    // Also grab textarea values from DOM since oninput may not fire on all browsers
+    const workDone = (document.querySelector('#report-site-'+site.id+' textarea')||{}).value || site.workDone || '';
+    return {...site, workDone};
+  }).filter(s=>s.client && s.client.trim());
 
   if(!sitesToSave.length){alert('Please fill in at least one site.');return;}
 

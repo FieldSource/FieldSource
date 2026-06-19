@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="Field Source">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#2a6a22">
+<link rel="manifest" href="/manifest.json">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -124,9 +125,9 @@ main{padding:12px 16px 100px}
 .sel-opt.conflict{border-color:#ef4444!important;background:#fee2e2!important;color:#991b1b!important}
 .sel-opt.conflict::after{content:' ⚠';font-size:10px}
 /* MODAL */
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;display:flex;align-items:center;justify-content:center;animation:fadeIn .2s ease}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:200;display:flex;align-items:flex-end;justify-content:center;animation:fadeIn .2s ease}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-.modal-sheet{background:var(--surface);border-radius:18px;padding:20px 20px 28px;width:100%;max-width:540px;max-height:90vh;overflow-y:auto;animation:slideUp .25s ease}
+.modal-sheet{background:var(--surface);border-radius:18px 18px 0 0;padding:20px 20px 40px;width:100%;max-width:540px;max-height:92vh;overflow-y:auto;animation:slideUp .25s ease}
 @keyframes slideUp{from{transform:translateY(40px);opacity:0}to{transform:translateY(0);opacity:1}}
 .sheet-handle{width:36px;height:4px;background:var(--border-2);border-radius:2px;margin:0 auto 18px}
 .sheet-title{font-size:17px;font-weight:600;color:var(--text);margin-bottom:4px}
@@ -431,7 +432,6 @@ main{padding:12px 16px 100px}
 <div class="view-bar" id="consulting-bar" style="display:none">
   <div class="view-bar-row">
     <button class="vtab" onclick="view='consulting-home';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderConsulting()">Overview</button>
-    <button class="vtab" onclick="setView('consulting-deadlines')">Deadlines</button>
   </div>
 </div>
 
@@ -503,7 +503,7 @@ const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
   Carts:['John Deere Gator TX #1','John Deere Gator TX #2','John Deere Gator HPX #1','2017 Gator John Deere HPX #2','Toro GTX','2019 Toro Workman HDX','John Deere Gator TX #3'],
   Attachments:['Toro ProForce Blower #1','Toro ProForce Blower #2','Buffalo Blower #1','Buffalo Blower #2','Agrimetal 3500 Blower','LitterKat','Redexim VT-1500','Greens Groomer #1','Greens Groomer #2','Turfco Topdresser #1','Turfco Topdresser #2','2021 Woodbay FDS 6000 Dethatcher','Vredo Overseeder DZ5','Imants Shockwave 2.1','Turfco Torrent 2','2025 Snow Dogg','Level Best'],
-  Specialty:['ABI Force','FS Skid Sprayer','Smithco Spray Star 2000','2024 John Deere 4066R','Kubota Tractor','Wacker Neuson Roller','Steel Green SG52','Steel Green SG52 #2','Steel Green SG52 #3','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift','Wiedenmann Terra Spike XF6','Vredo DZ5 Single Compact'],
+  Specialty:['ABI Force','FS Skid Sprayer','Smithco Spray Star 2000','2024 John Deere 4066R','Kubota Tractor','Wacker Neuson Roller','Steel Green SG52','Steel Green SG52 #2','Steel Green SG52 #3','Kubota Skid Steer','Toro 3300D','Foley 650','Vermeer S800TX','Toro ProCore 648','Ingersoll Rand Roller DD-34HF','2004 CAT VCGOD SA Forklift','Wiedenmann Terra Spike XF6','Vredo DZ5 Single Compact','Turf Tank','Tiny Mobile Robot'],
   'Hand Tools':['Green Push Spreader','Stihl Backpack Blower #1','Stihl Backpack Blower #2','Stihl Backpack Blower #3','Stihl Combi','Stihl String Trimmer #1','Stihl String Trimmer #2','Little Wonder Pro Edger','Jumping Jack Tamper','MQ Plate Compactor','Ryan Sod Cutter','Dewalt Hammer Drill','Stihl RB 400','Honda EU 2200i','Husqvarna Trimmer','Billy Goat Sod Cutter','Mi-T-M GH-3003','Stihl ST 500i']
 };
 // Trucks shown only on daily reports, not in scheduling modal
@@ -534,12 +534,11 @@ const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsZGx2dGxiZ3hpemJwcGFsaWFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NzI5NDEsImV4cCI6MjA5MzE0ODk0MX0.uihnFIhsnPWiCg-O9Et7vJOHw_G8OacdDkQ7JNtw8Bg';
 
 async function sbFetch(method, path, body=null){
-  const token = currentToken || SUPABASE_KEY;
   const opts = {
     method,
     headers: {
       'apikey': SUPABASE_KEY,
-      'Authorization': 'Bearer ' + token,
+      'Authorization': 'Bearer ' + SUPABASE_KEY,
       'Content-Type': 'application/json',
       'Prefer': method==='POST'?'return=representation':'',
     }
@@ -626,7 +625,6 @@ let mileageYearFilter = new Date().getFullYear();
 let mileagePersonFilter = 'All';
 let mileageTripFilter = 'All';
 let reportSiteFilter = 'All';
-let reportEmployeeFilter = 'All';
 let woSiteFilter = 'All';
 let woStatusFilter = 'open';
 
@@ -1616,6 +1614,7 @@ async function dbDeletePO(id){
   await sbFetch('DELETE', `/rest/v1/po_tracker?id=eq.${id}`);
 }
 
+function poFmt(n){ return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function poStatusColor(s){
   if(s==='Open') return {bg:'#dbeafe',text:'#1d4ed8'};
   if(s==='Partially Billed') return {bg:'#fef3c7',text:'#92400e'};
@@ -2602,14 +2601,12 @@ function setPortal(portal){
 
 
 // ── CONSULTING PORTAL ─────────────────────────────────────────
-const CONSULTING_STAGES_DEFAULT = ['Concept Development','Schematic Design','Design Development','Construction Documentation','Construction Administration'];
-const CONSULTING_STAGES = CONSULTING_STAGES_DEFAULT; // kept for hours log dropdown compatibility
+const CONSULTING_STAGES = ['Site Discovery','Data Capture & Processing','Client Presentation','Post-Presentation'];
 const CONSULTING_STAGE_COLORS = {
-  'Concept Development':          {bg:'#dbeafe',text:'#1d4ed8'},
-  'Schematic Design':             {bg:'#ede9fe',text:'#6d28d9'},
-  'Design Development':           {bg:'#fef3c7',text:'#92400e'},
-  'Construction Documentation':   {bg:'#dcfce7',text:'#14532d'},
-  'Construction Administration':  {bg:'#fce7f3',text:'#9d174d'},
+  'Site Discovery':           {bg:'#dbeafe',text:'#1d4ed8'},
+  'Data Capture & Processing':{bg:'#ede9fe',text:'#6d28d9'},
+  'Client Presentation':      {bg:'#fef3c7',text:'#92400e'},
+  'Post-Presentation':        {bg:'#dcfce7',text:'#14532d'},
 };
 const PRIORITY_COLORS = {
   'High':   {bg:'#fee2e2',text:'#991b1b'},
@@ -2625,15 +2622,12 @@ async function loadConsulting(){
       id: String(r.id),
       client: r.client||'',
       projectName: r.project_name||'',
-      stage: r.stage||'Concept Development',
+      stage: r.stage||'Site Discovery',
       priority: r.priority||'Medium',
       notes: r.notes||'',
-      phases: r.stage_due_dates && r.stage_due_dates.__phases ? r.stage_due_dates.__phases : [...CONSULTING_STAGES_DEFAULT],
-      phaseDates: r.stage_due_dates && r.stage_due_dates.__phaseDates ? r.stage_due_dates.__phaseDates : {},
       stageDueDates: r.stage_due_dates || {},
       hoursLog: r.hours_log || [],
       tasks: r.tasks || [],
-      milestones: r.tasks ? (r.tasks.filter(t=>t.type==='milestone')) : [],
       createdAt: r.created_at||'',
       updatedAt: r.updated_at||'',
     }));
@@ -2641,16 +2635,13 @@ async function loadConsulting(){
 }
 
 async function dbSaveConsulting(obj, id=null){
-  const sdd = Object.assign({}, obj.stageDueDates||{});
-  sdd.__phases = obj.phases || [...CONSULTING_STAGES_DEFAULT];
-  sdd.__phaseDates = obj.phaseDates || {};
   const row = {
     client: obj.client,
     project_name: obj.projectName,
     stage: obj.stage,
     priority: obj.priority||'',
     notes: obj.notes||'',
-    stage_due_dates: sdd,
+    stage_due_dates: obj.stageDueDates||{},
     hours_log: obj.hoursLog||[],
     tasks: obj.tasks||[],
     updated_at: new Date().toISOString(),
@@ -2704,17 +2695,17 @@ function renderConsulting(){
   sorted.forEach(proj=>{
     const sc = CONSULTING_STAGE_COLORS[proj.stage]||{bg:'#f1f5f9',text:'#475569'};
     const totalH = consultingTotalHours(proj);
-    const projOpenTasks = (proj.tasks||[]).filter(t=>t.type!=='milestone'&&!t.done);
-    const phaseEndDate = (proj.phaseDates||{})[proj.stage]?.end || proj.stageDueDates[proj.stage];
+    const nextDue = proj.stageDueDates[proj.stage];
+    const projOpenTasks = (proj.tasks||[]).filter(t=>!t.done);
 
     html += `<div class="report-card" style="cursor:pointer;border-left:3px solid ${sc.text}" onclick="openConsultingDetail('${proj.id}')">
       <div class="report-card-header">
         <div style="flex:1">
           <div class="report-card-title">${proj.client}${proj.projectName?' — '+proj.projectName:''}</div>
-          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center">
-            <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${cEsc(proj.stage)}</span>
-            ${phaseEndDate?`<span style="font-size:11px;color:var(--text-3)">ends ${phaseEndDate}</span>`:''}
+          <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+            <span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span>
             ${projOpenTasks.length?`<span style="font-size:11px;color:var(--text-3)">${projOpenTasks.length} task${projOpenTasks.length!==1?'s':''} open</span>`:''}
+            ${nextDue?`<span style="font-size:11px;color:var(--text-3)">Due ${nextDue}</span>`:''}
           </div>
         </div>
         <div style="text-align:right;flex-shrink:0">
@@ -2728,130 +2719,9 @@ function renderConsulting(){
   document.getElementById('main-content').innerHTML = html;
 }
 
-
-let deadlineWindow = 7;
-
-function renderConsultingDeadlines(){
-  const today = new Date(); today.setHours(0,0,0,0);
-  const endDate = new Date(today); endDate.setDate(endDate.getDate()+deadlineWindow);
-  const todayStr = today.toISOString().split('T')[0];
-  const endStr = endDate.toISOString().split('T')[0];
-
-  // Collect all deadline items across all projects
-  const items = [];
-  consultingProjects.forEach(proj=>{
-    const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
-    const phaseDates = proj.phaseDates||{};
-
-    // Phase end dates
-    phases.forEach(phase=>{
-      const pd = phaseDates[phase]||{};
-      if(pd.end && pd.end >= todayStr && pd.end <= endStr){
-        items.push({date:pd.end, type:'phase', label:phase, proj, sub:'Phase end date'});
-      }
-    });
-
-    // Tasks & milestones
-    (proj.tasks||[]).forEach(t=>{
-      if(t.type==='milestone'){
-        if(t.date && t.date >= todayStr && t.date <= endStr){
-          items.push({date:t.date, type:'milestone', label:t.title, proj, sub:'Milestone'});
-        }
-      } else {
-        if(t.endDate && t.endDate >= todayStr && t.endDate <= endStr && !t.done){
-          items.push({date:t.endDate, type:'task', label:t.title, proj, sub:t.phase});
-        }
-      }
-    });
-  });
-
-  items.sort((a,b)=>a.date.localeCompare(b.date));
-
-  const ITEM_COLORS = {
-    phase:     {bg:'#dbeafe', text:'#1d4ed8', label:'Phase'},
-    task:      {bg:'#dcfce7', text:'#14532d', label:'Task'},
-    milestone: {bg:'#fef3c7', text:'#92400e', label:'Milestone'},
-  };
-
-  const fmtDate = d => {
-    const dt = new Date(d+'T12:00:00');
-    const diff = Math.round((dt-today)/(1000*60*60*24));
-    const dayName = dt.toLocaleDateString('en-US',{weekday:'short'});
-    const mon = dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
-    if(diff===0) return {label:`Today · ${mon}`, urgent:true};
-    if(diff===1) return {label:`Tomorrow · ${mon}`, urgent:true};
-    return {label:`${dayName} · ${mon} (${diff}d)`, urgent:false};
-  };
-
-  const windowLabels = {7:'1 Week', 14:'2 Weeks', 30:'1 Month'};
-
-  let html = `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
-    <div>
-      <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:2px">Upcoming Deadlines</div>
-      <div style="font-size:13px;color:var(--text-3)">${items.length} item${items.length!==1?'s':''} across all projects</div>
-    </div>
-    <div style="display:flex;gap:6px">
-      ${[7,14,30].map(w=>`<button onclick="deadlineWindow=${w};renderConsultingDeadlines()" style="padding:5px 14px;border-radius:99px;border:1.5px solid ${deadlineWindow===w?'var(--green)':'var(--border)'};background:${deadlineWindow===w?'var(--green)':'var(--surface)'};color:${deadlineWindow===w?'#fff':'var(--text-2)'};font-size:12px;font-weight:600;font-family:inherit;cursor:pointer">${windowLabels[w]}</button>`).join('')}
-    </div>
-  </div>`;
-
-  if(!items.length){
-    html += `<div style="text-align:center;padding:48px 24px;color:var(--text-3)">
-      <div style="font-size:32px;margin-bottom:12px">✅</div>
-      <div style="font-size:15px;font-weight:600;color:var(--text)">Nothing due in the next ${windowLabels[deadlineWindow].toLowerCase()}</div>
-    </div>`;
-  } else {
-    const byDate = {};
-    items.forEach(item=>{
-      if(!byDate[item.date]) byDate[item.date]=[];
-      byDate[item.date].push(item);
-    });
-
-    Object.keys(byDate).sort().forEach(date=>{
-      const {label:dateLabel, urgent} = fmtDate(date);
-      html += `<div style="margin-bottom:20px">
-        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${urgent?'#dc2626':'var(--text-2)'};margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid ${urgent?'#fca5a5':'var(--border)'}">${dateLabel}</div>`;
-
-      byDate[date].forEach(item=>{
-        const c = ITEM_COLORS[item.type];
-        const sc = CONSULTING_STAGE_COLORS[item.proj.stage]||{bg:'#f1f5f9',text:'#475569'};
-        html += `<div onclick="openConsultingDetail('${item.proj.id}')" style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;cursor:pointer;border-left:3px solid ${c.text}">
-          <div style="flex:1;min-width:0">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px">
-              <span style="font-size:10px;font-weight:700;border-radius:99px;padding:1px 7px;background:${c.bg};color:${c.text}">${c.label}</span>
-              <span style="font-size:10px;font-weight:600;border-radius:99px;padding:1px 7px;background:${sc.bg};color:${sc.text}">${cEsc(item.proj.stage)}</span>
-            </div>
-            <div style="font-size:14px;font-weight:600;color:var(--text)">${cEsc(item.label)}</div>
-            <div style="font-size:12px;color:var(--text-3);margin-top:2px">${cEsc(item.proj.client)}${item.proj.projectName?' — '+cEsc(item.proj.projectName):''}${item.sub?' · '+cEsc(item.sub):''}</div>
-          </div>
-          <div style="font-size:12px;font-weight:700;color:${urgent?'#dc2626':'var(--green-dark)'};flex-shrink:0;margin-top:2px">${date}</div>
-        </div>`;
-      });
-      html += `</div>`;
-    });
-  }
-
-  document.getElementById('main-content').innerHTML = html;
-}
-
 function openConsultingDetail(id){
   consultingDetailId = id;
-  consultingExpandedPhases = {};
   renderConsultingDetail();
-}
-
-let consultingExpandedPhases = {};
-
-function cEsc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-function addBusinessDays(startDate, days){
-  const d = new Date(startDate + 'T12:00:00');
-  let added = 0;
-  while(added < days - 1){
-    d.setDate(d.getDate()+1);
-    if(d.getDay()!==0 && d.getDay()!==6) added++;
-  }
-  return d.toISOString().split('T')[0];
 }
 
 function renderConsultingDetail(){
@@ -2862,162 +2732,96 @@ function renderConsultingDetail(){
   const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com'].includes(userEmail);
   const canLogHours = CONSULTING_LOG_EMAILS.includes(userEmail);
   const sc = CONSULTING_STAGE_COLORS[proj.stage]||{bg:'#f1f5f9',text:'#475569'};
-  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
-  const allTasks = (proj.tasks||[]).filter(t=>t.type!=='milestone');
-  const milestones = (proj.tasks||[]).filter(t=>t.type==='milestone');
+  const tasks = proj.tasks||[];
+  const openTasks = tasks.filter(t=>!t.done);
+  const doneTasks = tasks.filter(t=>t.done);
 
-  // --- Project nav sidebar + header ---
-  const otherProjects = consultingProjects.filter(p=>p.id!==proj.id);
-  const navLinks = otherProjects.map(p=>`<div onclick="openConsultingDetail('${p.id}')" style="padding:7px 10px;font-size:12px;cursor:pointer;border-radius:6px;margin-bottom:2px;color:var(--text-2);background:transparent" onmouseover="this.style.background='var(--green-light)'" onmouseout="this.style.background='transparent'">${cEsc(p.client)}${p.projectName?' <span style=\'color:var(--text-3)\'>— '+cEsc(p.projectName)+'</span>':''}</div>`).join('');
-
-  let html = `<div style="display:flex;gap:16px;align-items:flex-start">
-  <!-- Left nav panel -->
-  <div style="width:180px;flex-shrink:0;display:none" id="c-nav-panel">
-    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);padding:0 10px;margin-bottom:6px">Projects</div>
-    <div style="background:var(--green-light);border-left:3px solid var(--green);padding:7px 10px;font-size:12px;font-weight:600;border-radius:6px;margin-bottom:2px;color:var(--green-dark)">${cEsc(proj.client)}</div>
-    ${navLinks}
+  let html = `<div style="margin-bottom:12px">
+    <button onclick="renderConsulting()" style="background:none;border:none;color:var(--green-dark);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">← Back to projects</button>
   </div>
-  <div style="flex:1;min-width:0">`;
 
-  // --- Top bar ---
-  html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-    <div style="display:flex;align-items:center;gap:10px">
-      <button onclick="renderConsulting()" style="background:none;border:none;color:var(--green-dark);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">← All Projects</button>
-      ${otherProjects.length?`<button onclick="document.getElementById('c-nav-panel').style.display=document.getElementById('c-nav-panel').style.display==='none'?'block':'none'" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;color:var(--text-2)">☰ Jump to project</button>`:''}
-    </div>
-    <div style="display:flex;gap:6px">
-      ${canEdit?`<button class="btn-save" style="font-size:12px;padding:5px 12px" onclick="openConsultingModal('${proj.id}')">Edit Project</button>`:''}
-      ${canEdit?`<button onclick="exportConsultingGantt('${proj.id}')" style="font-size:12px;padding:5px 12px;background:var(--green-light);color:var(--green-dark);border:1px solid var(--border-2);border-radius:var(--radius-sm);cursor:pointer;font-family:inherit;font-weight:600">📊 Export Gantt</button>`:''}
-      ${canEdit?`<button onclick="deleteConsultingProject('${proj.id}')" style="background:none;border:1px solid #fca5a5;color:#dc2626;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit">Delete</button>`:''}
-    </div>
-  </div>`;
-
-
-  // --- Header card ---
-  html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;border-left:4px solid ${sc.text}">
-    <div style="font-size:18px;font-weight:700;color:var(--text)">${cEsc(proj.client)}</div>
-    ${proj.projectName?`<div style="font-size:14px;color:var(--text-2);margin-top:2px">${cEsc(proj.projectName)}</div>`:''}
-    <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <label style="font-size:12px;font-weight:600;color:var(--text-2)">Active Phase:</label>
-      ${canEdit ? `<select onchange="setConsultingActivePhase('${proj.id}',this.value)" style="padding:4px 10px;border:1px solid var(--border-2);border-radius:6px;font-size:13px;font-family:inherit;background:${sc.bg};color:${sc.text};font-weight:600;cursor:pointer">${phases.map(p=>`<option value="${cEsc(p)}"${p===proj.stage?' selected':''} >${cEsc(p)}</option>`).join('')}</select>` : `<span style="font-size:13px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text}">${cEsc(proj.stage)}</span>`}
-    </div>
-    ${proj.notes?`<div style="margin-top:10px;font-size:13px;color:var(--text-2);border-top:1px solid var(--border);padding-top:10px">${cEsc(proj.notes)}</div>`:''}
-  </div>`;
-
-  // --- Phase accordions ---
-  html += `<div style="margin-bottom:16px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Phases & Tasks</div>
-      ${canEdit?`<button onclick="openAddPhaseModal('${proj.id}')" style="font-size:11px;padding:3px 8px;background:none;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-family:inherit;color:var(--text-2)">+ Add Phase</button>`:''}
-    </div>`;
-
-  phases.forEach((phase, phaseIdx)=>{
-    const phaseKey = 'ph_'+phaseIdx;
-    const isExpanded = !!consultingExpandedPhases[phaseKey];
-    const phaseTasks = allTasks.filter(t=>t.phase===phase);
-    const openCount = phaseTasks.filter(t=>!t.done).length;
-    const doneCount = phaseTasks.filter(t=>t.done).length;
-    const sc2 = CONSULTING_STAGE_COLORS[phase]||{bg:'#f1f5f9',text:'#475569'};
-    const pd = (proj.phaseDates||{})[phase]||{};
-
-    html += `<div style="border:1px solid var(--border);border-radius:var(--radius);margin-bottom:6px;overflow:hidden">
-      <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:${sc2.bg}">
-        <span onclick="toggleConsultingPhase('${phaseKey}')" style="font-size:13px;transition:transform .2s;display:inline-block;transform:${isExpanded?'rotate(90deg)':'rotate(0deg)'};cursor:pointer;flex-shrink:0;user-select:none;padding:2px 4px" id="arrow-${phaseKey}">▶</span>
-        <div onclick="toggleConsultingPhase('${phaseKey}')" style="flex:1;cursor:pointer;user-select:none;min-width:0">
-          <div style="font-size:13px;font-weight:600;color:${sc2.text}">${cEsc(phase)}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:2px">${phaseTasks.length?`${openCount} open · ${doneCount} done`:'No tasks yet'}</div>
-        </div>
-        ${canEdit?`<div onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-          <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
-            <span style="font-size:9px;color:${sc2.text};font-weight:600;text-transform:uppercase;letter-spacing:0.3px">Start</span>
-            <input type="date" value="${pd.start||''}" onchange="savePhaseDate('${proj.id}','${cEsc(phase)}','start',this.value)" style="font-size:11px;padding:2px 4px;border:1px solid ${sc2.text}40;border-radius:4px;background:${sc2.bg};color:${sc2.text};font-family:inherit;width:120px;cursor:pointer">
-          </div>
-          <span style="color:${sc2.text};opacity:0.5;font-size:12px">→</span>
-          <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
-            <span style="font-size:9px;color:${sc2.text};font-weight:600;text-transform:uppercase;letter-spacing:0.3px">End</span>
-            <input type="date" value="${pd.end||''}" onchange="savePhaseDate('${proj.id}','${cEsc(phase)}','end',this.value)" style="font-size:11px;padding:2px 4px;border:1px solid ${sc2.text}40;border-radius:4px;background:${sc2.bg};color:${sc2.text};font-family:inherit;width:120px;cursor:pointer">
-          </div>
-          <button onclick="removeConsultingPhase('${proj.id}',${phaseIdx})" style="background:none;border:none;color:var(--text-3);font-size:16px;cursor:pointer;line-height:1;padding:0 4px;margin-left:4px" title="Remove phase">×</button>
-        </div>`:''} 
+  <!-- Project Header -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px;border-left:4px solid ${sc.text}">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:18px;font-weight:700;color:var(--text)">${proj.client}</div>
+        ${proj.projectName?`<div style="font-size:14px;color:var(--text-2);margin-top:2px">${proj.projectName}</div>`:''}
+        <div style="margin-top:8px"><span style="font-size:11px;font-weight:600;border-radius:99px;padding:2px 8px;background:${sc.bg};color:${sc.text}">${proj.stage}</span></div>
       </div>
-      <div id="phase-body-${phaseKey}" style="display:${isExpanded?'block':'none'};padding:12px 14px;background:var(--surface)">`;
-
-
-    // Tasks in this phase
-    if(phaseTasks.length===0){
-      html += `<div style="font-size:13px;color:var(--text-3);padding:4px 0 8px">No tasks in this phase yet.</div>`;
-    }
-    phaseTasks.forEach(t=>{
-      const subtasks = t.subtasks||[];
-      const subDone = subtasks.filter(s=>s.done).length;
-      const isOverdue = t.endDate && t.endDate < new Date().toISOString().split('T')[0] && !t.done;
-      html += `<div style="border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:8px;${t.done?'opacity:0.55':''}">
-        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px">
-          <input type="checkbox" ${t.done?'checked':''} onchange="toggleConsultingTask('${proj.id}','${t.id}',this.checked)" style="margin-top:3px;flex-shrink:0;cursor:pointer">
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:500;color:var(--text);${t.done?'text-decoration:line-through':''}">${cEsc(t.title)}</div>
-            <div style="font-size:11px;color:var(--text-3);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap">
-              ${t.startDate?`<span>Start: ${t.startDate}</span>`:''}
-              ${t.endDate?`<span style="color:${isOverdue?'#dc2626':'inherit'}">${isOverdue?'⚠ ':''}End: ${t.endDate}</span>`:''}
-              ${t.duration?`<span>${t.duration}d</span>`:''}
-              ${subtasks.length?`<span>${subDone}/${subtasks.length} subtasks</span>`:''}
-            </div>
-            ${t.notes?`<div style="font-size:11px;color:var(--text-2);margin-top:3px">${cEsc(t.notes)}</div>`:''}
-            ${subtasks.length?`<div style="margin-top:8px;padding-top:6px;border-top:1px solid var(--border)">${subtasks.map(s=>`
-              <div style="display:flex;align-items:center;gap:8px;padding:3px 0">
-                <input type="checkbox" ${s.done?'checked':''} onchange="toggleConsultingSubtask('${proj.id}','${t.id}','${s.id}',this.checked)" style="flex-shrink:0;cursor:pointer">
-                <span style="font-size:12px;color:var(--text-2);${s.done?'text-decoration:line-through':''}">${cEsc(s.title)}</span>
-                ${canEdit?`<button onclick="deleteConsultingSubtask('${proj.id}','${t.id}','${s.id}')" style="background:none;border:none;color:var(--text-3);font-size:13px;cursor:pointer;margin-left:auto">×</button>`:''}
-              </div>`).join('')}
-              ${canEdit?`<div style="display:flex;gap:6px;margin-top:6px">
-                <input type="text" id="sub-input-${t.id}" placeholder="Add subtask..." style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;background:var(--bg)">
-                <button onclick="addConsultingSubtask('${proj.id}','${t.id}')" style="padding:4px 10px;background:var(--green);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">+</button>
-              </div>`:''}
-            </div>`:''}
-            ${(!subtasks.length && canEdit)?`<div style="display:flex;gap:6px;margin-top:6px">
-              <input type="text" id="sub-input-${t.id}" placeholder="Add subtask..." style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;background:var(--bg)">
-              <button onclick="addConsultingSubtask('${proj.id}','${t.id}')" style="padding:4px 10px;background:var(--green);color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">+</button>
-            </div>`:''}
-          </div>
-          ${canEdit?`<button onclick="openConsultingTaskModal('${proj.id}','${t.id}')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;flex-shrink:0">Edit</button>`:''}
-        </div>
-      </div>`;
-    });
-
-    if(canEdit){
-      html += `<button onclick="openConsultingTaskModal('${proj.id}',null,'${phase.replace(/'/g,"\\'")}')" style="width:100%;padding:8px;background:none;border:1px dashed var(--border);border-radius:6px;color:var(--text-3);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;margin-top:4px">+ Add Task to ${cEsc(phase)}</button>`;
-    }
-
-    html += `</div></div>`; // close phase-body and phase wrapper
-  });
-  html += `</div>`; // close phases container
-
-  // --- Milestones ---
-  html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Milestones</div>
-      ${canEdit?`<button onclick="openConsultingMilestoneModal('${proj.id}')" style="font-size:12px;padding:4px 10px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit;font-weight:600">+ Add Milestone</button>`:''}
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        ${canEdit?`<button class="btn-save" style="font-size:12px;padding:5px 12px" onclick="openConsultingModal('${proj.id}')">Edit Project</button>`:''}
+      </div>
     </div>
-    ${milestones.length===0?'<div style="font-size:13px;color:var(--text-3)">No milestones yet — add key dates like board meetings, first day of school, etc.</div>':''}
-    ${[...milestones].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(m=>{
-      const isPast = m.date && m.date < new Date().toISOString().split('T')[0];
+    ${proj.notes?`<div style="margin-top:10px;font-size:13px;color:var(--text-2);border-top:1px solid var(--border);padding-top:10px">${proj.notes}</div>`:''}
+  </div>
+
+  <!-- Stage Progress -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+    <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);margin-bottom:12px">Stage Progress</div>
+    ${CONSULTING_STAGES.map(stage=>{
+      const isActive = stage===proj.stage;
+      const isDone = CONSULTING_STAGES.indexOf(stage) < CONSULTING_STAGES.indexOf(proj.stage);
+      const stageHrs = consultingTotalHours(proj, stage);
+      const due = proj.stageDueDates&&proj.stageDueDates[stage];
+      const sc2 = CONSULTING_STAGE_COLORS[stage];
+      const stageTasks = tasks.filter(t=>t.stage===stage);
+      const doneCount = stageTasks.filter(t=>t.done).length;
       return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
-        <span style="font-size:16px">🏁</span>
+        <div style="width:20px;height:20px;border-radius:50%;border:2px solid ${isDone?'var(--green)':isActive?sc2.text:'var(--border)'};background:${isDone?'var(--green)':isActive?sc2.bg:'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          ${isDone?'<span style="color:#fff;font-size:11px">✓</span>':''}
+        </div>
         <div style="flex:1">
-          <div style="font-size:13px;font-weight:500;color:var(--text)">${cEsc(m.title)}</div>
-          ${m.notes?`<div style="font-size:11px;color:var(--text-2)">${cEsc(m.notes)}</div>`:''}
+          <div style="font-size:13px;font-weight:${isActive?'600':'400'};color:${isActive?'var(--text)':'var(--text-3)'}">${stage}</div>
+          <div style="font-size:11px;color:var(--text-3)">${due?'Due '+due:''}${stageTasks.length?' · '+doneCount+'/'+stageTasks.length+' tasks':''}</div>
         </div>
-        <div style="text-align:right;flex-shrink:0">
-          <div style="font-size:12px;font-weight:600;color:${isPast?'var(--text-3)':'var(--green-dark)'}">${m.date||''}</div>
-          ${isPast?'<div style="font-size:10px;color:var(--text-3)">Past</div>':''}
-        </div>
-        ${canEdit?`<button onclick="deleteMilestone('${proj.id}','${m.id}')" style="background:none;border:none;color:var(--text-3);font-size:18px;cursor:pointer;padding:0 4px">×</button>`:''}
+        <div style="font-size:13px;font-weight:600;color:var(--green-dark);font-family:'DM Mono',monospace">${stageHrs>0?stageHrs.toFixed(1)+'h':''}</div>
+        ${canEdit&&isActive?`<div style="display:flex;gap:4px">
+          ${CONSULTING_STAGES.indexOf(stage)>0?`<button onclick="goBackConsultingStage('${proj.id}')" style="font-size:11px;padding:3px 8px;background:none;color:var(--text-3);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-family:inherit">← Back</button>`:''}
+          <button onclick="advanceConsultingStage('${proj.id}')" style="font-size:11px;padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">Advance →</button>
+        </div>`:''}
       </div>`;
     }).join('')}
-  </div>`;
+  </div>
 
-  // --- Hours Log ---
-  html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+  <!-- Tasks -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Tasks (${openTasks.length} open)</div>
+      ${canEdit?`<button onclick="openConsultingTaskModal('${proj.id}')" style="font-size:12px;padding:4px 10px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-family:inherit;font-weight:600">+ Add Task</button>`:''}
+    </div>
+    ${openTasks.length===0&&doneTasks.length===0?'<div style="font-size:13px;color:var(--text-3);padding:8px 0">No tasks yet.</div>':''}
+    ${openTasks.map(t=>{
+      const pc = PRIORITY_COLORS[t.priority]||PRIORITY_COLORS['Medium'];
+      const isOverdue = t.dueDate && t.dueDate < new Date().toISOString().split('T')[0];
+      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
+        <input type="checkbox" onchange="toggleConsultingTask('${proj.id}','${t.id}',this.checked)" style="margin-top:3px;flex-shrink:0;cursor:pointer">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:500;color:var(--text)">${t.title}</div>
+          <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+            <span style="font-size:10px;font-weight:600;border-radius:99px;padding:1px 7px;background:${pc.bg};color:${pc.text}">${t.priority}</span>
+            <span style="font-size:10px;color:var(--text-3)">${t.stage}</span>
+            ${t.dueDate?`<span style="font-size:10px;color:${isOverdue?'#dc2626':'var(--text-3)'};font-weight:${isOverdue?'600':'400'}">${isOverdue?'⚠ Overdue: ':''} ${t.dueDate}</span>`:''}
+          </div>
+          ${t.notes?`<div style="font-size:11px;color:var(--text-2);margin-top:3px">${t.notes}</div>`:''}
+        </div>
+        ${canEdit?`<button onclick="openConsultingTaskModal('${proj.id}','${t.id}')" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;flex-shrink:0">Edit</button>`:''}
+      </div>`;
+    }).join('')}
+    ${doneTasks.length?`
+    <div style="margin-top:8px">
+      <button onclick="document.getElementById('done-tasks').style.display=document.getElementById('done-tasks').style.display==='none'?'block':'none'" style="background:none;border:none;color:var(--text-3);font-size:12px;cursor:pointer;font-family:inherit;text-decoration:underline">Show completed (${doneTasks.length})</button>
+      <div id="done-tasks" style="display:none">
+        ${doneTasks.map(t=>`<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);opacity:0.6">
+          <input type="checkbox" checked onchange="toggleConsultingTask('${proj.id}','${t.id}',this.checked)" style="flex-shrink:0;cursor:pointer">
+          <div style="flex:1;font-size:13px;color:var(--text-2);text-decoration:line-through">${t.title}</div>
+          <span style="font-size:10px;color:var(--text-3)">${t.stage}</span>
+        </div>`).join('')}
+      </div>
+    </div>`:''}
+  </div>
+
+  <!-- Hours Log -->
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Hours Log</div>
       <div style="font-size:18px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${consultingTotalHours(proj).toFixed(1)} total hrs</div>
@@ -3026,9 +2830,9 @@ function renderConsultingDetail(){
       <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px">Log Hours</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
         <div>
-          <label class="form-label">Phase</label>
+          <label class="form-label">Stage</label>
           <select id="ch-stage" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg)">
-            ${phases.map(s=>`<option value="${cEsc(s)}">${cEsc(s)}</option>`).join('')}
+            ${CONSULTING_STAGES.map(s=>`<option value="${s}"${s===proj.stage?' selected':''}>${s}</option>`).join('')}
           </select>
         </div>
         <div>
@@ -3049,189 +2853,23 @@ function renderConsultingDetail(){
     ${[...(proj.hoursLog||[])].reverse().map(e=>`
       <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
         <div>
-          <div style="font-weight:500;color:var(--text)">${cEsc(e.loggedBy||'')}${e.note?' — '+cEsc(e.note):''}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.date} · ${cEsc(e.stage)}</div>
+          <div style="font-weight:500;color:var(--text)">${e.loggedBy||''}${e.note?' — '+e.note:''}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.date} · ${e.stage}</div>
         </div>
         <div style="font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace;flex-shrink:0">${Number(e.hours).toFixed(1)}h</div>
       </div>`).join('') || '<div style="font-size:13px;color:var(--text-3);padding:8px 0">No hours logged yet.</div>'}
   </div>`;
 
-  html += `</div></div>`; // close flex wrapper
   document.getElementById('main-content').innerHTML = html;
 }
 
-function toggleConsultingPhase(key){
-  consultingExpandedPhases[key] = !consultingExpandedPhases[key];
-  const body = document.getElementById('phase-body-'+key);
-  const arrow = document.getElementById('arrow-'+key);
-  if(body) body.style.display = consultingExpandedPhases[key] ? 'block' : 'none';
-  if(arrow) arrow.style.transform = consultingExpandedPhases[key] ? 'rotate(90deg)' : 'rotate(0deg)';
-}
-
-function removeConsultingPhase(projId, phaseIdx){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
-  const phaseName = phases[phaseIdx];
-  const hasTasks = (proj.tasks||[]).some(t=>t.phase===phaseName);
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.id = 'delphase-overlay';
-  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
-  overlay.innerHTML = `<div class="modal-sheet" style="max-width:400px">
-    <div class="sheet-handle"></div>
-    <div class="sheet-title" style="color:#dc2626">Delete Phase</div>
-    <p style="font-size:14px;color:var(--text);margin-bottom:8px">Are you sure you want to delete <strong>${cEsc(phaseName)}</strong>?</p>
-    ${hasTasks?`<p style="font-size:13px;color:#dc2626;background:#fee2e2;padding:10px 12px;border-radius:var(--radius-sm);margin-bottom:12px">⚠ This phase has tasks that will also be permanently deleted.</p>`:`<p style="font-size:13px;color:var(--text-2);margin-bottom:12px">This cannot be undone.</p>`}
-    <div class="sheet-actions">
-      <button class="btn-cancel" onclick="document.getElementById('delphase-overlay').remove()">Cancel</button>
-      <button class="btn-delete" onclick="confirmRemovePhase('${projId}',${phaseIdx})">Delete Phase</button>
-    </div>
-  </div>`;
-  document.body.appendChild(overlay);
-}
-
-async function confirmRemovePhase(projId, phaseIdx){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
-  const phaseName = phases[phaseIdx];
-  proj.phases = phases.filter((_,i)=>i!==phaseIdx);
-  proj.tasks = (proj.tasks||[]).filter(t=>t.phase!==phaseName);
-  if(proj.stage===phaseName) proj.stage = proj.phases[0]||'';
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-  document.getElementById('delphase-overlay').remove();
-  consultingExpandedPhases = {};
-  renderConsultingDetail();
-}
-
-function openAddPhaseModal(projId){
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.id = 'addphase-overlay';
-  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
-  overlay.innerHTML = `<div class="modal-sheet" style="max-width:420px">
-    <div class="sheet-handle"></div>
-    <div class="sheet-title">Add Phase</div>
-    <div class="form-group">
-      <label class="form-label">Phase Name *</label>
-      <input type="text" id="aphase-name" placeholder="e.g. Planning & Analysis">
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">Start Date <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
-        <input type="date" id="aphase-start">
-      </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">End Date <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
-        <input type="date" id="aphase-end">
-      </div>
-    </div>
-    <div id="aphase-error" style="color:#dc2626;font-size:12px;margin-top:8px;margin-bottom:8px"></div>
-    <div class="sheet-actions">
-      <button class="btn-cancel" onclick="document.getElementById('addphase-overlay').remove()">Cancel</button>
-      <button class="btn-save" onclick="saveAddPhase('${projId}')">Add Phase</button>
-    </div>
-  </div>`;
-  document.body.appendChild(overlay);
-}
-
-async function saveAddPhase(projId){
-  const name = document.getElementById('aphase-name').value.trim();
-  if(!name){ document.getElementById('aphase-error').textContent='Phase name required.'; return; }
-  const start = document.getElementById('aphase-start').value;
-  const end = document.getElementById('aphase-end').value;
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  proj.phases = [...(proj.phases||[...CONSULTING_STAGES_DEFAULT]), name];
-  if(start||end){
-    proj.phaseDates = Object.assign({}, proj.phaseDates||{});
-    proj.phaseDates[name] = {start, end};
-  }
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-  document.getElementById('addphase-overlay').remove();
-  renderConsultingDetail();
-}
-
-function openEditPhaseModal(projId, phaseIdx){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
-  const phase = phases[phaseIdx];
-  const pd = (proj.phaseDates||{})[phase]||{};
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.id = 'editphase-overlay';
-  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
-  overlay.innerHTML = `<div class="modal-sheet" style="max-width:420px">
-    <div class="sheet-handle"></div>
-    <div class="sheet-title">Edit Phase</div>
-    <div class="form-group">
-      <label class="form-label">Phase Name *</label>
-      <input type="text" id="ephase-name" value="${phase.replace(/"/g,'&quot;')}">
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">Start Date <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
-        <input type="date" id="ephase-start" value="${pd.start||''}">
-      </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">End Date <span style="font-weight:400;color:var(--text-3)">(optional)</span></label>
-        <input type="date" id="ephase-end" value="${pd.end||''}">
-      </div>
-    </div>
-    <div id="ephase-error" style="color:#dc2626;font-size:12px;margin-top:8px;margin-bottom:8px"></div>
-    <div class="sheet-actions">
-      <button class="btn-cancel" onclick="document.getElementById('editphase-overlay').remove()">Cancel</button>
-      <button class="btn-save" onclick="saveEditPhase('${projId}',${phaseIdx})">Save</button>
-    </div>
-  </div>`;
-  document.body.appendChild(overlay);
-}
-
-async function savePhaseDate(projId, phase, field, value){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  proj.phaseDates = Object.assign({}, proj.phaseDates||{});
-  proj.phaseDates[phase] = Object.assign({}, proj.phaseDates[phase]||{}, {[field]: value});
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-}
-
-async function saveEditPhase(projId, phaseIdx){
-  const newName = document.getElementById('ephase-name').value.trim();
-  if(!newName){ document.getElementById('ephase-error').textContent='Phase name required.'; return; }
-  const start = document.getElementById('ephase-start').value;
-  const end = document.getElementById('ephase-end').value;
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
-  const oldName = phases[phaseIdx];
-  // Rename phase in phases array
-  proj.phases = phases.map((p,i)=>i===phaseIdx?newName:p);
-  // Rename in tasks
-  (proj.tasks||[]).forEach(t=>{ if(t.phase===oldName) t.phase=newName; });
-  // Update phaseDates
-  proj.phaseDates = Object.assign({}, proj.phaseDates||{});
-  delete proj.phaseDates[oldName];
-  proj.phaseDates[newName] = {start, end};
-  // Update active stage if it matched
-  if(proj.stage===oldName) proj.stage=newName;
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-  document.getElementById('editphase-overlay').remove();
-  renderConsultingDetail();
-}
-
-// Task modal — now with phase, start date, duration, end date, notes
-function openConsultingTaskModal(projId, taskId=null, defaultPhase=null){
+// Task modal
+function openConsultingTaskModal(projId, taskId=null){
   const proj = consultingProjects.find(p=>p.id===projId);
   if(!proj) return;
   const task = taskId ? (proj.tasks||[]).find(t=>t.id===taskId) : null;
-  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
-  const phaseOpts = phases.map(s=>`<option value="${cEsc(s)}"${task&&task.phase===s?' selected':(!task&&defaultPhase&&defaultPhase===s?' selected':(!task&&!defaultPhase&&s===phases[0]?' selected':''))}>${cEsc(s)}</option>`).join('');
+  const stageOpts = CONSULTING_STAGES.map(s=>`<option value="${s}"${task&&task.stage===s?' selected':s===proj.stage&&!task?' selected':''}>${s}</option>`).join('');
+  const prioOpts = ['High','Medium','Low'].map(p=>`<option value="${p}"${task&&task.priority===p?' selected':p==='Medium'&&!task?' selected':''}>${p}</option>`).join('');
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -3242,29 +2880,25 @@ function openConsultingTaskModal(projId, taskId=null, defaultPhase=null){
     <div class="sheet-title">${task?'Edit Task':'Add Task'}</div>
     <div class="form-group">
       <label class="form-label">Task Title *</label>
-      <input type="text" id="ct-title" placeholder="e.g. Site survey, Deliver schematic set" value="${cEsc(task?task.title:'')}">
+      <input type="text" id="ct-title" placeholder="e.g. Complete site survey, Deliver report draft" value="${task?task.title:''}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">Stage</label>
+        <select id="ct-stage">${stageOpts}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Priority</label>
+        <select id="ct-priority">${prioOpts}</select>
+      </div>
     </div>
     <div class="form-group">
-      <label class="form-label">Phase</label>
-      <select id="ct-phase">${phaseOpts}</select>
+      <label class="form-label">Due Date</label>
+      <input type="date" id="ct-due" value="${task&&task.dueDate?task.dueDate:''}">
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">Start Date</label>
-        <input type="date" id="ct-start" value="${task&&task.startDate?task.startDate:''}" oninput="calcConsultingEnd()">
-      </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">Duration (days)</label>
-        <input type="number" id="ct-duration" min="1" placeholder="e.g. 5" value="${task&&task.duration?task.duration:''}" oninput="calcConsultingEnd()">
-      </div>
-      <div class="form-group" style="margin-bottom:0">
-        <label class="form-label">End Date</label>
-        <input type="date" id="ct-end" value="${task&&task.endDate?task.endDate:''}">
-      </div>
-    </div>
-    <div class="form-group" style="margin-top:10px">
+    <div class="form-group">
       <label class="form-label">Notes</label>
-      <input type="text" id="ct-notes" placeholder="Additional details..." value="${cEsc(task&&task.notes?task.notes:'')}">
+      <input type="text" id="ct-notes" placeholder="Additional details..." value="${task&&task.notes?task.notes:''}">
     </div>
     <div id="ct-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
     <div class="sheet-actions">
@@ -3276,39 +2910,25 @@ function openConsultingTaskModal(projId, taskId=null, defaultPhase=null){
   document.body.appendChild(overlay);
 }
 
-function calcConsultingEnd(){
-  const start = document.getElementById('ct-start').value;
-  const dur = parseInt(document.getElementById('ct-duration').value);
-  if(start && dur > 0){
-    document.getElementById('ct-end').value = addBusinessDays(start, dur);
-  }
-}
-
 async function saveConsultingTask(projId, taskId){
   const proj = consultingProjects.find(p=>p.id===projId);
   if(!proj) return;
   const title = document.getElementById('ct-title').value.trim();
-  const phase = document.getElementById('ct-phase').value;
-  const startDate = document.getElementById('ct-start').value;
-  const duration = document.getElementById('ct-duration').value;
-  const endDate = document.getElementById('ct-end').value;
+  const stage = document.getElementById('ct-stage').value;
+  const priority = document.getElementById('ct-priority').value;
+  const dueDate = document.getElementById('ct-due').value;
   const notes = document.getElementById('ct-notes').value.trim();
   if(!title){ document.getElementById('ct-error').textContent='Title is required.'; return; }
   const btn = document.querySelector('#ctask-overlay .btn-save');
   btn.disabled=true; btn.textContent='Saving...';
   if(taskId){
     const t = (proj.tasks||[]).find(x=>x.id===taskId);
-    if(t) Object.assign(t,{title,phase,startDate,duration:duration?Number(duration):null,endDate,notes});
+    if(t) Object.assign(t,{title,stage,priority,dueDate,notes});
   } else {
-    proj.tasks = [...(proj.tasks||[]), {id:Date.now().toString(), type:'task', title, phase, startDate, duration:duration?Number(duration):null, endDate, notes, done:false, subtasks:[], createdAt:new Date().toISOString()}];
+    proj.tasks = [...(proj.tasks||[]), {id: Date.now().toString(), title, stage, priority, dueDate, notes, done:false, createdAt:new Date().toISOString()}];
   }
-  proj.updatedAt = new Date().toISOString();
   await dbSaveConsulting(proj, projId);
   document.getElementById('ctask-overlay').remove();
-  // keep phase expanded
-  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
-  const phaseIdx = phases.indexOf(phase);
-  if(phaseIdx>=0) consultingExpandedPhases['ph_'+phaseIdx] = true;
   renderConsultingDetail();
 }
 
@@ -3316,7 +2936,6 @@ async function deleteConsultingTask(projId, taskId){
   const proj = consultingProjects.find(p=>p.id===projId);
   if(!proj) return;
   proj.tasks = (proj.tasks||[]).filter(t=>t.id!==taskId);
-  proj.updatedAt = new Date().toISOString();
   await dbSaveConsulting(proj, projId);
   document.getElementById('ctask-overlay').remove();
   renderConsultingDetail();
@@ -3327,111 +2946,10 @@ async function toggleConsultingTask(projId, taskId, done){
   if(!proj) return;
   const t = (proj.tasks||[]).find(x=>x.id===taskId);
   if(t){ t.done=done; t.completedAt=done?new Date().toISOString():null; }
-  proj.updatedAt = new Date().toISOString();
   await dbSaveConsulting(proj, projId);
   renderConsultingDetail();
 }
 
-async function addConsultingSubtask(projId, taskId){
-  const el = document.getElementById('sub-input-'+taskId);
-  if(!el) return;
-  const val = el.value.trim();
-  if(!val) return;
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  const t = (proj.tasks||[]).find(x=>x.id===taskId);
-  if(!t) return;
-  t.subtasks = [...(t.subtasks||[]), {id:Date.now().toString(), title:val, done:false}];
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-  // keep phase expanded
-  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
-  const phaseIdx = phases.indexOf(t.phase);
-  if(phaseIdx>=0) consultingExpandedPhases['ph_'+phaseIdx] = true;
-  renderConsultingDetail();
-}
-
-async function toggleConsultingSubtask(projId, taskId, subId, done){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  const t = (proj.tasks||[]).find(x=>x.id===taskId);
-  if(!t) return;
-  const s = (t.subtasks||[]).find(x=>x.id===subId);
-  if(s) s.done = done;
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
-  const phaseIdx = phases.indexOf(t.phase);
-  if(phaseIdx>=0) consultingExpandedPhases['ph_'+phaseIdx] = true;
-  renderConsultingDetail();
-}
-
-async function deleteConsultingSubtask(projId, taskId, subId){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  const t = (proj.tasks||[]).find(x=>x.id===taskId);
-  if(!t) return;
-  t.subtasks = (t.subtasks||[]).filter(s=>s.id!==subId);
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-  const phases = proj.phases || [...CONSULTING_STAGES_DEFAULT];
-  const phaseIdx = phases.indexOf(t.phase);
-  if(phaseIdx>=0) consultingExpandedPhases['ph_'+phaseIdx] = true;
-  renderConsultingDetail();
-}
-
-// Milestone modal
-function openConsultingMilestoneModal(projId){
-  const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.id = 'milestone-overlay';
-  overlay.onclick = (e)=>{ if(e.target===overlay) overlay.remove(); };
-  overlay.innerHTML = `<div class="modal-sheet" style="max-width:420px">
-    <div class="sheet-handle"></div>
-    <div class="sheet-title">Add Milestone</div>
-    <div class="form-group">
-      <label class="form-label">Milestone Name *</label>
-      <input type="text" id="ms-title" placeholder="e.g. Board Meeting, First Day of School">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Date *</label>
-      <input type="date" id="ms-date">
-    </div>
-    <div class="form-group">
-      <label class="form-label">Notes</label>
-      <input type="text" id="ms-notes" placeholder="Optional details...">
-    </div>
-    <div id="ms-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
-    <div class="sheet-actions">
-      <button class="btn-cancel" onclick="document.getElementById('milestone-overlay').remove()">Cancel</button>
-      <button class="btn-save" onclick="saveMilestone('${projId}')">Add Milestone</button>
-    </div>
-  </div>`;
-  document.body.appendChild(overlay);
-}
-
-async function saveMilestone(projId){
-  const title = document.getElementById('ms-title').value.trim();
-  const date = document.getElementById('ms-date').value;
-  const notes = document.getElementById('ms-notes').value.trim();
-  if(!title||!date){ document.getElementById('ms-error').textContent='Name and date required.'; return; }
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  proj.tasks = [...(proj.tasks||[]), {id:Date.now().toString(), type:'milestone', title, date, notes, createdAt:new Date().toISOString()}];
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-  document.getElementById('milestone-overlay').remove();
-  renderConsultingDetail();
-}
-
-async function deleteMilestone(projId, msId){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  proj.tasks = (proj.tasks||[]).filter(t=>t.id!==msId);
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
-  renderConsultingDetail();
-}
 
 async function logConsultingHours(id){
   const proj = consultingProjects.find(p=>p.id===id);
@@ -3443,27 +2961,16 @@ async function logConsultingHours(id){
   if(!hours||hours<=0){ alert('Please enter valid hours.'); return; }
   const loggedBy = getDisplayName(currentUser&&currentUser.email);
   proj.hoursLog = [...(proj.hoursLog||[]), {ts:new Date().toISOString(), date, stage, hours, note, loggedBy}];
-  proj.updatedAt = new Date().toISOString();
   await dbSaveConsulting(proj, id);
-  renderConsultingDetail();
-}
-
-async function setConsultingActivePhase(projId, phase){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  proj.stage = phase;
-  proj.updatedAt = new Date().toISOString();
-  await dbSaveConsulting(proj, projId);
   renderConsultingDetail();
 }
 
 async function advanceConsultingStage(id){
   const proj = consultingProjects.find(p=>p.id===id);
   if(!proj) return;
-  const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
-  const idx = phases.indexOf(proj.stage);
-  if(idx < phases.length-1){
-    proj.stage = phases[idx+1];
+  const idx = CONSULTING_STAGES.indexOf(proj.stage);
+  if(idx < CONSULTING_STAGES.length-1){
+    proj.stage = CONSULTING_STAGES[idx+1];
     proj.updatedAt = new Date().toISOString();
     await dbSaveConsulting(proj, id);
     renderConsultingDetail();
@@ -3473,10 +2980,9 @@ async function advanceConsultingStage(id){
 async function goBackConsultingStage(id){
   const proj = consultingProjects.find(p=>p.id===id);
   if(!proj) return;
-  const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
-  const idx = phases.indexOf(proj.stage);
+  const idx = CONSULTING_STAGES.indexOf(proj.stage);
   if(idx > 0){
-    proj.stage = phases[idx-1];
+    proj.stage = CONSULTING_STAGES[idx-1];
     proj.updatedAt = new Date().toISOString();
     await dbSaveConsulting(proj, id);
     renderConsultingDetail();
@@ -3490,146 +2996,11 @@ async function deleteConsultingProject(id){
   renderConsulting();
 }
 
-// ── GANTT EXPORT ─────────────────────────────────────────────────────────────
-function exportConsultingGantt(projId){
-  const proj = consultingProjects.find(p=>p.id===projId);
-  if(!proj) return;
-  const phases = proj.phases||[...CONSULTING_STAGES_DEFAULT];
-  const tasks = (proj.tasks||[]).filter(t=>t.type!=='milestone');
-  const milestones = (proj.tasks||[]).filter(t=>t.type==='milestone');
-
-  // Collect all dated items to find date range
-  const allDates = [];
-  const phaseDates = proj.phaseDates||{};
-  tasks.forEach(t=>{ if(t.startDate) allDates.push(t.startDate); if(t.endDate) allDates.push(t.endDate); });
-  milestones.forEach(m=>{ if(m.date) allDates.push(m.date); });
-  phases.forEach(p=>{ const pd=phaseDates[p]||{}; if(pd.start) allDates.push(pd.start); if(pd.end) allDates.push(pd.end); });
-  if(!allDates.length){ alert('No tasks or phases with dates to export. Add dates first.'); return; }
-
-  const minDate = allDates.reduce((a,b)=>a<b?a:b);
-  const maxDate = allDates.reduce((a,b)=>a>b?a:b);
-  const startD = new Date(minDate+'T12:00:00');
-  const endD = new Date(maxDate+'T12:00:00');
-  endD.setDate(endD.getDate()+3);
-  const totalDays = Math.max(1, Math.round((endD-startD)/(1000*60*60*24)));
-
-  const phaseColors = {
-    'Concept Development':'#3b82f6',
-    'Schematic Design':'#8b5cf6',
-    'Design Development':'#f59e0b',
-    'Construction Documentation':'#22c55e',
-    'Construction Administration':'#ec4899',
-  };
-  const defaultColors = ['#3b82f6','#8b5cf6','#f59e0b','#22c55e','#ec4899','#f97316','#14b8a6'];
-
-  const ROW_H = 32;
-  const HEADER_H = 50;
-  const LABEL_W = 220;
-  const CHART_W = 700;
-  const TOTAL_W = LABEL_W + CHART_W + 40;
-
-  // Build rows
-  let rows = [];
-  phases.forEach((phase, pi)=>{
-    const pd = phaseDates[phase]||{};
-    rows.push({type:'phase', label:phase, color: phaseColors[phase]||defaultColors[pi%defaultColors.length], startDate:pd.start, endDate:pd.end});
-    tasks.filter(t=>t.phase===phase).forEach(t=>{
-      rows.push({type:'task', label:t.title, startDate:t.startDate, endDate:t.endDate, done:t.done, color: phaseColors[phase]||defaultColors[pi%defaultColors.length]});
-    });
-  });
-  if(milestones.length){
-    rows.push({type:'phase', label:'Milestones', color:'#64748b'});
-    milestones.forEach(m=>{ rows.push({type:'milestone', label:m.title, date:m.date}); });
-  }
-
-  const svgH = HEADER_H + rows.length * ROW_H + 40;
-
-  function xPos(dateStr){
-    if(!dateStr) return 0;
-    const d = new Date(dateStr+'T12:00:00');
-    return LABEL_W + 20 + ((d - startD)/(1000*60*60*24))/totalDays * CHART_W;
-  }
-
-  // Build month tick marks
-  let monthTicks = '';
-  const cur = new Date(startD);
-  cur.setDate(1);
-  while(cur <= endD){
-    const x = xPos(cur.toISOString().split('T')[0]);
-    const label = cur.toLocaleString('default',{month:'short',year:'2-digit'});
-    monthTicks += `<line x1="${x}" y1="0" x2="${x}" y2="${svgH}" stroke="#e2e8f0" stroke-width="1"/>`;
-    monthTicks += `<text x="${x+4}" y="20" font-size="10" fill="#94a3b8" font-family="DM Sans,sans-serif">${label}</text>`;
-    cur.setMonth(cur.getMonth()+1);
-  }
-
-  let rowsSvg = '';
-  rows.forEach((row, ri)=>{
-    const y = HEADER_H + ri * ROW_H;
-    const isEven = ri%2===0;
-    rowsSvg += `<rect x="0" y="${y}" width="${TOTAL_W}" height="${ROW_H}" fill="${isEven?'#f8fafc':'#ffffff'}"/>`;
-
-    if(row.type==='phase'){
-      rowsSvg += `<rect x="0" y="${y}" width="${TOTAL_W}" height="${ROW_H}" fill="${row.color}18"/>`;
-      rowsSvg += `<text x="12" y="${y+21}" font-size="11" font-weight="700" fill="${row.color}" font-family="DM Sans,sans-serif">${row.label.toUpperCase()}</text>`;
-      if(row.startDate && row.endDate){
-        const x1 = xPos(row.startDate);
-        const x2 = Math.max(xPos(row.endDate), x1+8);
-        const barY = y + 6;
-        const barH = ROW_H - 12;
-        rowsSvg += `<rect x="${x1}" y="${barY}" width="${x2-x1}" height="${barH}" rx="3" fill="${row.color}" opacity="0.3"/>`;
-        rowsSvg += `<rect x="${x1}" y="${barY}" width="3" height="${barH}" rx="1" fill="${row.color}"/>`;
-        rowsSvg += `<rect x="${x2-3}" y="${barY}" width="3" height="${barH}" rx="1" fill="${row.color}"/>`;
-      }
-    } else if(row.type==='task'){
-      rowsSvg += `<text x="24" y="${y+21}" font-size="12" fill="${row.done?'#94a3b8':'#1e293b'}" font-family="DM Sans,sans-serif" text-decoration="${row.done?'line-through':''}">${row.label.length>28?row.label.slice(0,27)+'…':row.label}</text>`;
-      if(row.startDate && row.endDate){
-        const x1 = xPos(row.startDate);
-        const x2 = Math.max(xPos(row.endDate), x1+8);
-        const barY = y + 8;
-        const barH = ROW_H - 16;
-        rowsSvg += `<rect x="${x1}" y="${barY}" width="${x2-x1}" height="${barH}" rx="4" fill="${row.color}" opacity="${row.done?0.4:0.85}"/>`;
-      }
-    } else if(row.type==='milestone'){
-      rowsSvg += `<text x="24" y="${y+21}" font-size="12" fill="#1e293b" font-family="DM Sans,sans-serif">${row.label.length>28?row.label.slice(0,27)+'…':row.label}</text>`;
-      if(row.date){
-        const mx = xPos(row.date);
-        const my = y + ROW_H/2;
-        rowsSvg += `<polygon points="${mx},${my-9} ${mx+9},${my} ${mx},${my+9} ${mx-9},${my}" fill="#f59e0b"/>`;
-        rowsSvg += `<text x="${mx+12}" y="${my+4}" font-size="10" fill="#92400e" font-family="DM Sans,sans-serif">${row.date}</text>`;
-      }
-    }
-  });
-
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${TOTAL_W}" height="${svgH}" style="background:#fff">
-  <defs>
-    <style>text{font-family:'DM Sans',Arial,sans-serif}</style>
-  </defs>
-  <!-- Grid lines -->
-  ${monthTicks}
-  <!-- Header -->
-  <rect x="0" y="0" width="${TOTAL_W}" height="${HEADER_H}" fill="#1e293b"/>
-  <text x="12" y="22" font-size="14" font-weight="700" fill="#fff" font-family="DM Sans,sans-serif">${proj.client}${proj.projectName?' — '+proj.projectName:''}</text>
-  <text x="12" y="40" font-size="11" fill="#94a3b8" font-family="DM Sans,sans-serif">Gantt Chart · Exported ${new Date().toLocaleDateString()}</text>
-  <line x1="${LABEL_W+20}" y1="${HEADER_H}" x2="${TOTAL_W}" y2="${HEADER_H}" stroke="#e2e8f0"/>
-  <!-- Rows -->
-  ${rowsSvg}
-  <!-- Bottom border -->
-  <rect x="0" y="${svgH-1}" width="${TOTAL_W}" height="1" fill="#e2e8f0"/>
-</svg>`;
-
-  const blob = new Blob([svg], {type:'image/svg+xml'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${proj.client.replace(/\s+/g,'-')}-gantt.svg`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-// ── PROJECT MODAL ─────────────────────────────────────────────────────────────
 function openConsultingModal(id=null){
   const proj = id ? consultingProjects.find(p=>p.id===id) : null;
   const isNew = !proj;
+  const stageOpts = CONSULTING_STAGES.map(s=>`<option value="${s}"${proj&&proj.stage===s?' selected':''}>${s}</option>`).join('');
+  const prioOpts = ['High','Medium','Low'].map(p=>`<option value="${p}"${proj&&proj.priority===p?' selected':''}>${p}</option>`).join('');
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -3640,15 +3011,27 @@ function openConsultingModal(id=null){
     <div class="sheet-title">${isNew?'New Consulting Project':'Edit Project'}</div>
     <div class="form-group">
       <label class="form-label">Client *</label>
-      <input type="text" id="cp-client" placeholder="Client name" value="${cEsc(proj?proj.client:'')}">
+      <input type="text" id="cp-client" placeholder="Client name" value="${proj?proj.client:''}">
     </div>
     <div class="form-group">
       <label class="form-label">Project Name</label>
-      <input type="text" id="cp-name" placeholder="e.g. Laser Grade Survey, Turf Feasibility Study" value="${cEsc(proj?proj.projectName:'')}">
+      <input type="text" id="cp-name" placeholder="e.g. Laser Grade Survey, Turf Feasibility Study" value="${proj?proj.projectName:''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Current Stage</label>
+      <select id="cp-stage">${stageOpts}</select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Due Dates by Stage</label>
+      ${CONSULTING_STAGES.map(s=>`
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;align-items:center">
+          <div style="font-size:12px;color:var(--text-2)">${s}</div>
+          <input type="date" id="cp-due-${s.replace(/\s+/g,'-')}" value="${proj&&proj.stageDueDates&&proj.stageDueDates[s]?proj.stageDueDates[s]:''}" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit;background:var(--bg)">
+        </div>`).join('')}
     </div>
     <div class="form-group">
       <label class="form-label">Notes</label>
-      <textarea id="cp-notes" rows="3" placeholder="Project details, context..." style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);resize:vertical;box-sizing:border-box">${cEsc(proj?proj.notes:'')}</textarea>
+      <textarea id="cp-notes" rows="3" placeholder="Project details, context..." style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);resize:vertical;box-sizing:border-box">${proj?proj.notes:''}</textarea>
     </div>
     <div id="cp-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
     <div class="sheet-actions">
@@ -3662,18 +3045,26 @@ function openConsultingModal(id=null){
 async function saveConsultingProject(id){
   const client = document.getElementById('cp-client').value.trim();
   const projectName = document.getElementById('cp-name').value.trim();
+  const stage = document.getElementById('cp-stage').value;
+  const priority = '';
   const notes = document.getElementById('cp-notes').value.trim();
   const errEl = document.getElementById('cp-error');
   if(!client){ errEl.textContent='Client name is required.'; return; }
+  // Collect due dates
+  const stageDueDates = {};
+  CONSULTING_STAGES.forEach(s=>{
+    const val = document.getElementById('cp-due-'+s.replace(/\s+/g,'-'));
+    if(val&&val.value) stageDueDates[s]=val.value;
+  });
   const btn = document.querySelector('#consulting-overlay .btn-save');
   btn.disabled=true; btn.textContent='Saving...';
   try{
     if(id){
       const proj = consultingProjects.find(p=>p.id===id);
-      Object.assign(proj,{client,projectName,notes,updatedAt:new Date().toISOString()});
+      Object.assign(proj,{client,projectName,stage,priority,notes,stageDueDates,updatedAt:new Date().toISOString()});
       await dbSaveConsulting(proj,id);
     } else {
-      const newP = {client, projectName, stage:'Concept Development', priority:'', notes, phases:[...CONSULTING_STAGES_DEFAULT], stageDueDates:{}, hoursLog:[], tasks:[], createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()};
+      const newP = {client,projectName,stage,priority,notes,stageDueDates,hoursLog:[],tasks:[],createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};
       const newId = await dbSaveConsulting(newP);
       if(newId){ newP.id=newId; consultingProjects.unshift(newP); }
     }
@@ -3686,6 +3077,7 @@ async function saveConsultingProject(id){
   }
 }
 
+
 function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
@@ -3693,14 +3085,14 @@ function setView(v){
   // idx maps to vtab position within the ACTIVE bar
   const trackerIdx={week:0,next:1,month:2,list:3,mileage:4,equipment:5,reports:6,timeoff:7,hours:8,workorders:9};
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
-  const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0,'consulting-deadlines':1};
+  const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
   const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing'].includes(v)?'bizops-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='costs'||v==='clients'||v==='labor'||v==='costing';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -3734,7 +3126,6 @@ function render(){
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();
-  else if(view==='consulting-deadlines') renderConsultingDeadlines();
   else if(view==='costs') renderCosts();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
@@ -4333,30 +3724,14 @@ function renderReports(){
   const REPORT_ALL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const canSeeAll = REPORT_ALL_EMAILS.includes((currentUser&&currentUser.email||'').toLowerCase());
   const myName = getDisplayName(currentUser&&currentUser.email);
-  const emailFallback = (currentUser&&currentUser.email||'').split('@')[0];
-  const visibleReports = canSeeAll ? reports : reports.filter(r=>r.filedBy===myName||r.filedBy===emailFallback);
+  const visibleReports = canSeeAll ? reports : reports.filter(r=>r.filedBy===myName);
 
   const allClients = ['All', ...new Set(visibleReports.map(r=>r.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
-  const allEmployees = ['All', ...new Set(visibleReports.map(r=>r.filedBy).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
+  const filtered = reportSiteFilter==='All' ? visibleReports : visibleReports.filter(r=>r.client===reportSiteFilter);
 
-  // reset filters if they no longer apply
-  if(!allClients.includes(reportSiteFilter)) reportSiteFilter='All';
-  if(!allEmployees.includes(reportEmployeeFilter)) reportEmployeeFilter='All';
-
-  let afterSite = reportEmployeeFilter==='All' ? visibleReports : visibleReports.filter(r=>r.filedBy===reportEmployeeFilter);
-  const filtered = reportSiteFilter==='All' ? afterSite : afterSite.filter(r=>r.client===reportSiteFilter);
-
-  let html = `<div class="site-filter-row">${allClients.map(c=>{
-    const safe = c.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-    return `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${safe}')">${c}</button>`;
-  }).join('')}</div>`;
-
-  if(canSeeAll && allEmployees.length > 2){
-    html += `<div class="site-filter-row" style="margin-top:4px">${allEmployees.map(e=>{
-      const safe = e.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-      return `<button class="site-chip${reportEmployeeFilter===e?' active':''}" onclick="setReportEmployee('${safe}')">${e}</button>`;
-    }).join('')}</div>`;
-  }
+  let html = `<div class="site-filter-row">${allClients.map(c=>
+    `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${c.replace(/'/g,"\\'")}'">${c}</button>`
+  ).join('')}</div>`;
 
   if(!filtered.length){
     html += `<div class="empty-state"><p>No daily reports yet.<br>Tap "+ File report" to submit one.</p></div>`;
@@ -4384,7 +3759,6 @@ function renderReports(){
   document.getElementById('main-content').innerHTML = html;
 }
 function setReportSite(c){ reportSiteFilter=c; renderReports(); }
-function setReportEmployee(e){ reportEmployeeFilter=e; renderReports(); }
 
 function openReportModal(){
   const todayStr = isoDate(today());
@@ -5644,6 +5018,30 @@ function showApp(){
   }
 }
 
+// Override sbFetch to use auth token when available
+const _origSbFetch = sbFetch;
+async function sbFetch(method, path, body=null){
+  const token = currentToken || SUPABASE_KEY;
+  const opts = {
+    method,
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + token,
+      'Content-Type': 'application/json',
+      'Prefer': method==='POST'?'return=representation':'',
+    }
+  };
+  if(body) opts.body = JSON.stringify(body);
+  const res = await fetch(SUPABASE_URL + path, opts);
+  if(!res.ok){
+    const t=await res.text();
+    console.error('Supabase error:', method, path, t);
+    if(t.includes('JWT expired')){ doLogout(); return null; }
+    throw new Error(t);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
 
 // Check for existing session on load
 function checkSession(){
@@ -5953,6 +5351,12 @@ function checkForRecoveryToken(){
 // Init
 if(!checkForRecoveryToken()) checkSession();
 
+// Register service worker for PWA
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+  });
+}
 </script>
 </body>
 </html>

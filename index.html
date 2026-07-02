@@ -415,6 +415,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off <span id="timeoff-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
     <button class="vtab" id="hours-tab" onclick="const _n=new Date();hoursMonth=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0');loadReports().then(()=>setView('hours'))" style="display:none">Hours</button>
     <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
+    <button class="vtab" id="fleet-tab" onclick="setView('fleet')" style="display:none">Fleet</button>
   </div>
 </div>
 
@@ -3079,6 +3080,148 @@ async function saveConsultingProject(id){
 }
 
 
+function renderFleet(){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const LOANS = [
+    {name:'2026 Chevrolet Silverado (82065)',    lender:'Ally',          principal:74013.16,  rate:0.0794, term:60, startDate:'2026-05-01', payment:1498.60,  balance:73004.28},
+    {name:'2026 Kia Sorento Hybrid (42286)',     lender:'Ally',          principal:47089.44,  rate:0.0874, term:60, startDate:'2026-05-14', payment:971.57,   balance:46460.84},
+    {name:'2026 Chevrolet Silverado (62388)',    lender:'Ally',          principal:74538.25,  rate:0.0844, term:60, startDate:'2026-06-01', payment:1527.11,  balance:74538.25},
+    {name:'2026 Chevrolet Silverado (72103)',    lender:'Ally',          principal:65993.16,  rate:0.0844, term:60, startDate:'2026-06-03', payment:1352.04,  balance:65993.16},
+    {name:'Vredo/Shockwave (Ln 1641)',           lender:'1st Financial', principal:58834.22,  rate:0.0725, term:60, startDate:'2024-03-01', payment:1171.94,  balance:46055.20},
+    {name:'Truck 4 (Ln 2444)',                   lender:'1st Financial', principal:65589.04,  rate:0.0725, term:48, startDate:'2023-08-01', payment:1578.23,  balance:37867.89},
+    {name:'Tractor (Ln 1890)',                   lender:'1st Financial', principal:76779.07,  rate:0.0725, term:60, startDate:'2024-12-01', payment:1529.39,  balance:56582.37},
+    {name:'2023 Chevrolet Silverado 1500 (249285)',lender:'GM Financial', principal:44943.38, rate:0.0989, term:60, startDate:'2024-02-01', payment:952.48,   balance:26695.45},
+    {name:'2024 Chevrolet Silverado 1500 (422455)',lender:'GM Financial', principal:46542.98, rate:0.0979, term:48, startDate:'2024-09-01', payment:1175.76,  balance:28389.00},
+    {name:'2024 Silverado 2500HD (851173)',       lender:'GM Financial',  principal:57659.76,  rate:0.00,   term:36, startDate:'2025-12-01', payment:1601.66,  balance:48049.80},
+    {name:'Kubota SVL75 Track Loader (127696490)',lender:'Kubota Credit', principal:98846.20,  rate:0.00,   term:36, startDate:'2025-10-01', payment:2745.73,  balance:74134.65},
+    {name:'Kubota M7060 Tractor (131013617)',     lender:'Kubota Credit', principal:73194.29,  rate:0.00,   term:36, startDate:'2026-05-01', payment:2033.17,  balance:71161.12},
+    {name:'Kubota RTV-X2 (131928590)',            lender:'Kubota Credit', principal:24272.20,  rate:0.0299, term:36, startDate:'2026-06-01', payment:705.76,   balance:24272.20},
+    {name:'Kubota RTV-X2 (131928376)',            lender:'Kubota Credit', principal:25519.60,  rate:0.0299, term:36, startDate:'2026-06-01', payment:742.03,   balance:25519.60},
+    {name:'2024 Ford F-450 (64776213)',           lender:'Ford Credit',   principal:87776.63,  rate:0.0759, term:60, startDate:'2025-09-01', payment:1762.62,  balance:76630.71},
+  ];
+
+  // Compute months remaining and payoff date from start + term
+  LOANS.forEach(l=>{
+    const start = new Date(l.startDate);
+    const payoff = new Date(start);
+    payoff.setMonth(payoff.getMonth() + l.term);
+    l.payoffDate = payoff;
+    const msLeft = payoff - today;
+    l.monthsRemaining = Math.max(0, Math.round(msLeft / (1000*60*60*24*30.44)));
+    l.interest = l.balance * (l.rate / 12);
+    l.principal_portion = l.payment - l.interest;
+  });
+
+  const totalBalance = LOANS.reduce((s,l)=>s+l.balance, 0);
+  const totalPayment = LOANS.reduce((s,l)=>s+l.payment, 0);
+  const totalInterest = LOANS.reduce((s,l)=>s+l.interest, 0);
+  const totalPrincipal = LOANS.reduce((s,l)=>s+l.principal_portion, 0);
+
+  const fmt = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
+  const fmt2 = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
+  const fmtPct = n => (n*100).toFixed(2) + '%';
+  const fmtPayoff = d => d.toLocaleDateString('en-US', {month:'short', year:'numeric'});
+
+  const LENDER_COLORS = {
+    'Ally':          {bg:'#dbeafe', text:'#1d4ed8'},
+    '1st Financial': {bg:'#ede9fe', text:'#6d28d9'},
+    'GM Financial':  {bg:'#dcfce7', text:'#14532d'},
+    'Kubota Credit': {bg:'#fef3c7', text:'#92400e'},
+    'Ford Credit':   {bg:'#fce7f3', text:'#9d174d'},
+  };
+
+  // Group by lender
+  const lenders = [...new Set(LOANS.map(l=>l.lender))];
+
+  let html = `<div style="margin-bottom:16px">
+    <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:12px">Fleet Financing</div>
+
+    <!-- Portfolio summary cards -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;border-top:3px solid var(--green)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:4px">Outstanding Balance</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">${fmt(totalBalance)}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">${LOANS.length} active loans</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;border-top:3px solid #3b82f6">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:4px">Monthly Payment</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">${fmt(totalPayment)}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">per month total</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;border-top:3px solid #f59e0b">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:4px">To Interest</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">${fmt(totalInterest)}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">${(totalInterest/totalPayment*100).toFixed(1)}% of payment</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;border-top:3px solid #22c55e">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:4px">To Principal</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">${fmt(totalPrincipal)}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">${(totalPrincipal/totalPayment*100).toFixed(1)}% of payment</div>
+      </div>
+    </div>
+
+    <!-- Loan table -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <!-- Table header -->
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:0;background:var(--accent);border-bottom:1px solid var(--border);padding:10px 14px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Vehicle / Equipment</div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Balance</div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Payment</div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Rate</div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Interest/mo</div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Mo. Left</div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Payoff</div>
+      </div>`;
+
+  // Group rows by lender
+  lenders.forEach(lender=>{
+    const lc = LENDER_COLORS[lender]||{bg:'#f1f5f9',text:'#475569'};
+    const group = LOANS.filter(l=>l.lender===lender);
+    const groupBalance = group.reduce((s,l)=>s+l.balance,0);
+    const groupPayment = group.reduce((s,l)=>s+l.payment,0);
+
+    // Lender header row
+    html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:0;padding:7px 14px;background:${lc.bg};border-bottom:1px solid var(--border)">
+      <div style="font-size:11px;font-weight:700;color:${lc.text}">${lender}</div>
+      <div style="font-size:11px;font-weight:700;color:${lc.text};text-align:right">${fmt(groupBalance)}</div>
+      <div style="font-size:11px;font-weight:700;color:${lc.text};text-align:right">${fmt(groupPayment)}/mo</div>
+      <div></div><div></div><div></div><div></div>
+    </div>`;
+
+    group.forEach((l,i)=>{
+      const isLast = i===group.length-1;
+      const urgency = l.monthsRemaining <= 6 ? '#dc2626' : l.monthsRemaining <= 12 ? '#f59e0b' : 'var(--text)';
+      html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:0;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center">
+        <div>
+          <div style="font-size:13px;font-weight:500;color:var(--text)">${l.name}</div>
+        </div>
+        <div style="font-size:13px;font-weight:600;color:var(--text);text-align:right;font-family:'DM Mono',monospace">${fmt(l.balance)}</div>
+        <div style="font-size:13px;color:var(--text-2);text-align:right;font-family:'DM Mono',monospace">${fmt2(l.payment)}</div>
+        <div style="font-size:13px;color:var(--text-2);text-align:right">${l.rate===0?'0.00%':fmtPct(l.rate)}</div>
+        <div style="font-size:13px;color:var(--text-2);text-align:right;font-family:'DM Mono',monospace">${fmt2(l.interest)}</div>
+        <div style="font-size:13px;font-weight:600;color:${urgency};text-align:right">${l.monthsRemaining}</div>
+        <div style="font-size:13px;color:var(--text-2);text-align:right">${fmtPayoff(l.payoffDate)}</div>
+      </div>`;
+    });
+  });
+
+  // Totals row
+  html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:0;padding:12px 14px;background:var(--accent);border-top:2px solid var(--border)">
+    <div style="font-size:13px;font-weight:700;color:var(--text)">TOTAL</div>
+    <div style="font-size:13px;font-weight:700;color:var(--text);text-align:right;font-family:'DM Mono',monospace">${fmt(totalBalance)}</div>
+    <div style="font-size:13px;font-weight:700;color:var(--text);text-align:right;font-family:'DM Mono',monospace">${fmt(totalPayment)}/mo</div>
+    <div></div>
+    <div style="font-size:13px;font-weight:700;color:var(--text);text-align:right;font-family:'DM Mono',monospace">${fmt(totalInterest)}</div>
+    <div></div><div></div>
+  </div>`;
+
+  html += `</div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">Balances and interest as of ${today.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · Updated from loan tracker ${new Date().toLocaleDateString('en-US',{month:'short',year:'numeric'})}</div>
+  </div>`;
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
 function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
@@ -3093,7 +3236,7 @@ function setView(v){
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='costs'||v==='clients'||v==='labor'||v==='costing';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -3128,6 +3271,7 @@ function render(){
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();
   else if(view==='costs') renderCosts();
+  else if(view==='fleet') renderFleet();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
 }
@@ -4995,6 +5139,9 @@ function showApp(){
   const HOURS_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const hoursTab = document.getElementById('hours-tab');
   if(hoursTab) hoursTab.style.display = HOURS_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
+  const FLEET_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com'];
+  const fleetTab = document.getElementById('fleet-tab');
+  if(fleetTab) fleetTab.style.display = FLEET_EMAILS.includes(userEmail) ? '' : 'none';
   const poTab2 = document.getElementById('po-tab');
   if(poTab2) poTab2.style.display = ''; // visible inside bizops-bar
   const allTabs = Array.from(document.querySelectorAll('.vtab'));

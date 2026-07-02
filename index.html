@@ -415,7 +415,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off <span id="timeoff-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
     <button class="vtab" id="hours-tab" onclick="const _n=new Date();hoursMonth=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0');loadReports().then(()=>setView('hours'))" style="display:none">Hours</button>
     <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
-    <button class="vtab" id="fleet-tab" onclick="setView('fleet')" style="display:none">Fleet</button>
+    <button class="vtab" id="fleet-tab" onclick="loadFleet().then(()=>setView('fleet'))" style="display:none">Fleet</button>
   </div>
 </div>
 
@@ -3080,63 +3080,124 @@ async function saveConsultingProject(id){
 }
 
 
+let fleetLoans = [];
+
+async function loadFleet(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/fleet_loans?select=*&order=lender.asc,name.asc');
+    fleetLoans = (data||[]).map(r=>({
+      id: r.id,
+      name: r.name,
+      lender: r.lender,
+      principal: Number(r.principal),
+      rate: Number(r.rate),
+      term: Number(r.term),
+      startDate: r.start_date,
+      notes: r.notes||'',
+    }));
+  } catch(e){ fleetLoans = []; }
+}
+
+async function seedFleetLoans(){
+  // Only seed if table is empty
+  const existing = await sbFetch('GET', '/rest/v1/fleet_loans?select=id&limit=1');
+  if(existing && existing.length > 0) return;
+  const loans = [
+    {name:'2026 Chevrolet Silverado (82065)',       lender:'Ally',          principal:74013.16, rate:0.0794, term:60, start_date:'2026-05-01'},
+    {name:'2026 Kia Sorento Hybrid (42286)',        lender:'Ally',          principal:47089.44, rate:0.0874, term:60, start_date:'2026-05-14'},
+    {name:'2026 Chevrolet Silverado (62388)',       lender:'Ally',          principal:74538.25, rate:0.0844, term:60, start_date:'2026-06-01'},
+    {name:'2026 Chevrolet Silverado (72103)',       lender:'Ally',          principal:65993.16, rate:0.0844, term:60, start_date:'2026-06-03'},
+    {name:'Vredo/Shockwave (Ln 1641)',              lender:'1st Financial', principal:58834.22, rate:0.0725, term:60, start_date:'2024-03-01'},
+    {name:'Truck 4 (Ln 2444)',                      lender:'1st Financial', principal:65589.04, rate:0.0725, term:48, start_date:'2023-08-01'},
+    {name:'Tractor (Ln 1890)',                      lender:'1st Financial', principal:76779.07, rate:0.0725, term:60, start_date:'2024-12-01'},
+    {name:'2023 Chevrolet Silverado 1500 (249285)', lender:'GM Financial',  principal:44943.38, rate:0.0989, term:60, start_date:'2024-02-01'},
+    {name:'2024 Chevrolet Silverado 1500 (422455)', lender:'GM Financial',  principal:46542.98, rate:0.0979, term:48, start_date:'2024-09-01'},
+    {name:'2024 Silverado 2500HD (851173)',          lender:'GM Financial',  principal:57659.76, rate:0.00,   term:36, start_date:'2025-12-01'},
+    {name:'Kubota SVL75 Track Loader (127696490)',  lender:'Kubota Credit', principal:98846.20, rate:0.00,   term:36, start_date:'2025-10-01'},
+    {name:'Kubota M7060 Tractor (131013617)',       lender:'Kubota Credit', principal:73194.29, rate:0.00,   term:36, start_date:'2026-05-01'},
+    {name:'Kubota RTV-X2 (131928590)',              lender:'Kubota Credit', principal:24272.20, rate:0.0299, term:36, start_date:'2026-06-01'},
+    {name:'Kubota RTV-X2 (131928376)',              lender:'Kubota Credit', principal:25519.60, rate:0.0299, term:36, start_date:'2026-06-01'},
+    {name:'2024 Ford F-450 (64776213)',             lender:'Ford Credit',   principal:87776.63, rate:0.0759, term:60, start_date:'2025-09-01'},
+  ];
+  for(const loan of loans){
+    await sbFetch('POST', '/rest/v1/fleet_loans', loan);
+  }
+  await loadFleet();
+}
+
+function calcLoan(l){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const start = new Date(l.startDate + 'T12:00:00');
+  const r = l.rate / 12;
+  const n = l.term;
+
+  // Monthly payment (handle 0% separately)
+  const payment = r === 0
+    ? l.principal / n
+    : l.principal * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1);
+
+  // Payments made so far (count months from start to today)
+  const monthsElapsed = (today.getFullYear() - start.getFullYear()) * 12
+    + (today.getMonth() - start.getMonth());
+  const p = Math.min(Math.max(0, monthsElapsed), n);
+
+  // Current balance
+  let balance;
+  if(r === 0){
+    balance = Math.max(0, l.principal - payment * p);
+  } else {
+    balance = p >= n ? 0 : l.principal * (Math.pow(1+r, n) - Math.pow(1+r, p)) / (Math.pow(1+r, n) - 1);
+  }
+
+  const interest = balance * r;
+  const principalPortion = payment - interest;
+  const monthsRemaining = Math.max(0, n - p);
+
+  const payoff = new Date(start);
+  payoff.setMonth(payoff.getMonth() + n);
+
+  return { payment, balance, interest, principalPortion, monthsRemaining, payoff };
+}
+
 function renderFleet(){
   const today = new Date(); today.setHours(0,0,0,0);
-  const LOANS = [
-    {name:'2026 Chevrolet Silverado (82065)',    lender:'Ally',          principal:74013.16,  rate:0.0794, term:60, startDate:'2026-05-01', payment:1498.60,  balance:73004.28},
-    {name:'2026 Kia Sorento Hybrid (42286)',     lender:'Ally',          principal:47089.44,  rate:0.0874, term:60, startDate:'2026-05-14', payment:971.57,   balance:46460.84},
-    {name:'2026 Chevrolet Silverado (62388)',    lender:'Ally',          principal:74538.25,  rate:0.0844, term:60, startDate:'2026-06-01', payment:1527.11,  balance:74538.25},
-    {name:'2026 Chevrolet Silverado (72103)',    lender:'Ally',          principal:65993.16,  rate:0.0844, term:60, startDate:'2026-06-03', payment:1352.04,  balance:65993.16},
-    {name:'Vredo/Shockwave (Ln 1641)',           lender:'1st Financial', principal:58834.22,  rate:0.0725, term:60, startDate:'2024-03-01', payment:1171.94,  balance:46055.20},
-    {name:'Truck 4 (Ln 2444)',                   lender:'1st Financial', principal:65589.04,  rate:0.0725, term:48, startDate:'2023-08-01', payment:1578.23,  balance:37867.89},
-    {name:'Tractor (Ln 1890)',                   lender:'1st Financial', principal:76779.07,  rate:0.0725, term:60, startDate:'2024-12-01', payment:1529.39,  balance:56582.37},
-    {name:'2023 Chevrolet Silverado 1500 (249285)',lender:'GM Financial', principal:44943.38, rate:0.0989, term:60, startDate:'2024-02-01', payment:952.48,   balance:26695.45},
-    {name:'2024 Chevrolet Silverado 1500 (422455)',lender:'GM Financial', principal:46542.98, rate:0.0979, term:48, startDate:'2024-09-01', payment:1175.76,  balance:28389.00},
-    {name:'2024 Silverado 2500HD (851173)',       lender:'GM Financial',  principal:57659.76,  rate:0.00,   term:36, startDate:'2025-12-01', payment:1601.66,  balance:48049.80},
-    {name:'Kubota SVL75 Track Loader (127696490)',lender:'Kubota Credit', principal:98846.20,  rate:0.00,   term:36, startDate:'2025-10-01', payment:2745.73,  balance:74134.65},
-    {name:'Kubota M7060 Tractor (131013617)',     lender:'Kubota Credit', principal:73194.29,  rate:0.00,   term:36, startDate:'2026-05-01', payment:2033.17,  balance:71161.12},
-    {name:'Kubota RTV-X2 (131928590)',            lender:'Kubota Credit', principal:24272.20,  rate:0.0299, term:36, startDate:'2026-06-01', payment:705.76,   balance:24272.20},
-    {name:'Kubota RTV-X2 (131928376)',            lender:'Kubota Credit', principal:25519.60,  rate:0.0299, term:36, startDate:'2026-06-01', payment:742.03,   balance:25519.60},
-    {name:'2024 Ford F-450 (64776213)',           lender:'Ford Credit',   principal:87776.63,  rate:0.0759, term:60, startDate:'2025-09-01', payment:1762.62,  balance:76630.71},
-  ];
+  const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes(userEmail);
 
-  // Compute months remaining and payoff date from start + term
-  LOANS.forEach(l=>{
-    const start = new Date(l.startDate);
-    const payoff = new Date(start);
-    payoff.setMonth(payoff.getMonth() + l.term);
-    l.payoffDate = payoff;
-    const msLeft = payoff - today;
-    l.monthsRemaining = Math.max(0, Math.round(msLeft / (1000*60*60*24*30.44)));
-    l.interest = l.balance * (l.rate / 12);
-    l.principal_portion = l.payment - l.interest;
-  });
+  if(!fleetLoans.length){
+    document.getElementById('main-content').innerHTML = `<div style="text-align:center;padding:48px;color:var(--text-3)">Loading fleet data...</div>`;
+    seedFleetLoans().then(()=>{ loadFleet().then(()=>renderFleet()); });
+    return;
+  }
 
-  const totalBalance = LOANS.reduce((s,l)=>s+l.balance, 0);
-  const totalPayment = LOANS.reduce((s,l)=>s+l.payment, 0);
-  const totalInterest = LOANS.reduce((s,l)=>s+l.interest, 0);
-  const totalPrincipal = LOANS.reduce((s,l)=>s+l.principal_portion, 0);
+  const LOANS = fleetLoans.map(l=>({ ...l, ...calcLoan(l) }));
 
-  const fmt = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
-  const fmt2 = n => '$' + n.toLocaleString('en-US', {minimumFractionDigits:0, maximumFractionDigits:0});
-  const fmtPct = n => (n*100).toFixed(2) + '%';
-  const fmtPayoff = d => d.toLocaleDateString('en-US', {month:'short', year:'numeric'});
+  const totalBalance  = LOANS.reduce((s,l)=>s+l.balance,0);
+  const totalPayment  = LOANS.reduce((s,l)=>s+l.payment,0);
+  const totalInterest = LOANS.reduce((s,l)=>s+l.interest,0);
+  const totalPrincipal= LOANS.reduce((s,l)=>s+l.principalPortion,0);
+
+  const fmt     = n => '$' + Math.round(n).toLocaleString('en-US');
+  const fmt2    = n => '$' + n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+  const fmtPct  = n => (n*100).toFixed(2)+'%';
+  const fmtPayoff = d => d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
 
   const LENDER_COLORS = {
-    'Ally':          {bg:'#dbeafe', text:'#1d4ed8'},
-    '1st Financial': {bg:'#ede9fe', text:'#6d28d9'},
-    'GM Financial':  {bg:'#dcfce7', text:'#14532d'},
-    'Kubota Credit': {bg:'#fef3c7', text:'#92400e'},
-    'Ford Credit':   {bg:'#fce7f3', text:'#9d174d'},
+    'Ally':          {bg:'#dbeafe',text:'#1d4ed8'},
+    '1st Financial': {bg:'#ede9fe',text:'#6d28d9'},
+    'GM Financial':  {bg:'#dcfce7',text:'#14532d'},
+    'Kubota Credit': {bg:'#fef3c7',text:'#92400e'},
+    'Ford Credit':   {bg:'#fce7f3',text:'#9d174d'},
   };
 
-  // Group by lender
   const lenders = [...new Set(LOANS.map(l=>l.lender))];
 
   let html = `<div style="margin-bottom:16px">
-    <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:12px">Fleet Financing</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:18px;font-weight:700;color:var(--text)">Fleet Financing</div>
+      ${canEdit?`<button onclick="openFleetModal()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">+ Add Loan</button>`:''}
+    </div>
 
-    <!-- Portfolio summary cards -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;border-top:3px solid var(--green)">
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:4px">Outstanding Balance</div>
@@ -3160,10 +3221,8 @@ function renderFleet(){
       </div>
     </div>
 
-    <!-- Loan table -->
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
-      <!-- Table header -->
-      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:0;background:var(--accent);border-bottom:1px solid var(--border);padding:10px 14px">
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr ${canEdit?'40px':''};gap:0;background:var(--accent);border-bottom:1px solid var(--border);padding:10px 14px">
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Vehicle / Equipment</div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Balance</div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Payment</div>
@@ -3171,55 +3230,135 @@ function renderFleet(){
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Interest/mo</div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Mo. Left</div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);text-align:right">Payoff</div>
+        ${canEdit?'<div></div>':''}
       </div>`;
 
-  // Group rows by lender
   lenders.forEach(lender=>{
     const lc = LENDER_COLORS[lender]||{bg:'#f1f5f9',text:'#475569'};
     const group = LOANS.filter(l=>l.lender===lender);
     const groupBalance = group.reduce((s,l)=>s+l.balance,0);
     const groupPayment = group.reduce((s,l)=>s+l.payment,0);
 
-    // Lender header row
-    html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:0;padding:7px 14px;background:${lc.bg};border-bottom:1px solid var(--border)">
+    html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr ${canEdit?'40px':''};gap:0;padding:7px 14px;background:${lc.bg};border-bottom:1px solid var(--border)">
       <div style="font-size:11px;font-weight:700;color:${lc.text}">${lender}</div>
       <div style="font-size:11px;font-weight:700;color:${lc.text};text-align:right">${fmt(groupBalance)}</div>
       <div style="font-size:11px;font-weight:700;color:${lc.text};text-align:right">${fmt(groupPayment)}/mo</div>
-      <div></div><div></div><div></div><div></div>
+      <div></div><div></div><div></div><div></div>${canEdit?'<div></div>':''}
     </div>`;
 
-    group.forEach((l,i)=>{
-      const isLast = i===group.length-1;
-      const urgency = l.monthsRemaining <= 6 ? '#dc2626' : l.monthsRemaining <= 12 ? '#f59e0b' : 'var(--text)';
-      html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:0;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center">
-        <div>
-          <div style="font-size:13px;font-weight:500;color:var(--text)">${l.name}</div>
-        </div>
+    group.forEach(l=>{
+      const urgency = l.monthsRemaining<=6?'#dc2626':l.monthsRemaining<=12?'#f59e0b':'var(--text)';
+      html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr ${canEdit?'40px':''};gap:0;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center">
+        <div style="font-size:13px;font-weight:500;color:var(--text)">${l.name}</div>
         <div style="font-size:13px;font-weight:600;color:var(--text);text-align:right;font-family:'DM Mono',monospace">${fmt(l.balance)}</div>
         <div style="font-size:13px;color:var(--text-2);text-align:right;font-family:'DM Mono',monospace">${fmt2(l.payment)}</div>
         <div style="font-size:13px;color:var(--text-2);text-align:right">${l.rate===0?'0.00%':fmtPct(l.rate)}</div>
         <div style="font-size:13px;color:var(--text-2);text-align:right;font-family:'DM Mono',monospace">${fmt2(l.interest)}</div>
         <div style="font-size:13px;font-weight:600;color:${urgency};text-align:right">${l.monthsRemaining}</div>
-        <div style="font-size:13px;color:var(--text-2);text-align:right">${fmtPayoff(l.payoffDate)}</div>
+        <div style="font-size:13px;color:var(--text-2);text-align:right">${fmtPayoff(l.payoff)}</div>
+        ${canEdit?`<div style="text-align:right"><button onclick="openFleetModal('${l.id}')" style="background:none;border:1px solid var(--border);border-radius:4px;padding:2px 6px;font-size:11px;cursor:pointer;font-family:inherit;color:var(--text-2)">Edit</button></div>`:''}
       </div>`;
     });
   });
 
-  // Totals row
-  html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr;gap:0;padding:12px 14px;background:var(--accent);border-top:2px solid var(--border)">
+  html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr 1fr 1fr ${canEdit?'40px':''};gap:0;padding:12px 14px;background:var(--accent);border-top:2px solid var(--border)">
     <div style="font-size:13px;font-weight:700;color:var(--text)">TOTAL</div>
     <div style="font-size:13px;font-weight:700;color:var(--text);text-align:right;font-family:'DM Mono',monospace">${fmt(totalBalance)}</div>
     <div style="font-size:13px;font-weight:700;color:var(--text);text-align:right;font-family:'DM Mono',monospace">${fmt(totalPayment)}/mo</div>
     <div></div>
     <div style="font-size:13px;font-weight:700;color:var(--text);text-align:right;font-family:'DM Mono',monospace">${fmt(totalInterest)}</div>
-    <div></div><div></div>
-  </div>`;
-
-  html += `</div>
-    <div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">Balances and interest as of ${today.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} · Updated from loan tracker ${new Date().toLocaleDateString('en-US',{month:'short',year:'numeric'})}</div>
+    <div></div><div></div>${canEdit?'<div></div>':''}
+  </div></div>
+  <div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">Balances calculated live from amortization math as of ${today.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>
   </div>`;
 
   document.getElementById('main-content').innerHTML = html;
+}
+
+function openFleetModal(id=null){
+  const loan = id ? fleetLoans.find(l=>l.id===id) : null;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'fleet-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${loan?'Edit Loan':'Add Loan'}</div>
+    <div class="form-group">
+      <label class="form-label">Name *</label>
+      <input type="text" id="fl-name" placeholder="e.g. 2026 Silverado (12345)" value="${loan?loan.name.replace(/"/g,'&quot;'):''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Lender *</label>
+      <input type="text" id="fl-lender" placeholder="e.g. Ally, GM Financial" value="${loan?loan.lender:''}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Original Principal *</label>
+        <input type="number" id="fl-principal" placeholder="74013.16" step="0.01" value="${loan?loan.principal:''}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Annual Rate (e.g. 0.0794)</label>
+        <input type="number" id="fl-rate" placeholder="0.0794" step="0.0001" value="${loan?loan.rate:''}">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Term (months) *</label>
+        <input type="number" id="fl-term" placeholder="60" value="${loan?loan.term:''}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Start Date *</label>
+        <input type="date" id="fl-start" value="${loan?loan.startDate:''}">
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label class="form-label">Notes</label>
+      <input type="text" id="fl-notes" placeholder="Optional notes" value="${loan?loan.notes:''}">
+    </div>
+    <div id="fl-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      ${loan?`<button class="btn-delete" onclick="deleteFleetLoan('${id}')">Delete</button>`:''}
+      <button class="btn-cancel" onclick="document.getElementById('fleet-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveFleetLoan('${id||''}')">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveFleetLoan(id){
+  const name      = document.getElementById('fl-name').value.trim();
+  const lender    = document.getElementById('fl-lender').value.trim();
+  const principal = parseFloat(document.getElementById('fl-principal').value);
+  const rate      = parseFloat(document.getElementById('fl-rate').value)||0;
+  const term      = parseInt(document.getElementById('fl-term').value);
+  const startDate = document.getElementById('fl-start').value;
+  const notes     = document.getElementById('fl-notes').value.trim();
+  const errEl     = document.getElementById('fl-error');
+  if(!name||!lender||!principal||!term||!startDate){ errEl.textContent='Please fill in all required fields.'; return; }
+  const btn = document.querySelector('#fleet-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  try {
+    const row = {name, lender, principal, rate, term, start_date:startDate, notes, updated_at:new Date().toISOString()};
+    if(id){
+      await sbFetch('PATCH', `/rest/v1/fleet_loans?id=eq.${id}`, row);
+      const l = fleetLoans.find(x=>x.id===id);
+      if(l) Object.assign(l,{name,lender,principal,rate,term,startDate,notes});
+    } else {
+      const res = await sbFetch('POST', '/rest/v1/fleet_loans', row);
+      if(res&&res[0]) fleetLoans.push({...row, id:res[0].id, startDate});
+    }
+    document.getElementById('fleet-overlay').remove();
+    renderFleet();
+  } catch(e){ errEl.textContent='Error saving. Try again.'; btn.disabled=false; btn.textContent='Save'; }
+}
+
+async function deleteFleetLoan(id){
+  if(!confirm('Delete this loan? This cannot be undone.')) return;
+  await sbFetch('DELETE', `/rest/v1/fleet_loans?id=eq.${id}`);
+  fleetLoans = fleetLoans.filter(l=>l.id!==id);
+  document.getElementById('fleet-overlay').remove();
+  renderFleet();
 }
 
 function setView(v){

@@ -3136,9 +3136,11 @@ function calcLoan(l){
     ? l.principal / n
     : l.principal * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1);
 
-  // Payments made so far (count months from start to today)
-  const monthsElapsed = (today.getFullYear() - start.getFullYear()) * 12
+  // Payments made so far — count full months since start day
+  // e.g. start Dec 31, today Jul 2: first payment Jan 31, so 6 payments made not 7
+  let monthsElapsed = (today.getFullYear() - start.getFullYear()) * 12
     + (today.getMonth() - start.getMonth());
+  if(today.getDate() < start.getDate()) monthsElapsed--;
   const p = Math.min(Math.max(0, monthsElapsed), n);
 
   // Current balance

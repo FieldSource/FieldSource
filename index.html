@@ -3103,10 +3103,10 @@ async function seedFleetLoans(){
   const existing = await sbFetch('GET', '/rest/v1/fleet_loans?select=id&limit=1');
   if(existing && existing.length > 0) return;
   const loans = [
-    {name:'2026 Chevrolet Silverado (82065)',       lender:'Ally',          principal:74013.16, rate:0.0794, term:60, start_date:'2026-05-01'},
-    {name:'2026 Kia Sorento Hybrid (42286)',        lender:'Ally',          principal:47089.44, rate:0.0874, term:60, start_date:'2026-05-14'},
-    {name:'2026 Chevrolet Silverado (62388)',       lender:'Ally',          principal:74538.25, rate:0.0844, term:60, start_date:'2026-06-01'},
-    {name:'2026 Chevrolet Silverado (72103)',       lender:'Ally',          principal:65993.16, rate:0.0844, term:60, start_date:'2026-06-03'},
+    {name:'2026 Chevrolet Silverado (82065)',       lender:'Ally',          principal:74013.16, rate:0.0794, term:60, start_date:'2026-05-15'},
+    {name:'2026 Kia Sorento Hybrid (42286)',        lender:'Ally',          principal:47089.44, rate:0.0874, term:60, start_date:'2026-05-28'},
+    {name:'2026 Chevrolet Silverado (62388)',       lender:'Ally',          principal:74538.25, rate:0.0844, term:60, start_date:'2026-06-10'},
+    {name:'2026 Chevrolet Silverado (72103)',       lender:'Ally',          principal:65993.16, rate:0.0844, term:60, start_date:'2026-06-12'},
     {name:'Vredo/Shockwave (Ln 1641)',              lender:'1st Financial', principal:58834.22, rate:0.0725, term:60, start_date:'2025-03-04'},
     {name:'Truck 4 (Ln 2444)',                      lender:'1st Financial', principal:65589.04, rate:0.0725, term:48, start_date:'2024-08-09'},
     {name:'Tractor (Ln 1890)',                      lender:'1st Financial', principal:76779.07, rate:0.0725, term:60, start_date:'2024-12-20'},

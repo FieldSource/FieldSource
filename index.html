@@ -3516,7 +3516,7 @@ function renderWeek(){
       ondragover="handleDragOver(event,'${ds}')"
       ondragleave="handleDragLeave(event,'${ds}')"
       ondrop="handleDrop(event,'${ds}')">
-      <div class="day-header${ds===todayStr?' today':''}">${DOW[i]}<br><strong>${d.getDate()}</strong></div>`;
+      <div class="day-header${ds===todayStr?' today':''}">${DOW[i]}<br><strong>${d.getDate()}</strong>${offBadge}</div>`;
     if(!dayJobs.length) html+=`<div class="empty-col">—</div>`;
     dayJobs.forEach(j=>{
       const st=statusMeta(getStatus(j));
@@ -4030,9 +4030,10 @@ function renderReports(){
   const allClients = ['All', ...new Set(visibleReports.map(r=>r.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
   const filtered = reportSiteFilter==='All' ? visibleReports : visibleReports.filter(r=>r.client===reportSiteFilter);
 
-  let html = `<div class="site-filter-row">${allClients.map(c=>
-    `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${c.replace(/'/g,"\\'")}'">${c}</button>`
-  ).join('')}</div>`;
+  let html = `<div class="site-filter-row">${allClients.map(c=>{
+    const safe = c.replace(/'/g,"\\'");
+    return `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${safe}')">${c}</button>`;
+  }).join('')}</div>`;
 
   if(!filtered.length){
     html += `<div class="empty-state"><p>No daily reports yet.<br>Tap "+ File report" to submit one.</p></div>`;

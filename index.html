@@ -579,7 +579,7 @@ async function loadJobs(){
     }));
   } catch(e) {
     console.error('Load error', e);
-    jobs = JSON.parse(localStorage.getItem('fs_jobs')||'[]');
+    jobs = [];
   }
   showLoading(false);
   render();

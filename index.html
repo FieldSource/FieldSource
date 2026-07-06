@@ -5037,9 +5037,10 @@ function renderWorkOrders(){
     <div class="stat-card" style="cursor:pointer;border-color:${woStatusFilter==='resolved'?'#22c55e':'var(--border)'}" onclick="setWoStatus('resolved')"><div class="stat-num" style="color:#16a34a">${resolvedCount}</div><div class="stat-label">Resolved</div></div>
   </div>`;
 
-  html += `<div class="site-filter-row">${allClients.map(c=>
-    `<button class="site-chip${woSiteFilter===c?' active':''}" onclick="setWoSite('${c.replace(/'/g,"\\'")}'">${c}</button>`
-  ).join('')}</div>`;
+  html += `<div class="site-filter-row">${allClients.map(c=>{
+    const safe = c.replace(/'/g,"\\'");
+    return `<button class="site-chip${woSiteFilter===c?' active':''}" onclick="setWoSite('${safe}')">${c}</button>`;
+  }).join('')}</div>`;
 
   if(!filtered.length){
     const labels={open:'No open work orders.',scheduled:'No assigned work orders.',resolved:'No resolved work orders.',all:'No work orders yet.'};

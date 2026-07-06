@@ -575,7 +575,8 @@ async function loadJobs(){
       services: row.services||(row.service?[row.service]:[]),
       notes: row.notes||'',
       createdBy: row.created_by||'',
-      rentalEquip: row.rental_equip||''
+      rentalEquip: row.rental_equip||'',
+      includeWeekends: row.include_weekends||false
     }));
   } catch(e) {
     console.error('Load error', e);

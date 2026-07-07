@@ -1577,6 +1577,9 @@ async function deleteCostEntry(id){
 }
 
 // ── PO TRACKER ────────────────────────────────────────────────
+function setPOStatusFilter(v){ poStatusFilter=v; renderPO(); }
+function setPOCatFilter(v){ poCatFilter=v; renderPO(); }
+
 async function loadPO(){
   try {
     const data = await sbFetch('GET', '/rest/v1/po_tracker?select=*&order=created_at.desc');
@@ -1648,11 +1651,11 @@ function renderPO(){
 
   // Filters + add button
   html += `<div class="filter-row" style="margin-top:12px">
-    ${[['Open','Open (All Active)'],['Not Billed','Not Billed'],['Partially Billed','Partially Billed'],['Closed','Closed']].map(([val,label])=>`<button class="filter-chip${poStatusFilter===val?' active':''}" onclick="poStatusFilter='${val}';renderPO()">${label}</button>`).join('')}
+    ${[['Open','Open (All Active)'],['Not Billed','Not Billed'],['Partially Billed','Partially Billed'],['Closed','Closed']].map(([val,label])=>`<button class="filter-chip${poStatusFilter===val?' active':''}" onclick="setPOStatusFilter('${val}')">${label}</button>`).join('')}
     <button class="btn-save" style="font-size:12px;padding:5px 14px;margin-left:auto" onclick="openPOModal()">+ Add PO</button>
   </div>
   <div class="filter-row">
-    ${['All','Maintenance','Consulting','Construction','Feasibility Study'].map(c=>`<button class="filter-chip${poCatFilter===c?' active':''}" onclick="poCatFilter='${c}';renderPO()">${c}</button>`).join('')}
+    ${['All','Maintenance','Consulting','Construction','Feasibility Study'].map(c=>`<button class="filter-chip${poCatFilter===c?' active':''}" onclick="setPOCatFilter('${c}')">${c}</button>`).join('')}
   </div>`;
 
   // List
@@ -1661,6 +1664,7 @@ function renderPO(){
   else if(poStatusFilter==='Not Billed') filtered = filtered.filter(p=>p.amountBilled<=0&&poAutoStatus(p)!=='Closed');
   else if(poStatusFilter==='Partially Billed') filtered = filtered.filter(p=>poAutoStatus(p)==='Partially Billed');
   else if(poStatusFilter==='Closed') filtered = filtered.filter(p=>poAutoStatus(p)==='Closed');
+  if(poCatFilter!=='All') filtered = filtered.filter(p=>p.category===poCatFilter);
 
   if(!filtered.length){
     html += `<div style="text-align:center;padding:48px 24px;color:var(--text-3);font-size:14px">No POs found. Tap "+ Add PO" to get started.</div>`;

@@ -3203,6 +3203,7 @@ async function seedFleetLoans(){
     {name:'Kubota RTV-X2 (131928590)',              lender:'Kubota Credit', principal:24272.20, rate:0.0299, term:36, start_date:'2026-06-01'},
     {name:'Kubota RTV-X2 (131928376)',              lender:'Kubota Credit', principal:25519.60, rate:0.0299, term:36, start_date:'2026-06-01'},
     {name:'2024 Ford F-450 (64776213)',             lender:'Ford Credit',   principal:87776.63, rate:0.0759, term:60, start_date:'2025-09-01'},
+    {name:'Dakota 440 (SN 4400094)',                lender:'Farmers National Bank of Canfield', principal:25080.00, rate:0.066, term:60, start_date:'2026-06-29'},
   ];
   for(const loan of loans){
     await sbFetch('POST', '/rest/v1/fleet_loans', loan);
@@ -3275,6 +3276,7 @@ function renderFleet(){
     'GM Financial':  {bg:'#dcfce7',text:'#14532d'},
     'Kubota Credit': {bg:'#fef3c7',text:'#92400e'},
     'Ford Credit':   {bg:'#fce7f3',text:'#9d174d'},
+    'Farmers National Bank of Canfield': {bg:'#f0fdf4',text:'#166534'},
   };
 
   const lenders = [...new Set(LOANS.map(l=>l.lender))];

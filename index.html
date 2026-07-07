@@ -576,7 +576,7 @@ async function loadJobs(){
       notes: row.notes||'',
       createdBy: row.created_by||'',
       rentalEquip: row.rental_equip||'',
-      includeWeekends: row.include_weekends||false
+      includeWeekends: row.include_weekends === true || row.include_weekends === 'true'
     }));
   } catch(e) {
     console.error('Load error', e);
@@ -1707,11 +1707,16 @@ function openPOModal(id=null){
     logHtml = `<div class="log-section"><div class="log-section-title">Billing History</div>`;
     [...po.billingLog].reverse().forEach((entry,i,arr)=>{
       const isLast = i===arr.length-1;
+      const realIdx = arr.length-1-i;
+      const entryDate = entry.date || new Date(entry.ts).toISOString().split('T')[0];
       logHtml += `<div class="log-entry">
         <div class="log-dot-col"><div class="log-dot" style="background:var(--green)"></div>${!isLast?'<div class="log-line"></div>':''}</div>
-        <div class="log-body">
-          <div class="log-meta"><span>${new Date(entry.ts).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</span></div>
-          <div class="log-text"><strong>${poFmt(entry.amount)}</strong> billed${entry.note?' — '+entry.note:''}</div>
+        <div class="log-body" style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+          <div>
+            <div class="log-meta"><span>${entryDate}</span></div>
+            <div class="log-text"><strong>${poFmt(entry.amount)}</strong> billed${entry.note?' — '+entry.note:''}</div>
+          </div>
+          <button onclick="openEditBillingEntry('${po.id}',${realIdx})" style="background:none;border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;font-family:inherit;color:var(--text-2);flex-shrink:0">Edit</button>
         </div>
       </div>`;
     });
@@ -1759,10 +1764,14 @@ function openPOModal(id=null){
     ${!isNew?`
     <div style="background:var(--accent);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px">
       <div style="font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:8px">LOG A BILLING ENTRY</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
         <div>
-          <label class="form-label">Amount Billed</label>
+          <label class="form-label">Amount Billed *</label>
           <input type="number" id="po-bill-amount" placeholder="0.00" step="0.01">
+        </div>
+        <div>
+          <label class="form-label">Date</label>
+          <input type="date" id="po-bill-date" value="${new Date().toISOString().split('T')[0]}">
         </div>
         <div>
           <label class="form-label">Note (optional)</label>
@@ -1791,8 +1800,10 @@ async function addBillingEntry(id){
   if(!po) return;
   const amount = parseFloat(document.getElementById('po-bill-amount').value);
   const note = document.getElementById('po-bill-note').value.trim();
+  const dateEl = document.getElementById('po-bill-date');
+  const date = dateEl ? dateEl.value : new Date().toISOString().split('T')[0];
   if(!amount||amount<=0){ alert('Please enter a valid amount.'); return; }
-  po.billingLog = [...(po.billingLog||[]), {ts:new Date().toISOString(), amount, note}];
+  po.billingLog = [...(po.billingLog||[]), {ts:new Date().toISOString(), date, amount, note}];
   po.amountBilled = po.billingLog.reduce((s,e)=>s+e.amount,0);
   po.status = poAutoStatus(po);
   await dbSavePO(po, id);
@@ -1800,6 +1811,75 @@ async function addBillingEntry(id){
   openPOModal(id);
   renderPO();
 }
+
+function openEditBillingEntry(poId, entryIdx){
+  const po = poEntries.find(p=>p.id===poId);
+  if(!po) return;
+  const entry = po.billingLog[entryIdx];
+  if(!entry) return;
+  const entryDate = entry.date || new Date(entry.ts).toISOString().split('T')[0];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'billing-edit-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:400px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Edit Billing Entry</div>
+    <div class="form-group">
+      <label class="form-label">Amount *</label>
+      <input type="number" id="be-amount" step="0.01" value="${entry.amount}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <input type="date" id="be-date" value="${entryDate}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Note</label>
+      <input type="text" id="be-note" value="${entry.note||''}" placeholder="Optional note">
+    </div>
+    <div id="be-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      <button class="btn-delete" onclick="deleteEditBillingEntry('${poId}',${entryIdx})">Delete</button>
+      <button class="btn-cancel" onclick="document.getElementById('billing-edit-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveEditBillingEntry('${poId}',${entryIdx})">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveEditBillingEntry(poId, entryIdx){
+  const po = poEntries.find(p=>p.id===poId);
+  if(!po) return;
+  const amount = parseFloat(document.getElementById('be-amount').value);
+  const date = document.getElementById('be-date').value;
+  const note = document.getElementById('be-note').value.trim();
+  if(!amount||amount<=0){ document.getElementById('be-error').textContent='Please enter a valid amount.'; return; }
+  const btn = document.querySelector('#billing-edit-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  po.billingLog[entryIdx] = {...po.billingLog[entryIdx], amount, date, note};
+  po.amountBilled = po.billingLog.reduce((s,e)=>s+e.amount,0);
+  po.status = poAutoStatus(po);
+  await dbSavePO(po, poId);
+  document.getElementById('billing-edit-overlay').remove();
+  document.getElementById('po-overlay').remove();
+  openPOModal(poId);
+  renderPO();
+}
+
+async function deleteEditBillingEntry(poId, entryIdx){
+  if(!confirm('Delete this billing entry?')) return;
+  const po = poEntries.find(p=>p.id===poId);
+  if(!po) return;
+  po.billingLog.splice(entryIdx, 1);
+  po.amountBilled = po.billingLog.reduce((s,e)=>s+e.amount,0);
+  po.status = poAutoStatus(po);
+  await dbSavePO(po, poId);
+  document.getElementById('billing-edit-overlay').remove();
+  document.getElementById('po-overlay').remove();
+  openPOModal(poId);
+  renderPO();
+}
+
 
 function poToggleCat(cat, el){
   document.querySelectorAll('#po-cat-grid .sel-opt').forEach(d=>d.classList.remove('picked'));
@@ -2454,7 +2534,7 @@ function startPolling(){
         notes: row.notes||'',
         createdBy: row.created_by||'',
         rentalEquip: row.rental_equip||'',
-        includeWeekends: row.include_weekends||false
+        includeWeekends: row.include_weekends === true || row.include_weekends === 'true'
       }));
       save();
       // Don't re-render if user is mid-form on time off

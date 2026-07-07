@@ -1656,11 +1656,10 @@ function renderPO(){
 
   // List
   let filtered = poEntries;
-  if(poStatusFilter==='Open') filtered = filtered.filter(p=>p.status!=='Closed');
-  else if(poStatusFilter==='Not Billed') filtered = filtered.filter(p=>p.amountBilled<=0&&p.status!=='Closed');
-  else if(poStatusFilter==='Partially Billed') filtered = filtered.filter(p=>p.status==='Partially Billed');
-  else if(poStatusFilter==='Closed') filtered = filtered.filter(p=>p.status==='Closed');
-  if(poCatFilter!=='All') filtered = filtered.filter(p=>p.category===poCatFilter);
+  if(poStatusFilter==='Open') filtered = filtered.filter(p=>poAutoStatus(p)!=='Closed');
+  else if(poStatusFilter==='Not Billed') filtered = filtered.filter(p=>p.amountBilled<=0&&poAutoStatus(p)!=='Closed');
+  else if(poStatusFilter==='Partially Billed') filtered = filtered.filter(p=>poAutoStatus(p)==='Partially Billed');
+  else if(poStatusFilter==='Closed') filtered = filtered.filter(p=>poAutoStatus(p)==='Closed');
 
   if(!filtered.length){
     html += `<div style="text-align:center;padding:48px 24px;color:var(--text-3);font-size:14px">No POs found. Tap "+ Add PO" to get started.</div>`;

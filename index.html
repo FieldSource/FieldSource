@@ -427,6 +427,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting())">WIP</button>
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
     <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()">Clients</button>
+    <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'))">Estimates</button>
   </div>
 </div>
 
@@ -3464,6 +3465,232 @@ async function deleteFleetLoan(id){
   renderFleet();
 }
 
+let estimates = [];
+let estimateStatusFilter = 'All';
+let estimateTypeFilter = 'All';
+
+async function loadEstimates(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/estimates?select=*&order=est_due_date.asc,project_name.asc');
+    estimates = (data||[]).map(r=>({
+      id: r.id,
+      projectName: r.project_name||'',
+      projectDate: r.project_date||'',
+      estDueDate: r.est_due_date||'',
+      type: r.type||'Construction',
+      scope: r.scope||'',
+      days: r.days||'',
+      status: r.status||'Not Started',
+      notes: r.notes||'',
+      createdAt: r.created_at||'',
+    }));
+  } catch(e){ estimates = []; }
+}
+
+async function seedEstimates(){
+  const existing = await sbFetch('GET', '/rest/v1/estimates?select=id&limit=1');
+  if(existing && existing.length > 0) return;
+  const rows = [
+    {project_name:'Powell - Seldom Seen Park - North',project_date:'2026',est_due_date:'2026-07-31',type:'Construction',scope:'Laser Grade',days:'3',status:'Needs Shot',notes:''},
+    {project_name:'St. Brigid',project_date:'2026',est_due_date:'2026-07-31',type:'Construction',scope:'Laser Grade',days:'3',status:'Needs Shot',notes:''},
+    {project_name:'Watkins Memorial - Varsity Baseball',project_date:'2026',est_due_date:'2026-07-31',type:'Construction',scope:'Laser grade infield, number for synthetic mound and plate',days:'5',status:'Needs Shot',notes:''},
+    {project_name:'Watkins Memorial - Varsity Softball',project_date:'2026',est_due_date:'2026-07-31',type:'Construction',scope:'Laser grade infield, number for synthetic foul and apron',days:'14',status:'Needs Shot',notes:''},
+    {project_name:'Watkins Memorial - JV Softball',project_date:'2026',est_due_date:'2026-07-31',type:'Construction',scope:'Laser grade infield',days:'3',status:'Needs Shot',notes:''},
+    {project_name:'Watkins Memorial - MS Softball',project_date:'2026',est_due_date:'2026-07-31',type:'Construction',scope:'Laser grade infield',days:'3',status:'Needs Shot',notes:''},
+    {project_name:'Watkins Memorial - F Baseball',project_date:'2026',est_due_date:'2026-07-31',type:'Construction',scope:'Laser grade infield',days:'3',status:'Needs Shot',notes:''},
+    {project_name:'Bailey Elementary',project_date:'2026?',est_due_date:'2026-07-31',type:'Construction',scope:'Strip existing weeds, laser grade infield',days:'5',status:'Needs Shot',notes:''},
+    {project_name:'Mt. Vernon HS - Baseball',project_date:'2026?',est_due_date:'2026-07-31',type:'Construction',scope:'Remove existing sod to create typical infield dirt',days:'5',status:'Needs Shot',notes:''},
+    {project_name:'Delaware Christian - Softball',project_date:'2026?',est_due_date:'2026-07-31',type:'Construction',scope:'Move field to southern property',days:'TBD',status:'Needs Shot',notes:'Need to shoot and put a grade plan together for the southern property'},
+    {project_name:'Dublin City Parks',project_date:'2027',est_due_date:'',type:'Construction',scope:'TBD',days:'TBD',status:'Not Started',notes:'Need to get a scope from Nicol for next year and give them a budget number'},
+    {project_name:'WCH - Softball',project_date:'2026',est_due_date:'2026-07-31',type:'Construction',scope:'TBD',days:'TBD',status:'Estimate In Progress',notes:'Need to lock down a budget from Joe, then edit the scope to fit'},
+    {project_name:'Reynoldsburg',project_date:'2026-2027',est_due_date:'2026-07-31',type:'Maintenance',scope:'Annual maintenance on Waggoner and Baldwin, synthetic scope at Livingston, irrigation at Waggoner',days:'',status:'Not Started',notes:''},
+    {project_name:'Bexley',project_date:'2027',est_due_date:'2026-09-30',type:'Maintenance',scope:'Annual maintenance',days:'',status:'Not Started',notes:'Need to set meeting for early August to set scope and budget'},
+    {project_name:'Teays Valley',project_date:'2026-2027',est_due_date:'2026-07-31',type:'Consulting',scope:'Consulting for Hitting Facility',days:'',status:'Not Started',notes:''},
+    {project_name:'Logan Elm',project_date:'2027',est_due_date:'2026-07-31',type:'Construction',scope:'Full renovation of HS baseball and softball',days:'',status:'Estimate In Progress',notes:''},
+    {project_name:'Elgin',project_date:'2026?',est_due_date:'2026-07-31',type:'Construction',scope:'Full renovation of baseball and softball',days:'',status:'Not Started',notes:'Ryan has meeting set to lock timeline and scope'},
+    {project_name:'St. Henry',project_date:'2026?',est_due_date:'2026-07-31',type:'Construction',scope:'',days:'',status:'Not Started',notes:'Matt needs to get with them on if something is going to happen'},
+    {project_name:'Granville',project_date:'2027',est_due_date:'2026-07-31',type:'Construction',scope:'',days:'',status:'Not Started',notes:'Matt'},
+    {project_name:'Sharpsville',project_date:'2027',est_due_date:'2026-07-31',type:'Construction',scope:'Football renovation',days:'',status:'Needs Shot',notes:''},
+    {project_name:'OSU Phase II',project_date:'',est_due_date:'',type:'Consulting',scope:'',days:'',status:'Not Started',notes:''},
+  ];
+  for(const row of rows){
+    await sbFetch('POST', '/rest/v1/estimates', row);
+  }
+  await loadEstimates();
+}
+
+const ESTIMATE_STATUSES = ['Not Started','Needs Site Visit','Needs Shot','Estimate In Progress','Estimate Sent','Approved','Scheduled','In Progress','Completed','On Hold'];
+const ESTIMATE_TYPES = ['Construction','Maintenance','Consulting'];
+const ESTIMATE_STATUS_COLORS = {
+  'Not Started':          {bg:'#f1f5f9',text:'#475569'},
+  'Needs Site Visit':     {bg:'#fef9c3',text:'#713f12'},
+  'Needs Shot':           {bg:'#fef3c7',text:'#92400e'},
+  'Estimate In Progress': {bg:'#dbeafe',text:'#1d4ed8'},
+  'Estimate Sent':        {bg:'#ede9fe',text:'#6d28d9'},
+  'Approved':             {bg:'#dcfce7',text:'#14532d'},
+  'Scheduled':            {bg:'#d1fae5',text:'#065f46'},
+  'In Progress':          {bg:'#bfdbfe',text:'#1e40af'},
+  'Completed':            {bg:'#f0fdf4',text:'#166534'},
+  'On Hold':              {bg:'#fee2e2',text:'#991b1b'},
+};
+
+function renderEstimates(){
+  const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com'].includes(userEmail);
+
+  if(!estimates.length){
+    document.getElementById('main-content').innerHTML = `<div style="text-align:center;padding:48px;color:var(--text-3)">Loading estimates...</div>`;
+    seedEstimates().then(()=>{ loadEstimates().then(()=>renderEstimates()); });
+    return;
+  }
+
+  let filtered = estimates;
+  if(estimateStatusFilter!=='All') filtered = filtered.filter(e=>e.status===estimateStatusFilter);
+  if(estimateTypeFilter!=='All') filtered = filtered.filter(e=>e.type===estimateTypeFilter);
+
+  const today = new Date().toISOString().split('T')[0];
+
+  let html = `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+    <div style="font-size:18px;font-weight:700;color:var(--text)">Estimate Tracker</div>
+    ${canEdit?`<button onclick="openEstimateModal()" class="btn-save" style="font-size:13px;padding:6px 14px">+ Add Estimate</button>`:''}
+  </div>
+
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+    ${['All',...ESTIMATE_STATUSES].map(s=>`<button onclick="estimateStatusFilter='${s}';renderEstimates()" class="site-chip${estimateStatusFilter===s?' active':''}">${s}</button>`).join('')}
+  </div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+    ${['All',...ESTIMATE_TYPES].map(t=>`<button onclick="estimateTypeFilter='${t}';renderEstimates()" class="site-chip${estimateTypeFilter===t?' active':''}">${t}</button>`).join('')}
+  </div>`;
+
+  if(!filtered.length){
+    html += `<div style="text-align:center;padding:48px;color:var(--text-3)">No estimates match the current filters.</div>`;
+  } else {
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">`;
+
+    // Header
+    html += `<div style="display:grid;grid-template-columns:2fr 100px 100px 110px 80px;gap:0;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border)">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Project</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Type</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Due Date</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Status</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Days</div>
+    </div>`;
+
+    filtered.forEach(e=>{
+      const sc = ESTIMATE_STATUS_COLORS[e.status]||{bg:'#f1f5f9',text:'#475569'};
+      const overdue = e.estDueDate && e.estDueDate < today && e.status!=='Estimate In Progress';
+      html += `<div onclick="${canEdit?`openEstimateModal('${e.id}')`:''}" style="display:grid;grid-template-columns:2fr 100px 100px 110px 80px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);${canEdit?'cursor:pointer;':''}align-items:start">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${e.projectName}</div>
+          ${e.scope?`<div style="font-size:11px;color:var(--text-2);margin-top:2px">${e.scope}</div>`:''}
+          ${e.notes?`<div style="font-size:11px;color:var(--text-3);margin-top:2px;font-style:italic">${e.notes}</div>`:''}
+        </div>
+        <div style="font-size:12px;color:var(--text-2)">${e.type}</div>
+        <div style="font-size:12px;color:${overdue?'#dc2626':'var(--text-2)'};font-weight:${overdue?'600':'400'}">${e.estDueDate||'TBD'}</div>
+        <div><span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:${sc.bg};color:${sc.text}">${e.status}</span></div>
+        <div style="font-size:12px;color:var(--text-2)">${e.days||'—'}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
+function openEstimateModal(id=null){
+  const est = id ? estimates.find(e=>e.id===id) : null;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'est-overlay';
+  overlay.onclick = ev=>{ if(ev.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:520px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${est?'Edit Estimate':'Add Estimate'}</div>
+    <div class="form-group">
+      <label class="form-label">Project Name *</label>
+      <input type="text" id="est-name" placeholder="e.g. Powell - Seldom Seen Park" value="${est?est.projectName.replace(/"/g,'&quot;'):''}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Type</label>
+        <select id="est-type">${ESTIMATE_TYPES.map(t=>`<option value="${t}"${est&&est.type===t?' selected':''}>${t}</option>`).join('')}</select>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Status</label>
+        <select id="est-status">${ESTIMATE_STATUSES.map(s=>`<option value="${s}"${est&&est.status===s?' selected':(!est&&s==='Not Started'?' selected':'')}>${s}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Project Year</label>
+        <input type="text" id="est-projdate" placeholder="2026" value="${est?est.projectDate:''}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Estimate Due Date</label>
+        <input type="date" id="est-duedate" value="${est?est.estDueDate:''}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Days (3-man)</label>
+        <input type="text" id="est-days" placeholder="e.g. 3 or TBD" value="${est?est.days:''}">
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label class="form-label">Scope</label>
+      <input type="text" id="est-scope" placeholder="Brief scope description" value="${est?est.scope.replace(/"/g,'&quot;'):''}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <textarea id="est-notes" rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:'DM Sans',sans-serif;background:var(--bg);resize:vertical;box-sizing:border-box">${est?est.notes:''}</textarea>
+    </div>
+    <div id="est-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
+    <div class="sheet-actions">
+      ${est?`<button class="btn-delete" onclick="deleteEstimate('${id}')">Delete</button>`:''}
+      <button class="btn-cancel" onclick="document.getElementById('est-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveEstimate('${id||''}')">Save</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveEstimate(id){
+  const projectName = document.getElementById('est-name').value.trim();
+  const errEl = document.getElementById('est-error');
+  if(!projectName){ errEl.textContent='Project name is required.'; return; }
+  const btn = document.querySelector('#est-overlay .btn-save');
+  btn.disabled=true; btn.textContent='Saving...';
+  const row = {
+    project_name: projectName,
+    type: document.getElementById('est-type').value,
+    status: document.getElementById('est-status').value,
+    project_date: document.getElementById('est-projdate').value.trim(),
+    est_due_date: document.getElementById('est-duedate').value || null,
+    days: document.getElementById('est-days').value.trim(),
+    scope: document.getElementById('est-scope').value.trim(),
+    notes: document.getElementById('est-notes').value.trim(),
+    updated_at: new Date().toISOString(),
+  };
+  try {
+    if(id){
+      await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, row);
+      const est = estimates.find(e=>e.id===id);
+      if(est) Object.assign(est, {projectName:row.project_name, type:row.type, status:row.status, projectDate:row.project_date, estDueDate:row.est_due_date||'', days:row.days, scope:row.scope, notes:row.notes});
+    } else {
+      const res = await sbFetch('POST', '/rest/v1/estimates', row);
+      if(res&&res[0]) estimates.push({...row, id:res[0].id, projectName:row.project_name, estDueDate:row.est_due_date||'', projectDate:row.project_date, createdAt:new Date().toISOString()});
+    }
+    document.getElementById('est-overlay').remove();
+    renderEstimates();
+  } catch(e){ errEl.textContent='Error saving. Try again.'; btn.disabled=false; btn.textContent='Save'; }
+}
+
+async function deleteEstimate(id){
+  if(!confirm('Delete this estimate?')) return;
+  await sbFetch('DELETE', `/rest/v1/estimates?id=eq.${id}`);
+  estimates = estimates.filter(e=>e.id!==id);
+  document.getElementById('est-overlay').remove();
+  renderEstimates();
+}
+
 function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
@@ -3473,12 +3700,12 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing'].includes(v)?'bizops-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates'].includes(v)?'bizops-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet'||v==='estimates';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -3514,6 +3741,7 @@ function render(){
   else if(view==='consulting-home') renderConsulting();
   else if(view==='costs') renderCosts();
   else if(view==='fleet') renderFleet();
+  else if(view==='estimates') renderEstimates();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
 }
@@ -5402,6 +5630,10 @@ function showApp(){
   const FLEET_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com'];
   const fleetTab = document.getElementById('fleet-tab');
   if(fleetTab) fleetTab.style.display = FLEET_EMAILS.includes(userEmail) ? '' : 'none';
+
+  const ESTIMATES_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com'];
+  const estimatesTab = document.getElementById('estimates-tab');
+  if(estimatesTab) estimatesTab.style.display = ESTIMATES_EMAILS.includes(userEmail) ? '' : 'none';
   const poTab2 = document.getElementById('po-tab');
   if(poTab2) poTab2.style.display = ''; // visible inside bizops-bar
   const allTabs = Array.from(document.querySelectorAll('.vtab'));

@@ -3544,7 +3544,13 @@ function renderEstimates(){
     return;
   }
 
-  let filtered = estimates;
+  const STATUS_PRIORITY = {'Needs Shot':0,'Needs Site Visit':1,'Estimate In Progress':2,'Not Started':3,'Estimate Sent':4,'Approved':5,'Scheduled':6,'In Progress':7,'On Hold':8,'Completed':9};
+  let filtered = [...estimates].sort((a,b)=>{
+    const pa = STATUS_PRIORITY[a.status]??99;
+    const pb = STATUS_PRIORITY[b.status]??99;
+    if(pa!==pb) return pa-pb;
+    return (a.projectName||'').localeCompare(b.projectName||'');
+  });
   if(estimateStatusFilter!=='All') filtered = filtered.filter(e=>e.status===estimateStatusFilter);
   if(estimateTypeFilter!=='All') filtered = filtered.filter(e=>e.type===estimateTypeFilter);
 
@@ -5612,7 +5618,7 @@ function showApp(){
   // Show/hide tabs based on role
   // Show pipeline tab only for Jake and Ryan
   const plTab2 = document.getElementById('pipeline-tab');
-  const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+  const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com'];
   const CONSULTING_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com'];
   const userEmail = (currentUser.email||'').toLowerCase();
   // Show portal bar

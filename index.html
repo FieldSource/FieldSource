@@ -3483,6 +3483,8 @@ async function loadEstimates(){
       days: r.days||'',
       status: r.status||'Not Started',
       notes: r.notes||'',
+      proposalNeeded: r.proposal_needed||false,
+      tips: r.tips||false,
       createdAt: r.created_at||'',
     }));
   } catch(e){ estimates = []; }
@@ -3590,18 +3592,20 @@ function renderEstimates(){
     html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">`;
 
     // Header
-    html += `<div style="display:grid;grid-template-columns:2fr 100px 100px 110px 80px;gap:0;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border)">
+    html += `<div style="display:grid;grid-template-columns:2fr 100px 100px 110px 80px 80px 60px;gap:0;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border)">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Project</div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Type</div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Due Date</div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Status</div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Days</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Proposal</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">TIPS</div>
     </div>`;
 
     filtered.forEach(e=>{
       const sc = ESTIMATE_STATUS_COLORS[e.status]||{bg:'#f1f5f9',text:'#475569'};
       const overdue = e.estDueDate && e.estDueDate < today && e.status!=='Estimate In Progress';
-      html += `<div onclick="${canEdit?`openEstimateModal('${e.id}')`:''}" style="display:grid;grid-template-columns:2fr 100px 100px 110px 80px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);${canEdit?'cursor:pointer;':''}align-items:start">
+      html += `<div onclick="${canEdit?`openEstimateModal('${e.id}')`:''}" style="display:grid;grid-template-columns:2fr 100px 100px 110px 80px 80px 60px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);${canEdit?'cursor:pointer;':''}align-items:start">
         <div>
           <div style="font-size:13px;font-weight:600;color:var(--text)">${e.projectName}</div>
           ${e.scope?`<div style="font-size:11px;color:var(--text-2);margin-top:2px">${e.scope}</div>`:''}
@@ -3611,6 +3615,8 @@ function renderEstimates(){
         <div style="font-size:12px;color:${overdue?'#dc2626':'var(--text-2)'};font-weight:${overdue?'600':'400'}">${e.estDueDate||'TBD'}</div>
         <div><span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:${sc.bg};color:${sc.text}">${e.status}</span></div>
         <div style="font-size:12px;color:var(--text-2)">${e.days||'—'}</div>
+        <div style="font-size:12px">${e.proposalNeeded?'<span style="color:#16a34a;font-weight:600">Yes</span>':'<span style="color:var(--text-3)">—</span>'}</div>
+        <div style="font-size:12px">${e.tips?'<span style="color:#16a34a;font-weight:600">Yes</span>':'<span style="color:var(--text-3)">—</span>'}</div>
       </div>`;
     });
     html += `</div>`;
@@ -3664,6 +3670,16 @@ function openEstimateModal(id=null){
       <label class="form-label">Notes</label>
       <textarea id="est-notes" rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:'DM Sans',sans-serif;background:var(--bg);resize:vertical;box-sizing:border-box">${est?est.notes:''}</textarea>
     </div>
+    <div style="display:flex;gap:20px;margin-top:10px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="est-proposal" ${est&&est.proposalNeeded?'checked':''} style="width:16px;height:16px;accent-color:var(--green)">
+        Proposal Needed
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="est-tips" ${est&&est.tips?'checked':''} style="width:16px;height:16px;accent-color:var(--green)">
+        TIPS
+      </label>
+    </div>
     <div id="est-error" style="color:#dc2626;font-size:12px;margin-bottom:8px"></div>
     <div class="sheet-actions">
       ${est?`<button class="btn-delete" onclick="deleteEstimate('${id}')">Delete</button>`:''}
@@ -3689,13 +3705,15 @@ async function saveEstimate(id){
     days: document.getElementById('est-days').value.trim(),
     scope: document.getElementById('est-scope').value.trim(),
     notes: document.getElementById('est-notes').value.trim(),
+    proposal_needed: document.getElementById('est-proposal')?.checked||false,
+    tips: document.getElementById('est-tips')?.checked||false,
     updated_at: new Date().toISOString(),
   };
   try {
     if(id){
       await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, row);
       const est = estimates.find(e=>e.id===id);
-      if(est) Object.assign(est, {projectName:row.project_name, type:row.type, status:row.status, projectDate:row.project_date, estDueDate:row.est_due_date||'', days:row.days, scope:row.scope, notes:row.notes});
+      if(est) Object.assign(est, {projectName:row.project_name, type:row.type, status:row.status, projectDate:row.project_date, estDueDate:row.est_due_date||'', days:row.days, scope:row.scope, notes:row.notes, proposalNeeded:row.proposal_needed, tips:row.tips});
     } else {
       const res = await sbFetch('POST', '/rest/v1/estimates', row);
       if(res&&res[0]) estimates.push({...row, id:res[0].id, projectName:row.project_name, estDueDate:row.est_due_date||'', projectDate:row.project_date, createdAt:new Date().toISOString()});

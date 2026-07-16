@@ -3468,6 +3468,7 @@ async function deleteFleetLoan(id){
 let estimates = [];
 let estimateStatusFilter = 'All';
 let estimateTypeFilter = 'All';
+let estimateSortBy = 'due'; // 'due', 'name', 'status'
 
 async function loadEstimates(){
   try {
@@ -3545,20 +3546,35 @@ function renderEstimates(){
   }
 
   const STATUS_PRIORITY = {'Needs Shot':0,'Needs Site Visit':1,'Estimate In Progress':2,'Not Started':3,'Estimate Sent':4,'Approved':5,'Scheduled':6,'In Progress':7,'On Hold':8,'Completed':9};
-  let filtered = [...estimates].sort((a,b)=>{
-    const pa = STATUS_PRIORITY[a.status]??99;
-    const pb = STATUS_PRIORITY[b.status]??99;
-    if(pa!==pb) return pa-pb;
-    return (a.projectName||'').localeCompare(b.projectName||'');
-  });
+
+  let filtered = [...estimates];
   if(estimateStatusFilter!=='All') filtered = filtered.filter(e=>e.status===estimateStatusFilter);
   if(estimateTypeFilter!=='All') filtered = filtered.filter(e=>e.type===estimateTypeFilter);
+
+  filtered.sort((a,b)=>{
+    if(estimateSortBy==='name') return (a.projectName||'').localeCompare(b.projectName||'');
+    if(estimateSortBy==='status'){
+      const pa = STATUS_PRIORITY[a.status]??99;
+      const pb = STATUS_PRIORITY[b.status]??99;
+      if(pa!==pb) return pa-pb;
+      return (a.projectName||'').localeCompare(b.projectName||'');
+    }
+    // due date (default)
+    const aDate = a.estDueDate || 'ZZZZ';
+    const bDate = b.estDueDate || 'ZZZZ';
+    if(aDate!==bDate) return aDate.localeCompare(bDate);
+    return (a.projectName||'').localeCompare(b.projectName||'');
+  });
 
   const today = new Date().toISOString().split('T')[0];
 
   let html = `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
     <div style="font-size:18px;font-weight:700;color:var(--text)">Estimate Tracker</div>
-    ${canEdit?`<button onclick="openEstimateModal()" class="btn-save" style="font-size:13px;padding:6px 14px">+ Add Estimate</button>`:''}
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span style="font-size:12px;color:var(--text-3)">Sort:</span>
+      ${[['due','Due Date'],['name','Name'],['status','Status']].map(([val,label])=>`<button onclick="estimateSortBy='${val}';renderEstimates()" class="site-chip${estimateSortBy===val?' active':''}" style="padding:4px 10px">${label}</button>`).join('')}
+      ${canEdit?`<button onclick="openEstimateModal()" class="btn-save" style="font-size:13px;padding:6px 14px;margin-left:8px">+ Add Estimate</button>`:''}
+    </div>
   </div>
 
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">

@@ -35,7 +35,6 @@ header{background:var(--green-dark);padding:0 16px;display:flex;align-items:cent
   .logo-text{font-size:12px}
   .logo-sub{display:none}
   .logo-grass{width:24px;height:21px}
-  #import-csv-btn, #download-template-btn{display:none !important}
 }
 .view-bar{background:var(--surface);border-bottom:1px solid var(--border);display:flex;flex-direction:column}
 .view-bar-row{display:flex}
@@ -387,8 +386,6 @@ main{padding:12px 16px 100px}
     <button class="header-add" id="new-wo-btn" onclick="openNewWorkOrderModal()" style="display:none">+ Work Order</button>
     <button class="header-add" onclick="openReportModal()">+ File report</button>
     <button class="header-add" id="add-job-btn" onclick="openModal()">+ Add job</button>
-    <button class="header-add" id="import-csv-btn" onclick="document.getElementById('csv-file-input').click()" style="display:none">⬆ Import CSV</button>
-    <button class="header-add" id="download-template-btn" onclick="downloadCsvTemplate()" style="display:none">⬇ CSV Template</button>
     <input type="file" id="csv-file-input" accept=".csv" style="display:none" onchange="importCsvJobs(this)">
   </div>
 </header>
@@ -3755,10 +3752,12 @@ async function deleteEstimate(id){
 let fuelTransactions = [];
 let fuelView = 'transactions'; // 'transactions','vehicles','persons','trends'
 let fuelImporting = false;
+let fuelLoaded = false;
 
 async function loadFuelTransactions(){
   try {
     const data = await sbFetch('GET', '/rest/v1/fuel_transactions?select=*&order=transaction_date.desc&limit=1000');
+    fuelLoaded = true;
     fuelTransactions = (data||[]).map(r=>({
       id: r.id,
       date: r.transaction_date,
@@ -3778,7 +3777,7 @@ async function loadFuelTransactions(){
       merchant: r.merchant_name||'',
       wexId: r.wex_trans_id||'',
     }));
-  } catch(e){ fuelTransactions = []; }
+  } catch(e){ fuelTransactions = []; fuelLoaded = true; }
 }
 
 function classifyFuel(embossLine2, vehicleDesc){
@@ -3888,9 +3887,8 @@ function renderFuel(){
   const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
   const canImport = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com'].includes(userEmail);
 
-  if(!fuelTransactions.length && !fuelImporting){
-    fuelImporting = true;
-    loadFuelTransactions().then(()=>{ fuelImporting=false; renderFuel(); });
+  if(!fuelLoaded){
+    loadFuelTransactions().then(()=>renderFuel());
     document.getElementById('main-content').innerHTML = '<div style="text-align:center;padding:48px;color:var(--text-3)">Loading fuel data...</div>';
     return;
   }
@@ -6018,8 +6016,7 @@ function showApp(){
   if(ajb) ajb.style.display = isScheduler ? '' : 'none';
   const newWoBtn = document.getElementById('new-wo-btn');
   if(newWoBtn) newWoBtn.style.display = '';
-  const importBtn = document.getElementById('import-csv-btn');
-  const templateBtn = document.getElementById('download-template-btn');
+
   if(importBtn) importBtn.style.display = isScheduler ? '' : 'none';
   if(templateBtn) templateBtn.style.display = isScheduler ? '' : 'none';
   // Show/hide tabs based on role

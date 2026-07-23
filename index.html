@@ -4771,7 +4771,7 @@ async function saveReport(){
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   try{
     for(const site of sitesToSave){
-      const data={jobId:'',client:site.client,field:site.field,reportDate,filedBy,timeIn:site.timeIn,timeOut:site.timeOut,workDone:site.workDone,productsUsed:'',equipUsed:site.equip||[],hasIssue:site.hasIssue,issueNotes:site.issueNotes};
+      const data={jobId:'',client:site.client,field:site.field,reportDate,filedBy,timeIn:site.timeIn,timeOut:site.timeOut,workDone:site.workDone,productsUsed:'',equipUsed:site.equip||[],hasIssue:site.hasIssue,issueNotes:site.issueNotes,additionalCrew:site.additionalCrew||[]};
       const newId=await dbSaveReport(data);
       if(newId) reports.unshift({...data,id:newId,createdAt:new Date().toISOString()});
       appendToSheet(data);
@@ -4800,7 +4800,7 @@ function openReportDetail(id){
     <div class="modal-sheet">
       <div class="sheet-handle"></div>
       <div class="sheet-title">${r.client}${r.field?' · '+r.field:''}</div>
-      <div class="sheet-subtitle">${r.reportDate} · Filed by ${r.filedBy}</div>
+      <div class="sheet-subtitle">${r.reportDate} · Filed by ${r.filedBy}${r.additionalCrew&&r.additionalCrew.length?' · with '+r.additionalCrew.join(', '):''}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
         <div style="background:var(--bg);border-radius:var(--radius-sm);padding:10px;border:1px solid var(--border)">
           <div style="font-size:10px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:3px">Time on site</div>

@@ -6058,15 +6058,17 @@ function showApp(){
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
-  loadJobs().then(()=>{ loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates(); startPolling(); });
-  // Default portal based on user
-  if(userEmail==='brian@fieldsourceohio.com'){
-    setPortal('consulting');
-  } else if(userEmail==='gibson@fieldsourceohio.com'){
-    setPortal('bizops');
-  } else {
-    render();
-  }
+  loadJobs().then(()=>{
+    loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates(); startPolling();
+    // Default portal based on user
+    if(userEmail==='brian@fieldsourceohio.com'){
+      setPortal('consulting');
+    } else if(userEmail==='gibson@fieldsourceohio.com'){
+      setPortal('bizops');
+    } else {
+      render();
+    }
+  });
 }
 
 

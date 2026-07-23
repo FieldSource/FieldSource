@@ -400,6 +400,7 @@ main{padding:12px 16px 100px}
     <button class="portal-tab active" id="ptab-tracker" onclick="setPortal('tracker')">Tracker</button>
     <button class="portal-tab" id="ptab-bizops" onclick="setPortal('bizops')" style="display:none">Business Ops</button>
     <button class="portal-tab" id="ptab-consulting" onclick="setPortal('consulting')" style="display:none">Consulting</button>
+    <button class="portal-tab" id="ptab-fleet" onclick="setPortal('fleet')" style="display:none">Fleet</button>
   </div>
 </div>
 
@@ -417,7 +418,6 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="timeoff-tab" onclick="setView('timeoff')">Time Off <span id="timeoff-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
     <button class="vtab" id="hours-tab" onclick="const _n=new Date();hoursMonth=_n.getFullYear()+'-'+String(_n.getMonth()+1).padStart(2,'0');loadReports().then(()=>setView('hours'))" style="display:none">Hours</button>
     <button class="vtab" onclick="setView('workorders')">Work Orders <span id="wo-badge" style="display:none;background:#ef4444;color:#fff;border-radius:99px;font-size:10px;padding:1px 6px;margin-left:4px;font-weight:700"></span></button>
-    <button class="vtab" id="fleet-tab" onclick="loadFleet().then(()=>setView('fleet'))" style="display:none">Fleet</button>
   </div>
 </div>
 
@@ -436,6 +436,13 @@ main{padding:12px 16px 100px}
 <div class="view-bar" id="consulting-bar" style="display:none">
   <div class="view-bar-row">
     <button class="vtab" onclick="view='consulting-home';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderConsulting()">Overview</button>
+  </div>
+</div>
+
+<div class="view-bar" id="fleet-bar" style="display:none">
+  <div class="view-bar-row">
+    <button class="vtab" onclick="setView('fleet-loans')">Loans</button>
+    <button class="vtab" onclick="setView('fuel')">Fuel</button>
   </div>
 </div>
 
@@ -2657,6 +2664,7 @@ function setPortal(portal){
   document.getElementById('tracker-bar').style.display = portal==='tracker' ? '' : 'none';
   document.getElementById('bizops-bar').style.display = portal==='bizops' ? '' : 'none';
   document.getElementById('consulting-bar').style.display = portal==='consulting' ? '' : 'none';
+  document.getElementById('fleet-bar').style.display = portal==='fleet' ? '' : 'none';
   // Hide/show nav elements
   const navRow = document.querySelector('.nav-row');
   const legendBar = document.getElementById('legend-bar');
@@ -2685,6 +2693,15 @@ function setPortal(portal){
       const bar = document.getElementById('consulting-bar');
       if(bar) { const tabs = bar.querySelectorAll('.vtab'); if(tabs[0]) tabs[0].classList.add('active'); }
       renderConsulting();
+    });
+  }
+  else if(portal==='fleet'){
+    loadFleet().then(()=>{
+      view='fleet-loans';
+      document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
+      const bar = document.getElementById('fleet-bar');
+      if(bar){ const tabs = bar.querySelectorAll('.vtab'); if(tabs[0]) tabs[0].classList.add('active'); }
+      renderFleet();
     });
   }
 }
@@ -3734,6 +3751,358 @@ async function deleteEstimate(id){
   renderEstimates();
 }
 
+// ── FUEL TRACKING ────────────────────────────────────────────
+let fuelTransactions = [];
+let fuelView = 'transactions'; // 'transactions','vehicles','persons','trends'
+let fuelImporting = false;
+
+async function loadFuelTransactions(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/fuel_transactions?select=*&order=transaction_date.desc&limit=1000');
+    fuelTransactions = (data||[]).map(r=>({
+      id: r.id,
+      date: r.transaction_date,
+      driverLast: r.driver_last_name||'',
+      driverFirst: r.driver_first_name||'',
+      cardHolder: r.card_holder||'',
+      vehicleId: r.vehicle_id||'',
+      category: r.fuel_category||'',
+      product: r.product||'',
+      gallons: Number(r.gallons)||0,
+      unitCost: Number(r.unit_cost)||0,
+      netCost: Number(r.net_cost)||0,
+      odometer: Number(r.odometer)||0,
+      distance: Number(r.distance_driven)||0,
+      economy: Number(r.fuel_economy)||0,
+      costPerDist: Number(r.cost_per_distance)||0,
+      merchant: r.merchant_name||'',
+      wexId: r.wex_trans_id||'',
+    }));
+  } catch(e){ fuelTransactions = []; }
+}
+
+function classifyFuel(embossLine2, vehicleDesc){
+  const e = (embossLine2||'').toUpperCase();
+  const v = (vehicleDesc||'').toUpperCase();
+  if(e.includes('CAN') || e.includes('SPARE')) return 'Can';
+  if(v.includes('CAN') || v.includes('SPARE')) return 'Can';
+  if(vehicleDesc && vehicleDesc !== '0' && vehicleDesc.trim()) return 'Truck';
+  return 'Can';
+}
+
+function parseWEXDate(s){
+  // MM/DD/YYYY -> YYYY-MM-DD
+  if(!s) return null;
+  const parts = s.split('/');
+  if(parts.length===3) return `${parts[2]}-${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}`;
+  return s;
+}
+
+async function importFuelCSV(file){
+  const text = await file.text();
+  const lines = text.split('\n').filter(l=>l.trim());
+  if(!lines.length){ alert('Empty file'); return; }
+
+  // Parse CSV properly (handle quoted fields)
+  function parseCSVLine(line){
+    const result = []; let current = ''; let inQuote = false;
+    for(let i=0; i<line.length; i++){
+      if(line[i]==='"'){ inQuote=!inQuote; }
+      else if(line[i]===',' && !inQuote){ result.push(current.trim()); current=''; }
+      else { current+=line[i]; }
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  const headers = parseCSVLine(lines[0]);
+  const col = (name) => headers.indexOf(name);
+
+  const statusEl = document.getElementById('fuel-import-status');
+  if(statusEl) statusEl.textContent = 'Processing...';
+
+  // Get existing wex_trans_ids for dedup
+  const existing = await sbFetch('GET', '/rest/v1/fuel_transactions?select=wex_trans_id');
+  const existingIds = new Set((existing||[]).map(r=>r.wex_trans_id));
+
+  let added=0, skipped=0, errors=0;
+  const rows = [];
+
+  for(let i=1; i<lines.length; i++){
+    const vals = parseCSVLine(lines[i]);
+    if(vals.length < 10) continue;
+    const wexId = vals[col('Trans ID')]||'';
+    if(existingIds.has(wexId)){ skipped++; continue; }
+
+    const emboss = vals[col('Emboss Line 2')]||'';
+    const vehicleDesc = vals[col('Vehicle Description')]||'';
+    const category = classifyFuel(emboss, vehicleDesc);
+
+    const driverLast = vals[col('Driver Last Name')]||'';
+    const driverFirst = vals[col('Driver First Name')]||'';
+
+    const row = {
+      transaction_date: parseWEXDate(vals[col('Transaction Date')]),
+      driver_last_name: driverLast,
+      driver_first_name: driverFirst,
+      card_holder: emboss,
+      vehicle_id: vehicleDesc,
+      fuel_category: category,
+      product: vals[col('Product')]||'',
+      gallons: parseFloat(vals[col('Units')])||0,
+      unit_cost: parseFloat(vals[col('Unit Cost')])||0,
+      net_cost: parseFloat(vals[col('Net Cost')])||0,
+      odometer: parseInt(vals[col('Current Odometer')])||0,
+      distance_driven: parseInt(vals[col('Distance Driven')])||0,
+      fuel_economy: parseFloat(vals[col('Fuel Economy')])||0,
+      cost_per_distance: parseFloat(vals[col('Cost Per Distance')])||0,
+      merchant_name: vals[col('Merchant Name')]||'',
+      wex_trans_id: wexId,
+    };
+    if(!row.transaction_date || !wexId) continue;
+    rows.push(row);
+  }
+
+  // Insert in batches of 50
+  for(let i=0; i<rows.length; i+=50){
+    const batch = rows.slice(i, i+50);
+    try {
+      await sbFetch('POST', '/rest/v1/fuel_transactions', batch);
+      added += batch.length;
+    } catch(e){ errors += batch.length; console.error('Fuel import error:', e); }
+    if(statusEl) statusEl.textContent = `Processing... ${added} added so far`;
+  }
+
+  await loadFuelTransactions();
+  const total = fuelTransactions.length;
+  if(statusEl) statusEl.textContent = `✓ Done: ${added} new, ${skipped} duplicates skipped, ${errors} errors. ${total} total in database.`;
+  renderFuelDashboard();
+}
+
+function fmtCur(n){ return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtGal(n){ return Number(n||0).toFixed(2)+'gal'; }
+function fmtNum(n,d=2){ return Number(n||0).toFixed(d); }
+function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T12:00:00'); return d.toLocaleDateString('en-US',{month:'2-digit',day:'2-digit',year:'numeric'}); }
+
+function renderFuel(){
+  const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
+  const canImport = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com'].includes(userEmail);
+
+  if(!fuelTransactions.length && !fuelImporting){
+    fuelImporting = true;
+    loadFuelTransactions().then(()=>{ fuelImporting=false; renderFuel(); });
+    document.getElementById('main-content').innerHTML = '<div style="text-align:center;padding:48px;color:var(--text-3)">Loading fuel data...</div>';
+    return;
+  }
+
+  let html = `<div style="margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+      <div style="font-size:18px;font-weight:700;color:var(--text)">Fuel Tracking</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${canImport?`<label style="padding:6px 14px;background:var(--green);color:#fff;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">
+          Import WEX CSV
+          <input type="file" accept=".csv" style="display:none" onchange="importFuelCSV(this.files[0]).then(()=>this.value='')">
+        </label>`:''}
+        <button onclick="exportFuelCSV()" style="padding:6px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text-2)">Download CSV</button>
+      </div>
+    </div>
+    <div id="fuel-import-status" style="font-size:12px;color:var(--green-dark);margin-bottom:8px"></div>
+
+    <!-- Sub-tabs -->
+    <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
+      ${[['transactions','Transactions'],['vehicles','By Vehicle'],['persons','By Person'],['trends','Monthly Trends']].map(([v,l])=>`<button onclick="fuelView='${v}';renderFuelDashboard()" style="padding:8px 16px;border:none;background:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border-bottom:2px solid ${fuelView===v?'var(--green)':'transparent'};margin-bottom:-2px;color:${fuelView===v?'var(--green-dark)':'var(--text-2)'}">${l}</button>`).join('')}
+    </div>
+    <div id="fuel-dashboard"></div>
+  </div>`;
+
+  document.getElementById('main-content').innerHTML = html;
+  renderFuelDashboard();
+}
+
+function renderFuelDashboard(){
+  const el = document.getElementById('fuel-dashboard');
+  if(!el) return;
+  if(fuelView==='transactions') el.innerHTML = renderFuelTransactions();
+  else if(fuelView==='vehicles') el.innerHTML = renderFuelVehicles();
+  else if(fuelView==='persons') el.innerHTML = renderFuelPersons();
+  else if(fuelView==='trends') el.innerHTML = renderFuelTrends();
+}
+
+function renderFuelTransactions(){
+  const tx = [...fuelTransactions].sort((a,b)=>b.date.localeCompare(a.date));
+  const totalGal = tx.reduce((s,r)=>s+r.gallons,0);
+  const totalCost = tx.reduce((s,r)=>s+r.netCost,0);
+
+  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">Transactions</div>
+      <div style="font-size:22px;font-weight:700;font-family:'DM Mono',monospace">${tx.length}</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid #3b82f6">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">Total Gallons</div>
+      <div style="font-size:22px;font-weight:700;font-family:'DM Mono',monospace">${fmtNum(totalGal,0)}</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid #f59e0b">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">Total Cost</div>
+      <div style="font-size:22px;font-weight:700;font-family:'DM Mono',monospace">${fmtCur(totalCost)}</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid #22c55e">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">Avg $/Gal</div>
+      <div style="font-size:22px;font-weight:700;font-family:'DM Mono',monospace">${fmtCur(totalGal?totalCost/totalGal:0)}</div>
+    </div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+    <div style="display:grid;grid-template-columns:90px 1fr 1fr 60px 60px 80px 80px 60px;padding:10px 12px;background:var(--accent);border-bottom:1px solid var(--border)">
+      ${['Date','Driver','Vehicle / Card','Cat','Product','Gallons','Cost','Merchant'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+    </div>`;
+
+  tx.slice(0,200).forEach(r=>{
+    const catColor = r.category==='Truck'?{bg:'#dbeafe',text:'#1d4ed8'}:{bg:'#fef3c7',text:'#92400e'};
+    html += `<div style="display:grid;grid-template-columns:90px 1fr 1fr 60px 60px 80px 80px 60px;padding:9px 12px;border-bottom:1px solid var(--border);align-items:center;font-size:12px">
+      <div style="color:var(--text-2)">${fmtDate(r.date)}</div>
+      <div style="color:var(--text)">${r.driverFirst} ${r.driverLast}</div>
+      <div style="color:var(--text-2)">${r.vehicleId||r.cardHolder}</div>
+      <div><span style="font-size:10px;padding:1px 6px;border-radius:99px;background:${catColor.bg};color:${catColor.text};font-weight:600">${r.category}</span></div>
+      <div style="color:var(--text-2)">${r.product}</div>
+      <div style="font-family:'DM Mono',monospace;color:var(--text)">${fmtNum(r.gallons)}</div>
+      <div style="font-family:'DM Mono',monospace;color:var(--text)">${fmtCur(r.netCost)}</div>
+      <div style="color:var(--text-3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.merchant}</div>
+    </div>`;
+  });
+  if(tx.length>200) html += `<div style="padding:10px 12px;font-size:12px;color:var(--text-3)">Showing 200 of ${tx.length} transactions. Download CSV for full data.</div>`;
+  html += '</div>';
+  return html;
+}
+
+function renderFuelVehicles(){
+  const byVehicle = {};
+  fuelTransactions.forEach(r=>{
+    const key = r.vehicleId || r.cardHolder || 'Unknown';
+    if(!byVehicle[key]) byVehicle[key]={vehicle:key,category:r.category,gallons:0,cost:0,count:0,distance:0};
+    byVehicle[key].gallons+=r.gallons;
+    byVehicle[key].cost+=r.netCost;
+    byVehicle[key].count++;
+    byVehicle[key].distance+=r.distance;
+  });
+  const rows = Object.values(byVehicle).sort((a,b)=>b.cost-a.cost);
+
+  let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+    <div style="display:grid;grid-template-columns:2fr 70px 80px 80px 80px 80px 80px;padding:10px 12px;background:var(--accent);border-bottom:1px solid var(--border)">
+      ${['Vehicle / Card','Cat','Txns','Gallons','Total Cost','$/Gal','Distance'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+    </div>`;
+
+  rows.forEach(r=>{
+    const catColor = r.category==='Truck'?{bg:'#dbeafe',text:'#1d4ed8'}:{bg:'#fef3c7',text:'#92400e'};
+    html += `<div style="display:grid;grid-template-columns:2fr 70px 80px 80px 80px 80px 80px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center">
+      <div style="font-weight:500">${r.vehicle}</div>
+      <div><span style="font-size:10px;padding:1px 6px;border-radius:99px;background:${catColor.bg};color:${catColor.text};font-weight:600">${r.category}</span></div>
+      <div style="font-family:'DM Mono',monospace">${r.count}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtNum(r.gallons)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtCur(r.cost)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtCur(r.gallons?r.cost/r.gallons:0)}</div>
+      <div style="font-family:'DM Mono',monospace">${r.distance?r.distance.toLocaleString():'—'}</div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+function renderFuelPersons(){
+  const byPerson = {};
+  fuelTransactions.forEach(r=>{
+    const key = r.driverFirst && r.driverLast ? `${r.driverFirst} ${r.driverLast}` : r.cardHolder||'Unknown';
+    if(!byPerson[key]) byPerson[key]={name:key,truckGal:0,truckCost:0,canGal:0,canCost:0};
+    if(r.category==='Truck'){ byPerson[key].truckGal+=r.gallons; byPerson[key].truckCost+=r.netCost; }
+    else { byPerson[key].canGal+=r.gallons; byPerson[key].canCost+=r.netCost; }
+  });
+  const rows = Object.values(byPerson).sort((a,b)=>(b.truckCost+b.canCost)-(a.truckCost+a.canCost));
+
+  let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+    <div style="display:grid;grid-template-columns:1fr 80px 80px 80px 80px 80px 80px;padding:10px 12px;background:var(--accent);border-bottom:1px solid var(--border)">
+      ${['Driver','Truck Gal','Truck Cost','Can Gal','Can Cost','Total Gal','Total Cost'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+    </div>`;
+
+  rows.forEach(r=>{
+    html += `<div style="display:grid;grid-template-columns:1fr 80px 80px 80px 80px 80px 80px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center">
+      <div style="font-weight:500">${r.name}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtNum(r.truckGal)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtCur(r.truckCost)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtNum(r.canGal)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtCur(r.canCost)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtNum(r.truckGal+r.canGal)}</div>
+      <div style="font-family:'DM Mono',monospace;font-weight:600">${fmtCur(r.truckCost+r.canCost)}</div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+function renderFuelTrends(){
+  const byMonth = {};
+  fuelTransactions.forEach(r=>{
+    const m = r.date.slice(0,7); // YYYY-MM
+    if(!byMonth[m]) byMonth[m]={month:m,truckGal:0,truckCost:0,canGal:0,canCost:0};
+    if(r.category==='Truck'){ byMonth[m].truckGal+=r.gallons; byMonth[m].truckCost+=r.netCost; }
+    else { byMonth[m].canGal+=r.gallons; byMonth[m].canCost+=r.netCost; }
+  });
+  const rows = Object.values(byMonth).sort((a,b)=>a.month.localeCompare(b.month));
+  const maxCost = Math.max(...rows.map(r=>r.truckCost+r.canCost));
+
+  let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+    <div style="font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:12px">Monthly Cost — Truck vs Can</div>`;
+
+  rows.forEach(r=>{
+    const total = r.truckCost+r.canCost;
+    const truckPct = maxCost?r.truckCost/maxCost*100:0;
+    const canPct = maxCost?r.canCost/maxCost*100:0;
+    const monthLabel = new Date(r.month+'-15').toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+    html += `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <div style="width:50px;font-size:11px;color:var(--text-3);flex-shrink:0">${monthLabel}</div>
+      <div style="flex:1;display:flex;height:20px;border-radius:4px;overflow:hidden;background:var(--accent)">
+        <div style="width:${truckPct}%;background:#1d4ed8;height:100%" title="Truck: ${fmtCur(r.truckCost)}"></div>
+        <div style="width:${canPct}%;background:#f59e0b;height:100%" title="Can: ${fmtCur(r.canCost)}"></div>
+      </div>
+      <div style="width:90px;font-size:12px;font-family:'DM Mono',monospace;text-align:right;flex-shrink:0">${fmtCur(total)}</div>
+    </div>`;
+  });
+
+  html += `<div style="display:flex;gap:16px;margin-top:8px">
+    <div style="display:flex;align-items:center;gap:6px"><div style="width:12px;height:12px;background:#1d4ed8;border-radius:2px"></div><span style="font-size:12px;color:var(--text-2)">Truck</span></div>
+    <div style="display:flex;align-items:center;gap:6px"><div style="width:12px;height:12px;background:#f59e0b;border-radius:2px"></div><span style="font-size:12px;color:var(--text-2)">Can</span></div>
+  </div></div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+    <div style="display:grid;grid-template-columns:80px 80px 80px 80px 80px 80px 80px;padding:10px 12px;background:var(--accent);border-bottom:1px solid var(--border)">
+      ${['Month','Truck Gal','Truck $','Can Gal','Can $','Total Gal','Total $'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+    </div>`;
+
+  rows.forEach(r=>{
+    const monthLabel = new Date(r.month+'-15').toLocaleDateString('en-US',{month:'short',year:'numeric'});
+    html += `<div style="display:grid;grid-template-columns:80px 80px 80px 80px 80px 80px 80px;padding:9px 12px;border-bottom:1px solid var(--border);font-size:12px">
+      <div style="color:var(--text-2)">${monthLabel}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtNum(r.truckGal)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtCur(r.truckCost)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtNum(r.canGal)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtCur(r.canCost)}</div>
+      <div style="font-family:'DM Mono',monospace">${fmtNum(r.truckGal+r.canGal)}</div>
+      <div style="font-family:'DM Mono',monospace;font-weight:600">${fmtCur(r.truckCost+r.canCost)}</div>
+    </div>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+function exportFuelCSV(){
+  const headers = ['Date','Driver Last','Driver First','Card Holder','Vehicle','Category','Product','Gallons','Unit Cost','Net Cost','Odometer','Distance','Fuel Economy','Cost/Distance','Merchant'];
+  const rows = fuelTransactions.map(r=>[r.date,r.driverLast,r.driverFirst,r.cardHolder,r.vehicleId,r.category,r.product,r.gallons,r.unitCost,r.netCost,r.odometer,r.distance,r.economy,r.costPerDist,r.merchant]);
+  const csv = [headers,...rows].map(r=>r.map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'field-source-fuel-'+new Date().toISOString().split('T')[0]+'.csv';
+  a.click();
+}
+
 function setView(v){
   view=v;
   if(v!=='equipment') offset=0;
@@ -3743,12 +4112,12 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates'].includes(v)?'bizops-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet'||v==='estimates';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -3783,7 +4152,8 @@ function render(){
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();
   else if(view==='costs') renderCosts();
-  else if(view==='fleet') renderFleet();
+  else if(view==='fleet-loans') renderFleet();
+  else if(view==='fuel') renderFuel();
   else if(view==='estimates') renderEstimates();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
@@ -5671,8 +6041,9 @@ function showApp(){
   const hoursTab = document.getElementById('hours-tab');
   if(hoursTab) hoursTab.style.display = HOURS_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
   const FLEET_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com'];
-  const fleetTab = document.getElementById('fleet-tab');
-  if(fleetTab) fleetTab.style.display = FLEET_EMAILS.includes(userEmail) ? '' : 'none';
+  const fleetPortalTab = document.getElementById('ptab-fleet');
+  if(fleetPortalTab) fleetPortalTab.style.display = FLEET_EMAILS.includes(userEmail) ? '' : 'none';
+
 
   const ESTIMATES_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com'];
   const estimatesTab = document.getElementById('estimates-tab');

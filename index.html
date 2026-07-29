@@ -203,6 +203,8 @@ main{padding:12px 16px 100px}
 .site-filter-row::-webkit-scrollbar{height:4px}
 .site-filter-row::-webkit-scrollbar-track{background:transparent}
 .site-filter-row::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:99px}
+.day-of-week-btn{padding:6px 10px;border-radius:6px;border:1.5px solid var(--border-2);background:var(--surface);font-size:12px;font-weight:600;color:var(--text-2);cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s}
+.day-of-week-btn.active{background:var(--green);border-color:var(--green);color:#fff}
 .site-chip{padding:5px 12px;border-radius:99px;border:1px solid var(--border-2);background:var(--surface);font-size:12px;font-weight:500;color:var(--text-2);cursor:pointer;white-space:nowrap;font-family:'DM Sans',sans-serif;transition:all .15s;flex-shrink:0}
 .site-chip.active{background:var(--green);color:#fff;border-color:var(--green)}
 .form-group textarea{width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:15px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--bg);outline:none;resize:vertical;min-height:72px}
@@ -2507,7 +2509,8 @@ async function dbSaveJob(data, id=null){
     service: (data.services||[])[0]||'',
     notes: data.notes,
     rental_equip: data.rentalEquip||'',
-    include_weekends: data.includeWeekends||false
+    include_weekends: data.includeWeekends||false,
+    selected_days: data.selectedDays||null
   };
   if(!id && data.createdBy) row.created_by = data.createdBy;
   if(id){
@@ -2605,11 +2608,20 @@ function jobDates(j){
   const start=parseISO(j.startDate);
   const days=Math.max(1,parseInt(j.duration)||1);
   const dates=[];
+  // If specific days of week are selected, use those within the duration window
+  if(j.selectedDays && j.selectedDays.length){
+    const selSet = new Set(j.selectedDays.map(Number));
+    let d=new Date(start);
+    for(let i=0;i<days;i++){
+      if(selSet.has(addDays(start,i).getDay())) dates.push(isoDate(addDays(start,i)));
+    }
+    // If none matched, fall back to start date
+    if(!dates.length) dates.push(j.startDate);
+    return dates;
+  }
   if(j.includeWeekends){
-    // Include all days
     for(let i=0;i<days;i++) dates.push(isoDate(addDays(start,i)));
   } else {
-    // Skip weekends — count only M-F
     let d=new Date(start);
     let counted=0;
     while(counted<days){
@@ -4474,6 +4486,13 @@ function openModal(id=null,defaultDate=null){
             Include weekends
           </label>
         </div>
+        <div style="margin-top:10px">
+          <label class="form-label">Specific days of week (optional — overrides duration count)</label>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+            ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d,i)=>`<button type="button" id="day-btn-${i}" onclick="toggleDayBtn(${i})" class="day-of-week-btn${job&&job.selectedDays&&job.selectedDays.includes(i)?' active':''}">${d}</button>`).join('')}
+          </div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px">When selected, job appears only on these days within the date range. Leave blank to use normal duration.</div>
+        </div>
       </div>
       <div class="form-group">
         <label class="form-label">Touch up needed</label>
@@ -4647,6 +4666,18 @@ function updateSubName(val){
   pickedCrew = [...pickedCrew, 'Sub:'+val];
 }
 
+function toggleDayBtn(i){
+  const btn = document.getElementById('day-btn-'+i);
+  if(btn) btn.classList.toggle('active');
+}
+function getSelectedDays(){
+  const selected = [];
+  for(let i=0;i<7;i++){
+    const btn = document.getElementById('day-btn-'+i);
+    if(btn && btn.classList.contains('active')) selected.push(i);
+  }
+  return selected.length ? selected : null;
+}
 function toggleTouchUp(){
   touchUpOn=!touchUpOn;
   const el=document.getElementById('touchup-toggle');
@@ -4704,6 +4735,7 @@ async function saveJob(){
   const notes=document.getElementById('f-notes').value.trim();
   if(!startDate){alert('Please pick a start date.');return}
   const includeWeekends=document.getElementById('f-weekends')?document.getElementById('f-weekends').checked:false;
+  const selectedDays=getSelectedDays();
   const services = [...pickedServices].map(s=>{
     if(s==='Other'){
       const otherText = document.getElementById('f-service-other') ? document.getElementById('f-service-other').value.trim() : '';
@@ -4715,7 +4747,7 @@ async function saveJob(){
   const task = document.getElementById('f-task') ? document.getElementById('f-task').value.trim() : '';
   const rentalEquip = document.getElementById('f-rental-equip') ? document.getElementById('f-rental-equip').value.trim() : '';
   const createdBy = editId ? (jobs.find(j=>j.id===editId)||{}).createdBy||'' : getDisplayName(currentUser&&currentUser.email);
-  const data={client,field,service:services[0]||'',services,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,task,rentalEquip,includeWeekends,createdBy};
+  const data={client,field,service:services[0]||'',services,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,task,rentalEquip,includeWeekends,selectedDays,createdBy};
   const btn=document.querySelector('.btn-save');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   try{

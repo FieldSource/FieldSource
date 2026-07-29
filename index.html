@@ -2510,7 +2510,8 @@ async function dbSaveJob(data, id=null){
     notes: data.notes,
     rental_equip: data.rentalEquip||'',
     include_weekends: data.includeWeekends||false,
-    selected_days: data.selectedDays||null
+    selected_days: data.selectedDays||null,
+    crew_days: data.crewDays||null
   };
   if(!id && data.createdBy) row.created_by = data.createdBy;
   if(id){
@@ -2580,6 +2581,7 @@ function startPolling(){
 
 let view='week',offset=0,editId=null,crewFilter='All',weekViewMode='site';
 let pickedCrew=[],pickedEquip=[],pickedServices=[],touchUpOn=false,activeEquipTab=EQUIP_CATS[0];
+let pickedCrewDays={}; // {personName: [0,1,2,3,4,5,6]}
 let equipOffset=0;
 function today(){const d=new Date();d.setHours(0,0,0,0);return d}
 function isoDate(d){return d.toISOString().slice(0,10)}
@@ -2638,6 +2640,31 @@ function jobDates(j){
 function filteredJobs(){
   if(crewFilter==='All') return jobs;
   return jobs.filter(j=>(j.crew||[]).includes(crewFilter));
+}
+function crewForDate(j, ds){
+  // Returns array of crew members present on a given date
+  if(!j.crewDays) return j.crew||[]; // backward compat — no per-person days set
+  const dow = new Date(ds+'T12:00:00').getDay();
+  return (j.crew||[]).filter(person=>{
+    const days = j.crewDays[person];
+    if(!days||!days.length) return false; // must have days set
+    return days.includes(dow);
+  });
+}
+function jobDatesForPerson(j, person){
+  // Returns dates this specific crew member works on this job
+  const start = parseISO(j.startDate);
+  const days = Math.max(1,parseInt(j.duration)||1);
+  const dates = [];
+  if(j.crewDays && j.crewDays[person]){
+    const selDays = new Set(j.crewDays[person].map(Number));
+    for(let i=0;i<days;i++){
+      const d = addDays(start,i);
+      if(selDays.has(d.getDay())) dates.push(isoDate(d));
+    }
+    return dates;
+  }
+  return jobDates(j); // fall back to job-level dates
 }
 function jobsForDate(ds){return filteredJobs().filter(j=>jobDates(j).includes(ds)).sort((a,b)=>(a.client||'').localeCompare(b.client||''))}
 
@@ -4194,7 +4221,13 @@ function renderWeekByPerson(days){
     days.forEach(d=>{
       const ds = isoDate(d);
       const isToday = ds===todayStr;
-      const personJobs = jobsForDate(ds).filter(j=>(j.crew||[]).some(c=>c===person||c===('Sub:'+person)));
+      const personJobs = jobsForDate(ds).filter(j=>{
+        const crew = j.crew||[];
+        if(!crew.some(c=>c===person||c===('Sub:'+person))) return false;
+        // If job has per-person days, check if this person works this date
+        if(j.crewDays) return jobDatesForPerson(j,person).includes(ds);
+        return true;
+      });
       html += `<td style="padding:4px;border-bottom:1px solid var(--border);border-right:1px solid var(--border);vertical-align:top;background:${isToday?'rgba(42,106,34,0.04)':''}">`;
       if(!personJobs.length){
         // Check time off
@@ -4427,6 +4460,11 @@ function openModal(id=null,defaultDate=null){
   editId=id;
   const job=id?jobs.find(j=>j.id===id):null;
   pickedCrew=job?[...(job.crew||[])]:[];
+  // Initialize per-person days from existing job or default to Mon-Fri
+  pickedCrewDays={};
+  pickedCrew.forEach(person=>{
+    pickedCrewDays[person] = (job&&job.crewDays&&job.crewDays[person]) ? [...job.crewDays[person]] : [1,2,3,4,5];
+  });
   pickedEquip=job?[...(job.equip||[])]:[];
   touchUpOn=job?!!(job.touchUp):false;
   activeEquipTab=EQUIP_CATS[0];
@@ -4502,8 +4540,9 @@ function openModal(id=null,defaultDate=null){
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Crew — tap to select multiple</label>
+        <label class="form-label">Crew — tap to add, then set their days</label>
         <div class="crew-grid" id="crew-grid">${buildCrewGrid()}</div>
+        <div id="crew-days-list" style="margin-top:10px">${buildCrewDaysList()}</div>
       </div>
       <div class="form-group">
         <label class="form-label">Equipment — tap to select</label>
@@ -4589,6 +4628,28 @@ function toggleServiceOther(){
   setTimeout(()=>{ const inp=document.getElementById('f-service-other'); if(inp&&!hasOther) inp.focus(); },50);
 }
 
+function buildCrewDaysList(){
+  const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  if(!pickedCrew.length) return '';
+  return pickedCrew.map(person=>{
+    const days = pickedCrewDays[person]||[];
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <div style="font-size:13px;font-weight:600;color:var(--text);min-width:120px">${person}</div>
+      <div style="display:flex;gap:4px">
+        ${DAYS.map((d,i)=>`<button type="button" onclick="toggleCrewDay('${person.replace(/'/g,"\\'")}',${i})" style="padding:4px 8px;border-radius:5px;border:1.5px solid ${days.includes(i)?'var(--green)':'var(--border-2)'};background:${days.includes(i)?'var(--green)':'var(--surface)'};color:${days.includes(i)?'#fff':'var(--text-2)'};font-size:11px;font-weight:600;cursor:pointer;font-family:inherit">${d}</button>`).join('')}
+      </div>
+      ${!days.length?'<span style="font-size:11px;color:#dc2626">— select days</span>':''}
+    </div>`;
+  }).join('');
+}
+function toggleCrewDay(person, dow){
+  if(!pickedCrewDays[person]) pickedCrewDays[person]=[];
+  const days = pickedCrewDays[person];
+  const idx = days.indexOf(dow);
+  if(idx>=0) days.splice(idx,1); else days.push(dow);
+  const el = document.getElementById('crew-days-list');
+  if(el) el.innerHTML = buildCrewDaysList();
+}
 function buildCrewGrid(){
   const {start} = getModalDates();
   const subPicked = pickedCrew.some(c=>c.startsWith('Sub:'));
@@ -4645,8 +4706,14 @@ function toggleCrew(name, isOff=false){
     if(!confirm(`${name} is scheduled off on this date. Add them anyway?`)) return;
   }
   pickedCrew=pickedCrew.includes(name)?pickedCrew.filter(c=>c!==name):[...pickedCrew,name];
+  // Remove crewDays entry if deselected
+  if(!pickedCrew.includes(name)) delete pickedCrewDays[name];
+  // Default Mon-Fri for newly added person
+  if(pickedCrew.includes(name) && !pickedCrewDays[name]) pickedCrewDays[name]=[1,2,3,4,5];
   const g=document.getElementById('crew-grid');
   if(g) g.innerHTML=buildCrewGrid();
+  const dl=document.getElementById('crew-days-list');
+  if(dl) dl.innerHTML=buildCrewDaysList();
 }
 function toggleSubcontractor(){
   const subPicked = pickedCrew.some(c=>c.startsWith('Sub:'));
@@ -4724,7 +4791,7 @@ function updateDuration(){
 function maybeClose(e){if(e.target.classList.contains('modal-overlay')) closeModal()}
 function closeModal(){
   document.getElementById('modal-root').innerHTML='';
-  editId=null;pickedCrew=[];pickedEquip=[];pickedServices=[];touchUpOn=false;activeEquipTab=EQUIP_CATS[0];
+  editId=null;pickedCrew=[];pickedEquip=[];pickedServices=[];touchUpOn=false;activeEquipTab=EQUIP_CATS[0];pickedCrewDays={};
 }
 async function saveJob(){
   const client=getClientValue();
@@ -4747,7 +4814,7 @@ async function saveJob(){
   const task = document.getElementById('f-task') ? document.getElementById('f-task').value.trim() : '';
   const rentalEquip = document.getElementById('f-rental-equip') ? document.getElementById('f-rental-equip').value.trim() : '';
   const createdBy = editId ? (jobs.find(j=>j.id===editId)||{}).createdBy||'' : getDisplayName(currentUser&&currentUser.email);
-  const data={client,field,service:services[0]||'',services,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,task,rentalEquip,includeWeekends,selectedDays,createdBy};
+  const data={client,field,service:services[0]||'',services,startDate,duration,crew:[...pickedCrew],equip:[...pickedEquip],touchUp:touchUpOn,notes,task,rentalEquip,includeWeekends,selectedDays,crewDays:Object.keys(pickedCrewDays).length?{...pickedCrewDays}:null,createdBy};
   const btn=document.querySelector('.btn-save');
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   try{

@@ -585,7 +585,9 @@ async function loadJobs(){
       notes: row.notes||'',
       createdBy: row.created_by||'',
       rentalEquip: row.rental_equip||'',
-      includeWeekends: row.include_weekends === true || row.include_weekends === 'true'
+      includeWeekends: row.include_weekends === true || row.include_weekends === 'true',
+      selectedDays: row.selected_days || null,
+      crewDays: row.crew_days || null
     }));
   } catch(e) {
     console.error('Load error', e);

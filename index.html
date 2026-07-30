@@ -4464,7 +4464,7 @@ function openModal(id=null,defaultDate=null){
   pickedCrewDays={};
   const todayDow = new Date().getDay();
   pickedCrew.forEach(person=>{
-    pickedCrewDays[person] = (job&&job.crewDays&&job.crewDays[person]) ? [...job.crewDays[person]] : [todayDow];
+    pickedCrewDays[person] = (job&&job.crewDays&&job.crewDays[person]) ? [...job.crewDays[person]] : [];
   });
   pickedEquip=job?[...(job.equip||[])]:[];
   touchUpOn=job?!!(job.touchUp):false;
@@ -4710,7 +4710,7 @@ function toggleCrew(name, isOff=false){
   // Remove crewDays entry if deselected
   if(!pickedCrew.includes(name)) delete pickedCrewDays[name];
   // Default Mon-Fri for newly added person
-  if(pickedCrew.includes(name) && !pickedCrewDays[name]) pickedCrewDays[name]=[new Date().getDay()];
+  if(pickedCrew.includes(name) && !pickedCrewDays[name]) pickedCrewDays[name]=[];
   const g=document.getElementById('crew-grid');
   if(g) g.innerHTML=buildCrewGrid();
   const dl=document.getElementById('crew-days-list');

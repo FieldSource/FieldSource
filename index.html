@@ -4768,6 +4768,9 @@ function toggleDayBtn(i){
     if(dl) dl.innerHTML = buildCrewDaysList();
   }
 }
+function getSelectedDays(){
+  return null; // job-level day picker removed — per-person days used instead
+}
 function toggleTouchUp(){
   touchUpOn=!touchUpOn;
   const el=document.getElementById('touchup-toggle');

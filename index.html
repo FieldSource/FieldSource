@@ -2610,30 +2610,27 @@ function jobDates(j){
   const start=parseISO(j.startDate);
   const days=Math.max(1,parseInt(j.duration)||1);
   const dates=[];
-  // If specific days of week are selected, use those within the duration window
+  // If crewDays set, span full duration so all crew days are reachable
+  if(j.crewDays){
+    if(j.includeWeekends){
+      for(let i=0;i<days;i++) dates.push(isoDate(addDays(start,i)));
+    } else {
+      let d=new Date(start); let counted=0;
+      while(counted<days){ const dow=d.getDay(); if(dow!==0&&dow!==6){ dates.push(isoDate(d)); counted++; } d=addDays(d,1); }
+    }
+    return dates;
+  }
+  // Job-level selected days
   if(j.selectedDays && j.selectedDays.length){
     const selSet = new Set(j.selectedDays.map(Number));
-    let d=new Date(start);
-    for(let i=0;i<days;i++){
-      if(selSet.has(addDays(start,i).getDay())) dates.push(isoDate(addDays(start,i)));
-    }
-    // If none matched, fall back to start date
-    if(!dates.length) dates.push(j.startDate);
-    return dates;
+    for(let i=0;i<days;i++){ const d=addDays(start,i); if(selSet.has(d.getDay())) dates.push(isoDate(d)); }
+    return dates.length ? dates : [j.startDate];
   }
   if(j.includeWeekends){
     for(let i=0;i<days;i++) dates.push(isoDate(addDays(start,i)));
   } else {
-    let d=new Date(start);
-    let counted=0;
-    while(counted<days){
-      const dow=d.getDay();
-      if(dow!==0&&dow!==6){
-        dates.push(isoDate(d));
-        counted++;
-      }
-      d=addDays(d,1);
-    }
+    let d=new Date(start); let counted=0;
+    while(counted<days){ const dow=d.getDay(); if(dow!==0&&dow!==6){ dates.push(isoDate(d)); counted++; } d=addDays(d,1); }
   }
   return dates;
 }
@@ -2666,7 +2663,18 @@ function jobDatesForPerson(j, person){
   }
   return jobDates(j); // fall back to job-level dates
 }
-function jobsForDate(ds){return filteredJobs().filter(j=>jobDates(j).includes(ds)).sort((a,b)=>(a.client||'').localeCompare(b.client||''))}
+function jobsForDate(ds){
+  return filteredJobs().filter(j=>{
+    if(j.crewDays){
+      return (j.crew||[]).some(person=>{
+        const pDays = j.crewDays[person];
+        if(!pDays||!pDays.length) return false;
+        return jobDatesForPerson(j,person).includes(ds);
+      });
+    }
+    return jobDates(j).includes(ds);
+  }).sort((a,b)=>(a.client||'').localeCompare(b.client||''));
+}
 
 // Returns all jobs (not filtered) that use a specific piece of equipment on a specific date
 function jobsUsingEquipOnDate(equipName, ds){

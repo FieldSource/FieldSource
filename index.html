@@ -4544,8 +4544,8 @@ function openModal(id=null,defaultDate=null){
         </div>
         <div style="margin-top:10px">
           <label class="form-label">Repeat on specific days <span style="font-weight:400;color:var(--text-3)">(optional — whole crew, overrides duration count)</span></label>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
-            ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d,i)=>`<button type="button" id="day-btn-${i}" onclick="toggleDayBtn(${i})" class="day-of-week-btn${job&&job.selectedDays&&job.selectedDays.includes(i)?' active':''}">${d}</button>`).join('')}
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px" id="job-day-picker">
+            ${buildJobDayPicker(job)}
           </div>
         </div>
       </div>
@@ -4664,6 +4664,11 @@ function toggleCrewDay(person, dow){
   const days = pickedCrewDays[person];
   const idx = days.indexOf(dow);
   if(idx>=0) days.splice(idx,1); else days.push(dow);
+  // Clear job-level day buttons (mutual exclusivity)
+  for(let i=0;i<7;i++){
+    const btn = document.getElementById('day-btn-'+i);
+    if(btn) btn.classList.remove('active');
+  }
   const el = document.getElementById('crew-days-list');
   if(el) el.innerHTML = buildCrewDaysList();
 }
@@ -4750,17 +4755,22 @@ function updateSubName(val){
   pickedCrew = [...pickedCrew, 'Sub:'+val];
 }
 
+function buildJobDayPicker(job){
+  const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  return DAYS.map((d,i)=>{
+    const active = job&&job.selectedDays&&job.selectedDays.includes(i);
+    return `<button type="button" id="day-btn-${i}" onclick="toggleDayBtn(${i})" class="day-of-week-btn${active?' active':''}">${d}</button>`;
+  }).join('');
+}
 function toggleDayBtn(i){
   const btn = document.getElementById('day-btn-'+i);
   if(btn) btn.classList.toggle('active');
-}
-function getSelectedDays(){
-  const selected = [];
-  for(let i=0;i<7;i++){
-    const btn = document.getElementById('day-btn-'+i);
-    if(btn && btn.classList.contains('active')) selected.push(i);
+  // If job-level days are being used, clear per-person days (mutual exclusivity)
+  if(document.querySelectorAll('.day-of-week-btn.active').length > 0){
+    pickedCrewDays = {};
+    const dl = document.getElementById('crew-days-list');
+    if(dl) dl.innerHTML = buildCrewDaysList();
   }
-  return selected.length ? selected : null;
 }
 function toggleTouchUp(){
   touchUpOn=!touchUpOn;

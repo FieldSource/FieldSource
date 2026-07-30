@@ -2622,10 +2622,16 @@ function jobDates(j){
     }
     return dates;
   }
-  // Job-level selected days
+  // Job-level selected days — iterate calendar days across the duration span
   if(j.selectedDays && j.selectedDays.length){
     const selSet = new Set(j.selectedDays.map(Number));
-    for(let i=0;i<days;i++){ const d=addDays(start,i); if(selSet.has(d.getDay())) dates.push(isoDate(d)); }
+    // Span enough calendar days to cover duration worth of weekdays
+    const spanDays = days * 3; // generous window
+    for(let i=0;i<spanDays;i++){
+      const d=addDays(start,i);
+      if(selSet.has(d.getDay())) dates.push(isoDate(d));
+      if(dates.length>=days) break; // stop once we have enough occurrences
+    }
     return dates.length ? dates : [j.startDate];
   }
   if(j.includeWeekends){
@@ -4537,11 +4543,10 @@ function openModal(id=null,defaultDate=null){
           </label>
         </div>
         <div style="margin-top:10px">
-          <label class="form-label">Specific days of week (optional — overrides duration count)</label>
+          <label class="form-label">Repeat on specific days <span style="font-weight:400;color:var(--text-3)">(optional — whole crew, overrides duration count)</span></label>
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
             ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d,i)=>`<button type="button" id="day-btn-${i}" onclick="toggleDayBtn(${i})" class="day-of-week-btn${job&&job.selectedDays&&job.selectedDays.includes(i)?' active':''}">${d}</button>`).join('')}
           </div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:4px">When selected, job appears only on these days within the date range. Leave blank to use normal duration.</div>
         </div>
       </div>
       <div class="form-group">

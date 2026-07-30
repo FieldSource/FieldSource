@@ -4302,7 +4302,8 @@ function renderWeek(){
     dayJobs.forEach(j=>{
       const st=statusMeta(getStatus(j));
       const dur=parseInt(j.duration)||1;
-      const crew=(j.crew||[]).map(c=>c.startsWith('Sub:')?'Sub: '+(c.slice(4)||'?'):c).join(', ');
+      const crewOnDate = crewForDate(j, ds);
+      const crew=crewOnDate.map(c=>c.startsWith('Sub:')?'Sub: '+(c.slice(4)||'?'):c).join(', ');
       const trailers=(j.equip||[]).filter(e=>EQUIPMENT.Trailers.includes(e));
       const specialty=(j.equip||[]).filter(e=>EQUIPMENT.Specialty.includes(e));
       const chipEquip=[...trailers,...specialty];
@@ -4315,7 +4316,7 @@ function renderWeek(){
           .replace('Ingersoll Rand ','').replace('Wacker Neuson ','').replace('Smithco ','')
           .trim()
       }
-      const crewColor=getCrewColor(j.crew||[], j.service||'');
+      const crewColor=getCrewColor(crewOnDate, j.service||'');
       const crewStyle=crewColor?`style="background:${crewColor};border-color:${crewColor}"`:'';
       const isOff = (j.services&&j.services.includes('Off'))||(j.service==='Off');
       html+=`<div class="job-chip ${st.cls}${isOff?' job-off':''}" ${crewColor?`style="background:${crewColor};border-left:3px solid rgba(0,0,0,0.15)"`:''} 

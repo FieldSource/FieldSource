@@ -3255,6 +3255,7 @@ async function loadFleet(){
       notes: r.notes||'',
       isRloc: r.is_rloc||false,
       actualBalance: r.actual_balance!=null ? Number(r.actual_balance) : null,
+      actualPayment: r.actual_payment!=null ? Number(r.actual_payment) : null,
     }));
   } catch(e){ fleetLoans = []; }
 }
@@ -3292,7 +3293,8 @@ function calcLoan(l){
   if(l.actualBalance !== null && l.actualBalance !== undefined){
     const r = l.rate / 12;
     const n = l.term;
-    const payment = r === 0 ? l.principal / n : l.principal * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1);
+    // Use actual payment from statement if stored, otherwise calculate
+    const payment = l.actualPayment || (r === 0 ? l.principal / n : l.principal * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1));
     const balance = l.actualBalance;
     const interest = balance * r;
     const principalPortion = Math.max(0, payment - interest);
@@ -4077,7 +4079,7 @@ function renderFuelTransactions(){
 function renderFuelVehicles(){
   const byVehicle = {};
   fuelTransactions.forEach(r=>{
-    const key = r.vehicleId || r.cardHolder || 'Unknown';
+    const key = cleanFuelVehicle(r);
     if(!byVehicle[key]) byVehicle[key]={vehicle:key,category:r.category,gallons:0,cost:0,count:0,distance:0};
     byVehicle[key].gallons+=r.gallons;
     byVehicle[key].cost+=r.netCost;
@@ -4107,10 +4109,44 @@ function renderFuelVehicles(){
   return html;
 }
 
+const WEX_NAME_MAP = {
+  'DAN H': 'Dan Haller', 'DAN H CAN': 'Dan Haller',
+  'DAN T': 'Dan Trubisky', 'DAN T CAN': 'Dan Trubisky',
+  'BRANDON': 'Brandon Moore', 'BRANDON CAN': 'Brandon Moore',
+  'GREG': 'Greg Crenshaw', 'GREG CAN': 'Greg Crenshaw',
+  'MATT': 'Matt Neff', 'MATT CAN': 'Matt Neff',
+  'RYAN': 'Ryan DeMay', 'RYAN CAN': 'Ryan DeMay',
+  'WES': 'Wes Ganobcik', 'WES CAN': 'Wes Ganobcik',
+  'MIKE CAN': 'Mike Haller',
+  'OFFICE VEHICLE': 'Office Vehicle',
+};
+const WEX_VEHICLE_MAP = {
+  'TR3 - 2023 LT': '2023 Silverado LT (Wes)',
+  'TR5 - RST': '2024 Silverado RST (Stith)',
+  'TR6 - Greg': '2025 Silverado LT (Greg)',
+  'TR9 - Jr.': '2024 Ford F450 (Jr)',
+  'TR10 - Dump': '2017 Ford F550 Dump',
+  'TR12 - BMoore': '2026 Silverado 3500HD (Moore)',
+  'TR15 - Senior': '2026 Silverado 3500HD (Senior)',
+  'TR16 - Stith': '2026 Silverado 3500HD (Stith)',
+};
+function cleanFuelDriver(r){
+  const card = (r.cardHolder||'').toUpperCase().trim();
+  if(WEX_NAME_MAP[card]) return WEX_NAME_MAP[card];
+  if(r.driverFirst && r.driverLast) return `${r.driverFirst} ${r.driverLast}`;
+  return r.cardHolder||'Unknown';
+}
+function cleanFuelVehicle(r){
+  const v = (r.vehicleId||'').trim();
+  for(const [k,label] of Object.entries(WEX_VEHICLE_MAP)){
+    if(v.startsWith(k)) return label;
+  }
+  return v || r.cardHolder || 'Unknown';
+}
 function renderFuelPersons(){
   const byPerson = {};
   fuelTransactions.forEach(r=>{
-    const key = r.driverFirst && r.driverLast ? `${r.driverFirst} ${r.driverLast}` : r.cardHolder||'Unknown';
+    const key = cleanFuelDriver(r);
     if(!byPerson[key]) byPerson[key]={name:key,truckGal:0,truckCost:0,canGal:0,canCost:0};
     if(r.category==='Truck'){ byPerson[key].truckGal+=r.gallons; byPerson[key].truckCost+=r.netCost; }
     else { byPerson[key].canGal+=r.gallons; byPerson[key].canCost+=r.netCost; }

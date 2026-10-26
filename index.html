@@ -528,6 +528,7 @@ const TRUCKS=[
   '2026 Chevrolet Silverado 2500HD (Matt)',
   '2026 Chevrolet Silverado 3500HD (Senior)',
   '2026 Chevrolet Silverado 3500HD (Stith)',
+  '2026 GMC Sierra 1500 (Junior)',
 ];
 // Categories for scheduling modal (no trucks)
 const EQUIP_CATS=Object.keys(EQUIPMENT);
@@ -640,6 +641,7 @@ let mileagePersonFilter = 'All';
 let mileageTripFilter = 'All';
 let reportSiteFilter = 'All';
 let reportEmployeeFilter = 'All';
+let showPastTimeOff = false;
 let woSiteFilter = 'All';
 let woStatusFilter = 'open';
 
@@ -3386,27 +3388,7 @@ function renderFleet(){
       ${canEdit?`<button onclick="openFleetModal()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">+ Add Loan</button>`:''}
     </div>
 
-    ${rlocs.length?`<div style="background:#fff7ed;border:2px solid #f59e0b;border-radius:var(--radius);padding:14px;margin-bottom:16px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <span style="font-size:16px">⚠️</span>
-        <div style="font-size:13px;font-weight:700;color:#92400e">Lines of Credit — Action Required</div>
-      </div>
-      ${rlocs.map(l=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #fde68a">
-        <div>
-          <div style="font-size:13px;font-weight:600;color:var(--text)">${l.name}</div>
-          <div style="font-size:11px;color:#92400e;margin-top:2px">${l.notes}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:1px">${l.lender} · ${(l.rate*100).toFixed(2)}% · Interest-only</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:16px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">${fmt(l.balance)}</div>
-          <div style="font-size:11px;color:#dc2626;font-weight:600">RENEW NOW</div>
-        </div>
-      </div>`).join('')}
-      <div style="display:flex;justify-content:space-between;margin-top:8px">
-        <div style="font-size:12px;font-weight:700;color:#92400e">Total LOC Balance</div>
-        <div style="font-size:14px;font-weight:700;color:#dc2626;font-family:'DM Mono',monospace">${fmt(rlocBalance)}</div>
-      </div>
-    </div>`:''}
+
 
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;border-top:3px solid var(--green)">
@@ -5824,8 +5806,8 @@ function renderTimeOff(){
 
   // Past/Denied
   if(past.length){
-    html += `<div style="margin-top:16px"><button onclick="document.getElementById('past-timeoff').style.display=document.getElementById('past-timeoff').style.display==='none'?'block':'none';this.textContent=this.textContent.includes('Show')?'Hide past':'Show past (${past.length})';" style="background:none;border:none;color:var(--text-3);font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">Show past (${past.length})</button></div>`;
-    html += `<div id="past-timeoff" style="display:none">${past.map(e=>entryHtml(e,false)).join('')}</div>`;
+    html += `<div style="margin-top:16px"><button onclick="showPastTimeOff=!showPastTimeOff;renderTimeOff();" style="background:none;border:none;color:var(--text-3);font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;text-decoration:underline">${showPastTimeOff?'Hide past':'Show past ('+past.length+')'}</button></div>`;
+    html += `<div id="past-timeoff" style="display:${showPastTimeOff?'block':'none'}">${past.map(e=>entryHtml(e,false)).join('')}</div>`;
   }
 
   document.getElementById('main-content').innerHTML = html;

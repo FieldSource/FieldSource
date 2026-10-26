@@ -3253,6 +3253,8 @@ async function loadFleet(){
       term: Number(r.term),
       startDate: r.start_date,
       notes: r.notes||'',
+      isRloc: r.is_rloc||false,
+      actualBalance: r.actual_balance!=null ? Number(r.actual_balance) : null,
     }));
   } catch(e){ fleetLoans = []; }
 }
@@ -3286,6 +3288,24 @@ async function seedFleetLoans(){
 }
 
 function calcLoan(l){
+  // If we have an actual balance from a statement, use it instead of calculated
+  if(l.actualBalance !== null && l.actualBalance !== undefined){
+    const r = l.rate / 12;
+    const n = l.term;
+    const payment = r === 0 ? l.principal / n : l.principal * (r * Math.pow(1+r, n)) / (Math.pow(1+r, n) - 1);
+    const balance = l.actualBalance;
+    const interest = balance * r;
+    const principalPortion = Math.max(0, payment - interest);
+    const payoff = new Date(l.startDate + 'T12:00:00');
+    payoff.setMonth(payoff.getMonth() + n);
+    const today = new Date(); today.setHours(0,0,0,0);
+    const start = new Date(l.startDate + 'T12:00:00');
+    let monthsElapsed = (today.getFullYear() - start.getFullYear()) * 12 + (today.getMonth() - start.getMonth());
+    if(today.getDate() < start.getDate()) monthsElapsed--;
+    const p = Math.min(Math.max(0, monthsElapsed), n);
+    const monthsRemaining = Math.max(0, n - p);
+    return { payment, balance, interest, principalPortion, monthsRemaining, payoff };
+  }
   const today = new Date(); today.setHours(0,0,0,0);
   const start = new Date(l.startDate + 'T12:00:00');
   const r = l.rate / 12;
@@ -3333,11 +3353,14 @@ function renderFleet(){
   }
 
   const LOANS = fleetLoans.map(l=>({ ...l, ...calcLoan(l) }));
+  const rlocs = LOANS.filter(l=>l.isRloc);
+  const equipment = LOANS.filter(l=>!l.isRloc);
 
-  const totalBalance  = LOANS.reduce((s,l)=>s+l.balance,0);
-  const totalPayment  = LOANS.reduce((s,l)=>s+l.payment,0);
-  const totalInterest = LOANS.reduce((s,l)=>s+l.interest,0);
-  const totalPrincipal= LOANS.reduce((s,l)=>s+l.principalPortion,0);
+  const totalBalance  = equipment.reduce((s,l)=>s+l.balance,0);
+  const totalPayment  = equipment.reduce((s,l)=>s+l.payment,0);
+  const totalInterest = equipment.reduce((s,l)=>s+l.interest,0);
+  const totalPrincipal= equipment.reduce((s,l)=>s+l.principalPortion,0);
+  const rlocBalance   = rlocs.reduce((s,l)=>s+l.balance,0);
 
   const fmt     = n => '$' + Math.round(n).toLocaleString('en-US');
   const fmt2    = n => '$' + n.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
@@ -3345,15 +3368,15 @@ function renderFleet(){
   const fmtPayoff = d => d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
 
   const LENDER_COLORS = {
-    'Ally':          {bg:'#dbeafe',text:'#1d4ed8'},
-    '1st Financial': {bg:'#ede9fe',text:'#6d28d9'},
-    'GM Financial':  {bg:'#dcfce7',text:'#14532d'},
-    'Kubota Credit': {bg:'#fef3c7',text:'#92400e'},
-    'Ford Credit':   {bg:'#fce7f3',text:'#9d174d'},
-    'Farmers National Bank of Canfield': {bg:'#f0fdf4',text:'#166534'},
+    'Ally':                  {bg:'#dbeafe',text:'#1d4ed8'},
+    'First Financial':       {bg:'#ede9fe',text:'#6d28d9'},
+    'GM Financial':          {bg:'#dcfce7',text:'#14532d'},
+    'Kubota Credit':         {bg:'#fef3c7',text:'#92400e'},
+    'Ford Credit':           {bg:'#fce7f3',text:'#9d174d'},
+    'Farmers National Bank': {bg:'#f0fdf4',text:'#166534'},
   };
 
-  const lenders = [...new Set(LOANS.map(l=>l.lender))];
+  const lenders = [...new Set(equipment.map(l=>l.lender))];
 
   let html = `<div style="margin-bottom:16px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
@@ -3361,11 +3384,33 @@ function renderFleet(){
       ${canEdit?`<button onclick="openFleetModal()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;font-family:inherit;cursor:pointer">+ Add Loan</button>`:''}
     </div>
 
+    ${rlocs.length?`<div style="background:#fff7ed;border:2px solid #f59e0b;border-radius:var(--radius);padding:14px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:16px">⚠️</span>
+        <div style="font-size:13px;font-weight:700;color:#92400e">Lines of Credit — Action Required</div>
+      </div>
+      ${rlocs.map(l=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #fde68a">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${l.name}</div>
+          <div style="font-size:11px;color:#92400e;margin-top:2px">${l.notes}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:1px">${l.lender} · ${(l.rate*100).toFixed(2)}% · Interest-only</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:16px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">${fmt(l.balance)}</div>
+          <div style="font-size:11px;color:#dc2626;font-weight:600">RENEW NOW</div>
+        </div>
+      </div>`).join('')}
+      <div style="display:flex;justify-content:space-between;margin-top:8px">
+        <div style="font-size:12px;font-weight:700;color:#92400e">Total LOC Balance</div>
+        <div style="font-size:14px;font-weight:700;color:#dc2626;font-family:'DM Mono',monospace">${fmt(rlocBalance)}</div>
+      </div>
+    </div>`:''}
+
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;border-top:3px solid var(--green)">
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:4px">Outstanding Balance</div>
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:4px">Equipment Debt</div>
         <div style="font-size:22px;font-weight:700;color:var(--text);font-family:'DM Mono',monospace">${fmt(totalBalance)}</div>
-        <div style="font-size:11px;color:var(--text-3);margin-top:2px">${LOANS.length} active loans</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">${equipment.length} loans</div>
       </div>
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;border-top:3px solid #3b82f6">
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:4px">Monthly Payment</div>
@@ -3389,7 +3434,7 @@ function renderFleet(){
 
   lenders.forEach(lender=>{
     const lc = LENDER_COLORS[lender]||{bg:'#f1f5f9',text:'#475569'};
-    const group = LOANS.filter(l=>l.lender===lender);
+    const group = equipment.filter(l=>l.lender===lender);
     const groupBalance = group.reduce((s,l)=>s+l.balance,0);
     const groupPayment = group.reduce((s,l)=>s+l.payment,0);
 

@@ -6,6 +6,7 @@ exports.handler = async function(event) {
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
+  const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
   if(!apiKey){
     return { statusCode: 500, body: JSON.stringify({ error: 'API key not configured' }) };
   }
@@ -20,7 +21,6 @@ exports.handler = async function(event) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
   }
 
-  // Limit base64 size to avoid timeouts (~10MB file limit)
   if(fileData && fileData.length > 13000000){
     return { statusCode: 413, body: JSON.stringify({ error: 'File too large for extraction' }) };
   }
@@ -46,19 +46,22 @@ exports.handler = async function(event) {
     }]
   });
 
+  const headers = {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(requestBody),
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'pdfs-2024-09-25',
+  };
+  if(workspaceId) headers['anthropic-workspace-id'] = workspaceId;
+
   try {
     const result = await new Promise((resolve, reject) => {
       const options = {
         hostname: 'api.anthropic.com',
         path: '/v1/messages',
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(requestBody),
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-beta': 'pdfs-2024-09-25',
-        }
+        headers,
       };
 
       const req = https.request(options, (res) => {
@@ -73,15 +76,12 @@ exports.handler = async function(event) {
     });
 
     const parsed = JSON.parse(result);
-
     if(parsed.error) {
       return { statusCode: 500, body: JSON.stringify({ error: parsed.error.message || 'API error' }) };
     }
 
     const text = (parsed.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-
-    // Validate it's JSON before returning
-    JSON.parse(text); // throws if invalid
+    JSON.parse(text);
 
     return {
       statusCode: 200,

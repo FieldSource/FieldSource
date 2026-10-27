@@ -5212,19 +5212,21 @@ function renderInvoices(){
       <div id="inv-upload-status" style="font-size:12px;margin-top:8px;min-height:16px"></div>
     </div>` : ''}
 
-    <div style="margin-bottom:8px">
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Project</div>
-      <div class="site-filter-row">${allProjects.map(p=>{
-        const safe=p.replace(/'/g,"\'");
-        return `<button class="site-chip${invoiceJobFilter===p?' active':''}" onclick="invoiceJobFilter='${safe}';invoiceVendorFilter='All';renderInvoices()">${p}</button>`;
-      }).join('')}</div>
-    </div>
-    <div style="margin-bottom:12px">
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Vendor</div>
-      <div class="site-filter-row">${availableVendors.map(v=>{
-        const safe=v.replace(/'/g,"\'");
-        return `<button class="site-chip${invoiceVendorFilter===v?' active':''}" onclick="invoiceVendorFilter='${safe}';renderInvoices()">${v}</button>`;
-      }).join('')}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Project</div>
+        <div class="site-filter-row" style="flex-wrap:wrap">${allProjects.map(p=>{
+          const safe=p.replace(/'/g,"\\'");
+          return `<button class="site-chip${invoiceJobFilter===p?' active':''}" onclick="invoiceJobFilter='${safe}';invoiceVendorFilter='All';renderInvoices()">${p}</button>`;
+        }).join('')}</div>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Vendor</div>
+        <div class="site-filter-row" style="flex-wrap:wrap">${availableVendors.map(v=>{
+          const safe=v.replace(/'/g,"\\'");
+          return `<button class="site-chip${invoiceVendorFilter===v?' active':''}" onclick="invoiceVendorFilter='${safe}';renderInvoices()">${v}</button>`;
+        }).join('')}</div>
+      </div>
     </div>
     <div style="margin-bottom:12px">
       <input type="text" placeholder="Search..." value="${invoiceSearch}"

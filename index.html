@@ -5009,6 +5009,83 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
   }
 }
 
+function openInvoiceEditModal(id){
+  const f = invoiceFiles.find(x=>x.id===id);
+  if(!f) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'inv-edit-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Edit Invoice</div>
+    <div class="form-group">
+      <label class="form-label">Project *</label>
+      <select id="inv-edit-project" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
+        ${CLIENTS.map(c=>`<option value="${c}"${c===f.projectName?' selected':''}>${c}</option>`).join('')}
+      </select>
+      <div style="margin-top:8px">
+        <label class="form-label" style="color:var(--text-3)">Or enter a new project name</label>
+        <input type="text" id="inv-edit-new-project" placeholder="Type new project name to override..." style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Vendor *</label>
+      <input type="text" id="inv-edit-vendor" value="${f.vendorName||''}" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Amount</label>
+        <input type="number" id="inv-edit-amount" step="0.01" value="${f.amount||''}" placeholder="0.00" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Invoice Date</label>
+        <input type="date" id="inv-edit-date" value="${f.invoiceDate||''}" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Invoice #</label>
+        <input type="text" id="inv-edit-invnum" value="${f.invoiceNum||''}" placeholder="e.g. 9725" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label class="form-label">Notes</label>
+      <input type="text" id="inv-edit-notes" value="${f.notes||''}" placeholder="Optional description" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('inv-edit-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="inv-edit-save">Save Changes</button>
+    </div>
+  </div>`;
+
+  overlay.querySelector('#inv-edit-save').onclick = async function(){
+    const newProj = document.getElementById('inv-edit-new-project').value.trim();
+    const proj = newProj || document.getElementById('inv-edit-project').value;
+    const vend = document.getElementById('inv-edit-vendor').value.trim();
+    const amount = parseFloat(document.getElementById('inv-edit-amount').value)||null;
+    const date = document.getElementById('inv-edit-date').value||null;
+    const invnum = document.getElementById('inv-edit-invnum').value.trim();
+    const notes = document.getElementById('inv-edit-notes').value.trim();
+    if(!vend){ alert('Vendor is required.'); return; }
+    this.textContent = 'Saving...';
+    try {
+      await sbFetch('PATCH', `/rest/v1/invoice_files?id=eq.${id}`, {
+        project_name: proj,
+        vendor_name: vend,
+        amount: amount,
+        invoice_date: date||null,
+        invoice_num: invnum,
+        notes: notes,
+      });
+      await loadInvoices();
+      document.getElementById('inv-edit-overlay').remove();
+      renderInvoices();
+    } catch(e){ alert('Save failed: ' + e.message); this.textContent = 'Save Changes'; }
+  };
+
+  document.body.appendChild(overlay);
+}
+
 function showInvoiceConfirmModal(file, extracted, notes){
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -5215,17 +5292,15 @@ function renderInvoices(){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
       <div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Project</div>
-        <div class="site-filter-row" style="flex-wrap:wrap">${allProjects.map(p=>{
-          const safe=p.replace(/'/g,"\\'");
-          return `<button class="site-chip${invoiceJobFilter===p?' active':''}" onclick="invoiceJobFilter='${safe}';invoiceVendorFilter='All';renderInvoices()">${p}</button>`;
-        }).join('')}</div>
+        <select onchange="invoiceJobFilter=this.value;invoiceVendorFilter='All';renderInvoices()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+          ${allProjects.map(p=>`<option value="${p}"${invoiceJobFilter===p?' selected':''}>${p}</option>`).join('')}
+        </select>
       </div>
       <div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Vendor</div>
-        <div class="site-filter-row" style="flex-wrap:wrap">${availableVendors.map(v=>{
-          const safe=v.replace(/'/g,"\\'");
-          return `<button class="site-chip${invoiceVendorFilter===v?' active':''}" onclick="invoiceVendorFilter='${safe}';renderInvoices()">${v}</button>`;
-        }).join('')}</div>
+        <select onchange="invoiceVendorFilter=this.value;renderInvoices()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+          ${availableVendors.map(v=>`<option value="${v}"${invoiceVendorFilter===v?' selected':''}>${v}</option>`).join('')}
+        </select>
       </div>
     </div>
     <div style="margin-bottom:12px">
@@ -5263,6 +5338,7 @@ function renderInvoices(){
         <div style="color:var(--text-3)">${date}</div>
         <div style="display:flex;gap:6px">
           <button onclick="downloadInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Download" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">⬇</button>
+          ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
           ${canUpload?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
         </div>
       </div>`;

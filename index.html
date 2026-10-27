@@ -5042,6 +5042,10 @@ function showInvoiceConfirmModal(file, extracted, notes){
       <select id="inv-confirm-project" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
         ${CLIENTS.map(c=>`<option value="${c}"${c===matchedClient?' selected':''}>${c}</option>`).join('')}
       </select>
+      <div style="margin-top:8px">
+        <label class="form-label" style="color:var(--text-3)">Or enter a new project name</label>
+        <input type="text" id="inv-confirm-new-project" placeholder="Type new project name to override..." value="${!matchedClient&&suggestedProject?suggestedProject:''}" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
     </div>
     <div class="form-group">
       <label class="form-label">Vendor *</label>

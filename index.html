@@ -4984,6 +4984,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${sbToken()}`,
+        'apikey': SUPABASE_KEY,
         'Content-Type': file.type||'application/octet-stream',
         'x-upsert': 'true',
       },
@@ -5097,6 +5098,7 @@ async function downloadInvoiceFile(filePath, fileName, projectName){
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${sbToken()}`,
+        'apikey': SUPABASE_KEY,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ expiresIn: 60 }),
@@ -5119,7 +5121,7 @@ async function deleteInvoiceFile(id, filePath, fileName){
     // Delete from storage
     await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/${INVOICE_BUCKET}/${filePath}`, {
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${sbToken()}` },
+      headers: { 'Authorization': `Bearer ${sbToken()}`, 'apikey': SUPABASE_KEY },
     });
     // Delete metadata
     await sbFetch('DELETE', `/rest/v1/invoice_files?id=eq.${id}`);

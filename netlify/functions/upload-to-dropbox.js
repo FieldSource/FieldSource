@@ -21,10 +21,10 @@ exports.handler = async function(event) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
   }
 
-  // Build Dropbox path: /Accounts Payable/Project/Vendor/filename
+  // Build Dropbox path matching existing folder structure
   const safeProject = projectName.replace(/[<>:"/\\|?*]/g, '_');
   const safeVendor = vendorName.replace(/[<>:"/\\|?*]/g, '_');
-  const dropboxPath = `/Accounts Payable/${safeProject}/${safeVendor}/${fileName}`;
+  const dropboxPath = `/Field Source Ohio/Accounts Payable/${safeProject}/${safeVendor}/${fileName}`;
 
   const fileBuffer = Buffer.from(fileData, 'base64');
 

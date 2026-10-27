@@ -429,6 +429,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
     <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()">Clients</button>
     <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'))">Estimates</button>
+    <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Invoices</button>
   </div>
 </div>
 
@@ -4230,12 +4231,12 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -4273,6 +4274,7 @@ function render(){
   else if(view==='fleet-loans') renderFleet();
   else if(view==='fuel') renderFuel();
   else if(view==='estimates') renderEstimates();
+  else if(view==='invoices') renderInvoices();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
 }
@@ -4835,6 +4837,405 @@ function toggleDayBtn(i){
 }
 function getSelectedDays(){
   return null; // job-level day picker removed — per-person days used instead
+}
+
+// ── INVOICES ─────────────────────────────────────────────────────────────────
+let invoiceFiles = [];
+let invoiceJobFilter = 'All';
+let invoiceSearch = '';
+let invoiceLoaded = false;
+const INVOICE_BUCKET = 'invoices';
+
+async function loadInvoices(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/invoice_files?select=*&order=uploaded_at.desc');
+    invoiceFiles = (data||[]).map(r=>({
+      id: r.id,
+      jobId: r.job_id||'',
+      projectName: r.project_name||'',
+      fileName: r.file_name||'',
+      filePath: r.file_path||'',
+      fileSize: Number(r.file_size)||0,
+      fileType: r.file_type||'',
+      uploadedBy: r.uploaded_by||'',
+      uploadedAt: r.uploaded_at||'',
+      notes: r.notes||'',
+      vendorName: r.vendor_name||'',
+    }));
+    invoiceLoaded = true;
+  } catch(e){ invoiceFiles = []; invoiceLoaded = true; }
+}
+
+async function extractInvoiceData(file){
+  // Convert PDF/image to base64 and send to Claude for extraction
+  const base64 = await new Promise((res,rej)=>{
+    const r = new FileReader();
+    r.onload = ()=>res(r.result.split(',')[1]);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+
+  const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  const isImage = file.type.startsWith('image/');
+
+  if(!isPDF && !isImage) return null; // non-readable file type
+
+  const contentBlock = isPDF
+    ? { type:'document', source:{ type:'base64', media_type:'application/pdf', data:base64 } }
+    : { type:'image', source:{ type:'base64', media_type:file.type, data:base64 } };
+
+  const clientList = CLIENTS.join(', ');
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 1000,
+      messages: [{
+        role: 'user',
+        content: [
+          contentBlock,
+          { type:'text', text: `Extract invoice details from this document. Return ONLY valid JSON with these fields:
+{
+  "vendor": "vendor/supplier company name",
+  "project": "project or client name this invoice is for (match to one of these if possible: ${clientList})",
+  "amount": "total invoice amount as number or null",
+  "invoice_number": "invoice number or null",
+  "invoice_date": "date in YYYY-MM-DD format or null",
+  "confidence": "high/medium/low — how confident you are in the project match",
+  "notes": "brief description of what this invoice is for"
+}
+If you cannot determine a field, use null. Return only the JSON object, no other text.` }
+        ]
+      }]
+    })
+  });
+
+  const data = await response.json();
+  const text = data.content?.[0]?.text||'';
+  try {
+    const clean = text.replace(/\`\`\`json|\`\`\`/g,'').trim();
+    return JSON.parse(clean);
+  } catch(e){ return null; }
+}
+
+async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtraction=false){
+  if(!file) return;
+  const maxSize = 25 * 1024 * 1024;
+  if(file.size > maxSize){ alert('File too large. Max 25MB.'); return; }
+
+  const statusEl = document.getElementById('inv-upload-status');
+  if(statusEl){ statusEl.textContent = 'Reading invoice...'; statusEl.style.color='var(--text-3)'; }
+
+  // If no project specified and not skipping, try AI extraction
+  if(!skipExtraction && (!projectName || projectName==='')) {
+    try {
+      const extracted = await extractInvoiceData(file);
+      if(extracted){
+        // Check if project matches a known client
+        const matchedClient = CLIENTS.find(c=>
+          c.toLowerCase()===extracted.project?.toLowerCase() ||
+          extracted.project?.toLowerCase().includes(c.toLowerCase()) ||
+          c.toLowerCase().includes(extracted.project?.toLowerCase()||'xxx')
+        );
+
+        const needsConfirm = !matchedClient || extracted.confidence==='low' || !extracted.project;
+
+        if(needsConfirm){
+          // Show confirmation modal
+          showInvoiceConfirmModal(file, extracted, notes);
+          if(statusEl){ statusEl.textContent = ''; }
+          return;
+        } else {
+          // Auto-file with high confidence match
+          projectName = matchedClient;
+          if(!notes && extracted.notes) notes = extracted.notes;
+          if(statusEl){ statusEl.textContent = `Auto-filed: ${extracted.vendor} → ${projectName}`; statusEl.style.color='var(--green-dark)'; }
+        }
+      } else {
+        // Can't read file — show manual picker
+        showInvoiceConfirmModal(file, null, notes);
+        if(statusEl){ statusEl.textContent = ''; }
+        return;
+      }
+    } catch(e){
+      console.warn('AI extraction failed:', e);
+      showInvoiceConfirmModal(file, null, notes);
+      if(statusEl){ statusEl.textContent = ''; }
+      return;
+    }
+  }
+
+  if(statusEl){ statusEl.textContent = 'Uploading...'; statusEl.style.color='var(--text-3)'; }
+
+  // Build folder path: Project/Vendor/filename
+  const vendor = (window._pendingVendor||'').replace(/[^a-zA-Z0-9 _-]/g,'').trim() || 'Unknown Vendor';
+  window._pendingVendor = null;
+  const safeProject = (projectName||'General').replace(/[^a-zA-Z0-9 _-]/g,'_');
+  const safeVendor = vendor.replace(/\s+/g,'_');
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+  const ts = new Date().toISOString().replace(/[:.]/g,'-');
+  const filePath = `${safeProject}/${safeVendor}/${ts}_${safeName}`;
+
+  try {
+    const arrayBuf = await file.arrayBuffer();
+    const uploadRes = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/${INVOICE_BUCKET}/${filePath}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${sbToken()}`,
+        'Content-Type': file.type||'application/octet-stream',
+        'x-upsert': 'true',
+      },
+      body: arrayBuf,
+    });
+    if(!uploadRes.ok){ throw new Error('Storage upload failed: ' + uploadRes.statusText); }
+
+    const meta = {
+      job_id: null,
+      project_name: projectName||'General',
+      vendor_name: vendor,
+      file_name: file.name,
+      file_path: filePath,
+      file_size: file.size,
+      file_type: file.type||'application/octet-stream',
+      uploaded_by: currentUser?.email||'',
+      notes: notes,
+    };
+    await sbFetch('POST', '/rest/v1/invoice_files', meta);
+    await loadInvoices();
+    if(statusEl){ statusEl.textContent = `✓ Filed under ${projectName} / ${vendor}`; statusEl.style.color='var(--green-dark)'; }
+    renderInvoices();
+  } catch(e){
+    console.error('Upload error:', e);
+    if(statusEl){ statusEl.textContent = 'Upload failed: ' + e.message; statusEl.style.color='#dc2626'; }
+  }
+}
+
+function showInvoiceConfirmModal(file, extracted, notes){
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'inv-confirm-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  const suggestedProject = extracted?.project||'';
+  const suggestedVendor = extracted?.vendor||'';
+  const matchedClient = CLIENTS.find(c=>
+    c.toLowerCase()===suggestedProject.toLowerCase() ||
+    suggestedProject.toLowerCase().includes(c.toLowerCase())
+  ) || '';
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Confirm Invoice Filing</div>
+    ${extracted ? `<div style="background:var(--accent);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px;font-size:13px">
+      <div style="font-weight:600;color:var(--text);margin-bottom:4px">📄 ${file.name}</div>
+      ${extracted.vendor?`<div style="color:var(--text-2)">Vendor detected: <strong>${extracted.vendor}</strong></div>`:''}
+      ${extracted.amount?`<div style="color:var(--text-2)">Amount: <strong>$${Number(extracted.amount).toLocaleString()}</strong></div>`:''}
+      ${extracted.invoice_number?`<div style="color:var(--text-2)">Invoice #: <strong>${extracted.invoice_number}</strong></div>`:''}
+      ${extracted.notes?`<div style="color:var(--text-3);font-size:11px;margin-top:4px">${extracted.notes}</div>`:''}
+    </div>` : `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--radius-sm);padding:10px;margin-bottom:16px;font-size:12px;color:#92400e">
+      Could not automatically read this file. Please select the project and vendor manually.
+    </div>`}
+    <div class="form-group">
+      <label class="form-label">Project *</label>
+      <select id="inv-confirm-project" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
+        ${CLIENTS.map(c=>`<option value="${c}"${c===matchedClient?' selected':''}>${c}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Vendor *</label>
+      <input type="text" id="inv-confirm-vendor" value="${suggestedVendor}" placeholder="e.g. Syngenta, Ewing Irrigation..." style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <input type="text" id="inv-confirm-notes" value="${notes||extracted?.notes||''}" placeholder="Optional description" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('inv-confirm-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="
+        const proj = document.getElementById('inv-confirm-project').value;
+        const vend = document.getElementById('inv-confirm-vendor').value.trim();
+        const n = document.getElementById('inv-confirm-notes').value.trim();
+        if(!vend){ alert('Please enter a vendor name.'); return; }
+        window._pendingVendor = vend;
+        document.getElementById('inv-confirm-overlay').remove();
+        uploadInvoiceFile('', proj, ${JSON.stringify(file.name)+'/* file ref lost — need closure */' ? 'window._pendingFile' : 'window._pendingFile'}, n, true);
+      ">File Invoice</button>
+    </div>
+  </div>`;
+
+  // Store file reference for after modal confirm
+  window._pendingFile = file;
+  window._pendingVendor = suggestedVendor;
+
+  // Fix the onclick to use closure properly
+  overlay.querySelector('.btn-save').onclick = function(){
+    const proj = document.getElementById('inv-confirm-project').value;
+    const vend = document.getElementById('inv-confirm-vendor').value.trim();
+    const n = document.getElementById('inv-confirm-notes').value.trim();
+    if(!vend){ alert('Please enter a vendor name.'); return; }
+    window._pendingVendor = vend;
+    document.getElementById('inv-confirm-overlay').remove();
+    uploadInvoiceFile('', proj, window._pendingFile, n, true);
+  };
+
+  document.body.appendChild(overlay);
+}
+
+function sbToken(){
+  return currentToken || localStorage.getItem('fs_token') || SUPABASE_KEY;
+}
+
+async function downloadInvoiceFile(filePath, fileName, projectName){
+  try {
+    const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/${INVOICE_BUCKET}/${filePath}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${sbToken()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ expiresIn: 60 }),
+    });
+    const data = await res.json();
+    if(!data.signedURL) throw new Error('Could not generate download link');
+    const fullUrl = `https://pldlvtlbgxizbppaliag.supabase.co/storage/v1${data.signedURL}`;
+    const a = document.createElement('a');
+    a.href = fullUrl;
+    const date = new Date().toISOString().split('T')[0].replace(/-/g,'');
+    const ext = fileName.includes('.') ? fileName.split('.').pop() : '';
+    a.download = `${(projectName||'invoice').replace(/\s+/g,'_')}_${date}.${ext}`;
+    a.click();
+  } catch(e){ alert('Download failed: ' + e.message); }
+}
+
+async function deleteInvoiceFile(id, filePath, fileName){
+  if(!confirm(`Delete "${fileName}"? This cannot be undone.`)) return;
+  try {
+    // Delete from storage
+    await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/${INVOICE_BUCKET}/${filePath}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${sbToken()}` },
+    });
+    // Delete metadata
+    await sbFetch('DELETE', `/rest/v1/invoice_files?id=eq.${id}`);
+    invoiceFiles = invoiceFiles.filter(f=>f.id!==id);
+    renderInvoices();
+  } catch(e){ alert('Delete failed: ' + e.message); }
+}
+
+function fmtFileSize(bytes){
+  if(!bytes) return '—';
+  if(bytes < 1024) return bytes + ' B';
+  if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1024/1024).toFixed(1) + ' MB';
+}
+
+function fileIcon(type){
+  if(!type) return '📄';
+  if(type.includes('pdf')) return '📕';
+  if(type.includes('image')) return '🖼️';
+  if(type.includes('spreadsheet')||type.includes('excel')||type.includes('xlsx')) return '📊';
+  if(type.includes('word')||type.includes('docx')) return '📝';
+  return '📄';
+}
+
+function renderInvoices(){
+  const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
+  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com'].includes(userEmail);
+
+  // Unique projects from files + from jobs table
+  const projectsFromFiles = [...new Set(invoiceFiles.map(f=>f.projectName).filter(Boolean))].sort();
+  const allProjects = ['All', ...projectsFromFiles];
+
+  let filtered = invoiceFiles;
+  if(invoiceJobFilter !== 'All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  if(invoiceSearch.trim()) {
+    const q = invoiceSearch.trim().toLowerCase();
+    filtered = filtered.filter(f=>f.fileName.toLowerCase().includes(q)||f.projectName.toLowerCase().includes(q)||f.notes.toLowerCase().includes(q));
+  }
+
+  // Unique job names for upload dropdown
+  const jobOptions = [...new Set(jobs.map(j=>j.client).filter(Boolean))].sort();
+
+  let html = `<div style="margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+      <div style="font-size:18px;font-weight:700;color:var(--text)">Invoices</div>
+    </div>
+
+    ${canUpload ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Upload Invoice</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label class="form-label">Project</label>
+          <select id="inv-project" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+            ${jobOptions.map(j=>`<option value="${j.replace(/"/g,'&quot;')}">${j}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Notes (optional)</label>
+          <input type="text" id="inv-notes" placeholder="e.g. August invoice, Permit fees..." style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        </div>
+      </div>
+      <div id="inv-drop-zone" style="border:2px dashed var(--border-2);border-radius:var(--radius-sm);padding:24px;text-align:center;cursor:pointer;transition:border-color .15s"
+        ondragover="event.preventDefault();this.style.borderColor='var(--green)'"
+        ondragleave="this.style.borderColor='var(--border-2)'"
+        ondrop="event.preventDefault();this.style.borderColor='var(--border-2)';const f=event.dataTransfer.files[0];if(f){const p=document.getElementById('inv-project');const n=document.getElementById('inv-notes');uploadInvoiceFile('',p.value,f,n.value);}">
+        <div style="font-size:24px;margin-bottom:6px">📁</div>
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:8px">Drag & drop file here, or</div>
+        <label style="padding:6px 16px;background:var(--green);color:#fff;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">
+          Browse Files
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.docx,.csv,.xls" style="display:none"
+            onchange="const p=document.getElementById('inv-project');const n=document.getElementById('inv-notes');uploadInvoiceFile('',p.value,this.files[0],n.value).then(()=>this.value='')">
+        </label>
+        <div style="font-size:11px;color:var(--text-3);margin-top:8px">PDF, image, Excel, Word — max 25MB</div>
+      </div>
+      <div id="inv-upload-status" style="font-size:12px;margin-top:8px;min-height:16px"></div>
+    </div>` : ''}
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+      <input type="text" placeholder="Search files or projects..." value="${invoiceSearch}"
+        oninput="invoiceSearch=this.value;renderInvoices()"
+        style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+      <select onchange="invoiceJobFilter=this.value;renderInvoices()" style="padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+        ${allProjects.map(p=>`<option value="${p}"${invoiceJobFilter===p?' selected':''}>${p}</option>`).join('')}
+      </select>
+    </div>`;
+
+  if(!filtered.length){
+    html += `<div style="text-align:center;padding:48px;color:var(--text-3);font-size:14px">${invoiceFiles.length?'No files match your search.':'No invoices uploaded yet.'}</div>`;
+  } else {
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="display:grid;grid-template-columns:28px 2fr 1fr 80px 90px 80px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
+        ${['','File','Project / Vendor','Size','Date',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+      </div>`;
+
+    filtered.forEach(f=>{
+      const date = f.uploadedAt ? new Date(f.uploadedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+      const safe = f.id.replace(/'/g,"\\'");
+      const safePath = f.filePath.replace(/'/g,"\\'");
+      const safeFile = f.fileName.replace(/'/g,"\\'");
+      const safeProject = f.projectName.replace(/'/g,"\\'");
+      html += `<div style="display:grid;grid-template-columns:28px 2fr 1fr 80px 90px 80px;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:13px">
+        <div style="font-size:18px">${fileIcon(f.fileType)}</div>
+        <div>
+          <div style="font-weight:500;color:var(--text)">${f.fileName}</div>
+          ${f.notes?`<div style="font-size:11px;color:var(--text-3);margin-top:1px">${f.notes}</div>`:''}
+        </div>
+        <div><div style="color:var(--text-2);font-size:12px">${f.projectName}</div>${f.vendorName?`<div style="color:var(--text-3);font-size:11px">${f.vendorName}</div>`:''}</div>
+        <div style="color:var(--text-3)">${fmtFileSize(f.fileSize)}</div>
+        <div style="color:var(--text-3)">${date}</div>
+        <div style="display:flex;gap:6px">
+          <button onclick="downloadInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Download" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">⬇</button>
+          ${canUpload?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
+        </div>
+      </div>`;
+    });
+    html += `</div><div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">${filtered.length} file${filtered.length!==1?'s':''}</div>`;
+  }
+
+  html += '</div>';
+  document.getElementById('main-content').innerHTML = html;
 }
 function toggleTouchUp(){
   touchUpOn=!touchUpOn;

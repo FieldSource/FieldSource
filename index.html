@@ -4867,7 +4867,11 @@ async function loadInvoices(){
 }
 
 async function extractInvoiceData(file){
-  // Convert PDF/image to base64 and send to Claude for extraction
+  const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  const isImage = file.type.startsWith('image/');
+  if(!isPDF && !isImage) return null;
+
+  // Convert to base64
   const base64 = await new Promise((res,rej)=>{
     const r = new FileReader();
     r.onload = ()=>res(r.result.split(',')[1]);
@@ -4875,49 +4879,24 @@ async function extractInvoiceData(file){
     r.readAsDataURL(file);
   });
 
-  const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-  const isImage = file.type.startsWith('image/');
-
-  if(!isPDF && !isImage) return null; // non-readable file type
-
-  const contentBlock = isPDF
-    ? { type:'document', source:{ type:'base64', media_type:'application/pdf', data:base64 } }
-    : { type:'image', source:{ type:'base64', media_type:file.type, data:base64 } };
-
-  const clientList = CLIENTS.join(', ');
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: [
-          contentBlock,
-          { type:'text', text: `Extract invoice details from this document. Return ONLY valid JSON with these fields:
-{
-  "vendor": "vendor/supplier company name",
-  "project": "project or client name this invoice is for (match to one of these if possible: ${clientList})",
-  "amount": "total invoice amount as number or null",
-  "invoice_number": "invoice number or null",
-  "invoice_date": "date in YYYY-MM-DD format or null",
-  "confidence": "high/medium/low — how confident you are in the project match",
-  "notes": "brief description of what this invoice is for"
-}
-If you cannot determine a field, use null. Return only the JSON object, no other text.` }
-        ]
-      }]
-    })
-  });
-
-  const data = await response.json();
-  const text = data.content?.[0]?.text||'';
   try {
-    const clean = text.replace(/\`\`\`json|\`\`\`/g,'').trim();
-    return JSON.parse(clean);
-  } catch(e){ return null; }
+    const response = await fetch('/.netlify/functions/extract-invoice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileData: base64,
+        fileType: isPDF ? 'application/pdf' : file.type,
+        clientList: CLIENTS.join(', '),
+      }),
+    });
+
+    if(!response.ok) throw new Error('Extraction service error: ' + response.status);
+    const text = await response.text();
+    return JSON.parse(text);
+  } catch(e){
+    console.warn('Invoice extraction failed:', e);
+    return null;
+  }
 }
 
 async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtraction=false){

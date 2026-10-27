@@ -7709,7 +7709,7 @@ function showApp(){
   if(bizopsPortalTab) bizopsPortalTab.style.display = PORTAL_EMAILS.includes(userEmail) ? '' : 'none';
   if(consultingPortalTab) consultingPortalTab.style.display = CONSULTING_EMAILS.includes(userEmail) ? '' : 'none';
   // Pipeline/PO only in bizops now — tabs are inside bizops-bar which is hidden by default
-  if(plTab2) plTab2.style.display = ''; // visible inside bizops-bar
+  if(plTab2) plTab2.style.display = 'none'; // hidden for now
   const HOURS_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const hoursTab = document.getElementById('hours-tab');
   if(hoursTab) hoursTab.style.display = HOURS_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
@@ -7722,7 +7722,7 @@ function showApp(){
   const estimatesTab = document.getElementById('estimates-tab');
   if(estimatesTab) estimatesTab.style.display = ESTIMATES_EMAILS.includes(userEmail) ? '' : 'none';
   const poTab2 = document.getElementById('po-tab');
-  if(poTab2) poTab2.style.display = ''; // visible inside bizops-bar
+  if(poTab2) poTab2.style.display = 'none'; // hidden for now
   const allTabs = Array.from(document.querySelectorAll('.vtab'));
   const mileageTab = document.getElementById('mileage-tab');
   if(mileageTab) mileageTab.style.display = 'none'; // hidden for now

@@ -5171,28 +5171,20 @@ function renderInvoices(){
 
     ${canUpload ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
       <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Upload Invoice</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
-        <div>
-          <label class="form-label">Project</label>
-          <select id="inv-project" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
-            ${jobOptions.map(j=>`<option value="${j.replace(/"/g,'&quot;')}">${j}</option>`).join('')}
-          </select>
-        </div>
-        <div>
-          <label class="form-label">Notes (optional)</label>
-          <input type="text" id="inv-notes" placeholder="e.g. August invoice, Permit fees..." style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
-        </div>
+      <div style="margin-bottom:10px">
+        <label class="form-label">Notes (optional)</label>
+        <input type="text" id="inv-notes" placeholder="e.g. August invoice, Permit fees..." style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
       </div>
       <div id="inv-drop-zone" style="border:2px dashed var(--border-2);border-radius:var(--radius-sm);padding:24px;text-align:center;cursor:pointer;transition:border-color .15s"
         ondragover="event.preventDefault();this.style.borderColor='var(--green)'"
         ondragleave="this.style.borderColor='var(--border-2)'"
-        ondrop="event.preventDefault();this.style.borderColor='var(--border-2)';const f=event.dataTransfer.files[0];if(f){const p=document.getElementById('inv-project');const n=document.getElementById('inv-notes');uploadInvoiceFile('',p.value,f,n.value);}">
+        ondrop="event.preventDefault();this.style.borderColor='var(--border-2)';const f=event.dataTransfer.files[0];if(f){const n=document.getElementById('inv-notes');uploadInvoiceFile('','',f,n.value);}">
         <div style="font-size:24px;margin-bottom:6px">📁</div>
         <div style="font-size:13px;color:var(--text-2);margin-bottom:8px">Drag & drop file here, or</div>
         <label style="padding:6px 16px;background:var(--green);color:#fff;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">
           Browse Files
           <input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.docx,.csv,.xls" style="display:none"
-            onchange="const p=document.getElementById('inv-project');const n=document.getElementById('inv-notes');uploadInvoiceFile('',p.value,this.files[0],n.value).then(()=>this.value='')">
+            onchange="const n=document.getElementById('inv-notes');const ff=this.files[0];uploadInvoiceFile('','',ff,n.value).then(()=>this.value='')">
         </label>
         <div style="font-size:11px;color:var(--text-3);margin-top:8px">PDF, image, Excel, Word — max 25MB</div>
       </div>

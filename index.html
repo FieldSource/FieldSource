@@ -4984,6 +4984,21 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       window._pendingInvoiceNum = null;
     }
 
+    // Upload to Dropbox Accounts Payable folder
+    try {
+      const base64 = await new Promise((res,rej)=>{
+        const r = new FileReader();
+        r.onload = ()=>res(r.result.split(',')[1]);
+        r.onerror = rej;
+        r.readAsDataURL(file);
+      });
+      await fetch('/.netlify/functions/upload-to-dropbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileData: base64, fileName: file.name, projectName, vendorName: vendor }),
+      });
+    } catch(e){ console.warn('Dropbox upload failed:', e); }
+
     await loadInvoices();
     if(statusEl){ statusEl.textContent = `✓ Filed under ${projectName} / ${vendor}`; statusEl.style.color='var(--green-dark)'; }
     renderInvoices();

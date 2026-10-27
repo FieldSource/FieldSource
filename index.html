@@ -430,6 +430,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()">Clients</button>
     <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'))">Estimates</button>
     <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Invoices</button>
+    <button class="vtab" id="inv-approval-tab" onclick="loadInvApproval().then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
   </div>
 </div>
 
@@ -4231,12 +4232,12 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -4275,6 +4276,7 @@ function render(){
   else if(view==='fuel') renderFuel();
   else if(view==='estimates') renderEstimates();
   else if(view==='invoices') renderInvoices();
+  else if(view==='inv-approval') renderInvApproval();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
 }
@@ -4837,6 +4839,540 @@ function toggleDayBtn(i){
 }
 function getSelectedDays(){
   return null; // job-level day picker removed — per-person days used instead
+}
+
+// ── INVOICE APPROVAL WORKFLOW ─────────────────────────────────────────────────
+let invApprovalList = [];
+let invApprovalLoaded = false;
+const APPROVER_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','wes@fieldsourceohio.com','brian@fieldsourceohio.com'];
+const UPLOADER_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com'];
+
+async function loadInvApproval(){
+  if(invApprovalLoaded) return;
+  try {
+    const data = await sbFetch('GET', '/rest/v1/invoices_test?select=*&order=uploaded_at.desc');
+    invApprovalList = (data||[]).map(r=>({
+      id: r.id,
+      jobId: r.job_id||'',
+      poNumber: r.po_number||'',
+      invoiceDate: r.invoice_date||'',
+      vendorName: r.vendor_name||'',
+      invoiceAmount: Number(r.invoice_amount)||0,
+      invoiceFileName: r.invoice_file_name||'',
+      invoiceFileUrl: r.invoice_file_url||'',
+      description: r.description||'',
+      uploadedBy: r.uploaded_by||'',
+      uploadedAt: r.uploaded_at||'',
+      status: r.approval_status||'Pending',
+      approvedBy: r.approved_by||'',
+      approvedAt: r.approved_at||'',
+      approvalNotes: r.approval_notes||'',
+      finalPoNumber: r.final_po_number||'',
+      dropboxPath: r.dropbox_path||'',
+      rejectionReason: r.rejection_reason||'',
+      nextStep: r.next_step||'',
+      assignedTo: r.assigned_to||'',
+      followUpNotes: r.follow_up_notes||'',
+      resolvedAt: r.resolved_at||'',
+    }));
+    // Update badge
+    const pending = invApprovalList.filter(i=>i.status==='Pending').length;
+    const badge = document.getElementById('inv-approval-badge');
+    if(badge){ badge.textContent=pending; badge.style.display=pending?'':'none'; }
+    invApprovalLoaded = true;
+  } catch(e){ invApprovalList = []; invApprovalLoaded = true; }
+}
+
+async function reloadInvApproval(){
+  invApprovalLoaded = false;
+  await loadInvApproval();
+  renderInvApproval();
+}
+
+async function submitInvApprovalUpload(){
+  const jobId = document.getElementById('ia-job-select').value;
+  const vendorName = document.getElementById('ia-vendor').value.trim();
+  const amount = parseFloat(document.getElementById('ia-amount').value)||0;
+  const invoiceDate = document.getElementById('ia-date').value;
+  const description = document.getElementById('ia-desc').value.trim();
+  const fileInput = document.getElementById('ia-file');
+  const file = fileInput?.files[0];
+
+  if(!jobId||!vendorName||!amount){ alert('Job, vendor, and amount are required.'); return; }
+
+  const statusEl = document.getElementById('ia-upload-status');
+  if(statusEl){ statusEl.textContent='Uploading...'; statusEl.style.color='var(--text-3)'; }
+
+  let fileUrl = '', fileName = '';
+  if(file){
+    try {
+      const ab = await file.arrayBuffer();
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+      fileName = `${ts}_${safeName}`;
+      const path = `${jobId}/${fileName}`;
+      const up = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/invoices-test/${path}`, {
+        method:'POST',
+        headers:{ 'Authorization':`Bearer ${sbToken()}`, 'apikey':SUPABASE_KEY, 'Content-Type':file.type||'application/octet-stream', 'x-upsert':'true' },
+        body: ab,
+      });
+      if(up.ok) fileUrl = path;
+    } catch(e){ console.warn('File upload failed:', e); }
+  }
+
+  // Get PO number from jobs
+  const job = jobs.find(j=>j.id===jobId||j.client===jobId);
+  const poNum = job?.poNumber||'';
+
+  try {
+    await sbFetch('POST', '/rest/v1/invoices_test', {
+      job_id: jobId,
+      po_number: poNum,
+      invoice_date: invoiceDate||null,
+      vendor_name: vendorName,
+      invoice_amount: amount,
+      invoice_file_name: file?.name||'',
+      invoice_file_url: fileUrl,
+      description,
+      uploaded_by: currentUser?.email||'',
+      approval_status: 'Pending',
+    });
+    if(statusEl){ statusEl.textContent='✓ Invoice submitted for approval'; statusEl.style.color='var(--green-dark)'; }
+    if(fileInput) fileInput.value='';
+    document.getElementById('ia-vendor').value='';
+    document.getElementById('ia-amount').value='';
+    document.getElementById('ia-date').value='';
+    document.getElementById('ia-desc').value='';
+    await reloadInvApproval();
+  } catch(e){
+    if(statusEl){ statusEl.textContent='Failed: '+e.message; statusEl.style.color='#dc2626'; }
+  }
+}
+
+function openApproveModal(id){
+  const inv = invApprovalList.find(i=>i.id===id);
+  if(!inv) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'ia-approve-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  // Build PO options from jobs
+  const poOptions = [...new Set(jobs.map(j=>j.poNumber||'').filter(Boolean))];
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Approve Invoice</div>
+    <div style="background:var(--accent);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px">
+      <div style="font-weight:600;font-size:14px;color:var(--text);margin-bottom:4px">${inv.vendorName}</div>
+      <div style="font-size:13px;color:var(--text-2)">Amount: <strong>${poFmt(inv.invoiceAmount)}</strong></div>
+      <div style="font-size:13px;color:var(--text-2)">Job: <strong>${inv.jobId}</strong></div>
+      ${inv.invoiceFileName?`<div style="font-size:12px;color:var(--text-3);margin-top:4px">📄 ${inv.invoiceFileName}</div>`:''}
+    </div>
+    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--radius-sm);padding:12px;margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:8px">⚠️ Confirm PO Assignment</div>
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:8px">Invoice PO on file: <strong>${inv.poNumber||'None'}</strong></div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="radio" name="ia-po-confirm" value="correct" ${inv.poNumber?'':'checked'}> Yes, this is the correct PO
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="radio" name="ia-po-confirm" value="different"> No, different PO
+        </label>
+      </div>
+      <div id="ia-diff-po-section" style="display:none;margin-top:10px">
+        <label class="form-label">Select correct PO</label>
+        <select id="ia-correct-po" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+          ${poOptions.map(p=>`<option value="${p}">${p}</option>`).join('')}
+          <option value="__other__">Other / enter manually</option>
+        </select>
+        <input type="text" id="ia-manual-po" placeholder="Enter PO number..." style="display:none;margin-top:6px;width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Approval notes (optional)</label>
+      <textarea id="ia-approval-notes" placeholder="e.g. Verified receipt, matched PO..." rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box;resize:vertical"></textarea>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('ia-approve-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="ia-approve-btn">✓ Approve & Archive</button>
+    </div>
+  </div>`;
+
+  // Toggle diff PO section
+  overlay.querySelectorAll('input[name="ia-po-confirm"]').forEach(r=>{
+    r.addEventListener('change', ()=>{
+      const diffSec = document.getElementById('ia-diff-po-section');
+      if(diffSec) diffSec.style.display = r.value==='different'&&r.checked?'block':'none';
+    });
+  });
+
+  // Handle other PO select
+  overlay.addEventListener('change', e=>{
+    if(e.target.id==='ia-correct-po'){
+      const manual = document.getElementById('ia-manual-po');
+      if(manual) manual.style.display = e.target.value==='__other__'?'block':'none';
+    }
+  });
+
+  overlay.querySelector('#ia-approve-btn').onclick = async function(){
+    const poConfirm = overlay.querySelector('input[name="ia-po-confirm"]:checked')?.value;
+    let finalPO = inv.poNumber;
+    if(poConfirm==='different'){
+      const sel = document.getElementById('ia-correct-po')?.value;
+      finalPO = sel==='__other__' ? (document.getElementById('ia-manual-po')?.value||'') : sel;
+    }
+    const notes = document.getElementById('ia-approval-notes')?.value||'';
+    const dropboxPath = `fieldsource-invoices/${finalPO||'no-po'}/${inv.vendorName.replace(/\s+/g,'_')}_${inv.invoiceAmount}_${inv.invoiceDate||'nodate'}.pdf`;
+
+    this.textContent='Saving...'; this.disabled=true;
+    try {
+      await sbFetch('PATCH', `/rest/v1/invoices_test?id=eq.${id}`, {
+        approval_status: 'Approved',
+        approved_by: currentUser?.email||'',
+        approved_at: new Date().toISOString(),
+        approval_notes: notes,
+        final_po_number: finalPO,
+        dropbox_path: dropboxPath,
+      });
+      // Log to audit
+      await sbFetch('POST', '/rest/v1/invoice_approvals_log_test', {
+        invoice_id: id,
+        status_before: 'Pending',
+        status_after: 'Approved',
+        changed_by: currentUser?.email||'',
+        reason: notes,
+      });
+      overlay.remove();
+      await reloadInvApproval();
+    } catch(e){ alert('Failed: '+e.message); this.textContent='✓ Approve & Archive'; this.disabled=false; }
+  };
+
+  document.body.appendChild(overlay);
+}
+
+function openRejectModal(id){
+  const inv = invApprovalList.find(i=>i.id===id);
+  if(!inv) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'ia-reject-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Reject Invoice</div>
+    <div style="background:var(--accent);border-radius:var(--radius-sm);padding:10px;margin-bottom:16px;font-size:13px">
+      <strong>${inv.vendorName}</strong> · ${poFmt(inv.invoiceAmount)} · ${inv.jobId}
+    </div>
+    <div class="form-group">
+      <label class="form-label">Reason for rejection *</label>
+      <select id="ia-reject-reason" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
+        <option value="">-- Select reason --</option>
+        <option value="Amount mismatch">Amount doesn't match PO/quote</option>
+        <option value="Wrong job">Invoiced to wrong job</option>
+        <option value="Duplicate">Appears to be duplicate</option>
+        <option value="Missing docs">Missing receipt/documentation</option>
+        <option value="Quality issue">Quality/service issue</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Additional details</label>
+      <textarea id="ia-reject-details" placeholder="Details about why..." rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box;resize:vertical"></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Next step *</label>
+      <select id="ia-next-step" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
+        <option value="">-- Select --</option>
+        <option value="Ali to contact vendor">Ali to contact vendor</option>
+        <option value="Waiting for corrected invoice">Waiting for corrected invoice</option>
+        <option value="Send to correct job">Reassign to correct job</option>
+        <option value="Jake to investigate">Jake to investigate</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Assign to</label>
+      <select id="ia-assign-to" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
+        <option value="ali@fieldsourceohio.com">Ali Gibson</option>
+        <option value="jake@fieldsourceohio.com">Jake Diefenthaler</option>
+        <option value="ryan@fieldsourceohio.com">Ryan DeMay</option>
+        <option value="matt@fieldsourceohio.com">Matt</option>
+      </select>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('ia-reject-overlay').remove()">Cancel</button>
+      <button id="ia-reject-btn" style="padding:10px 20px;background:#dc2626;color:#fff;border:none;border-radius:var(--radius-sm);font-size:14px;font-weight:600;cursor:pointer">Reject & Assign</button>
+    </div>
+  </div>`;
+
+  overlay.querySelector('#ia-reject-btn').onclick = async function(){
+    const reason = document.getElementById('ia-reject-reason')?.value;
+    const details = document.getElementById('ia-reject-details')?.value||'';
+    const nextStep = document.getElementById('ia-next-step')?.value;
+    const assignedTo = document.getElementById('ia-assign-to')?.value;
+    if(!reason||!nextStep){ alert('Reason and next step are required.'); return; }
+
+    this.textContent='Saving...'; this.disabled=true;
+    try {
+      await sbFetch('PATCH', `/rest/v1/invoices_test?id=eq.${id}`, {
+        approval_status: 'Rejected',
+        rejection_reason: reason+(details?': '+details:''),
+        next_step: nextStep,
+        assigned_to: assignedTo,
+        approved_by: currentUser?.email||'',
+        approved_at: new Date().toISOString(),
+      });
+      await sbFetch('POST', '/rest/v1/invoice_approvals_log_test', {
+        invoice_id: id,
+        status_before: 'Pending',
+        status_after: 'Rejected',
+        changed_by: currentUser?.email||'',
+        reason: reason+(details?': '+details:''),
+      });
+      overlay.remove();
+      await reloadInvApproval();
+    } catch(e){ alert('Failed: '+e.message); this.textContent='Reject & Assign'; this.disabled=false; }
+  };
+
+  document.body.appendChild(overlay);
+}
+
+function openAddNotesModal(id){
+  const inv = invApprovalList.find(i=>i.id===id);
+  if(!inv) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'ia-notes-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:440px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Add Follow-up Notes</div>
+    ${inv.followUpNotes?`<div style="background:var(--accent);border-radius:var(--radius-sm);padding:10px;margin-bottom:12px;font-size:12px;color:var(--text-2);white-space:pre-wrap">${inv.followUpNotes}</div>`:''}
+    <div class="form-group">
+      <label class="form-label">New note</label>
+      <textarea id="ia-new-note" rows="3" placeholder="e.g. Ali called vendor, corrected invoice coming Tuesday..." style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box;resize:vertical"></textarea>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('ia-notes-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="ia-notes-save">Save Note</button>
+    </div>
+  </div>`;
+
+  overlay.querySelector('#ia-notes-save').onclick = async function(){
+    const note = document.getElementById('ia-new-note')?.value.trim();
+    if(!note) return;
+    const ts = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    const user = currentUser?.email?.split('@')[0]||'unknown';
+    const newNotes = (inv.followUpNotes ? inv.followUpNotes+'\n' : '') + `[${ts} - ${user}] ${note}`;
+    this.textContent='Saving...'; this.disabled=true;
+    try {
+      await sbFetch('PATCH', `/rest/v1/invoices_test?id=eq.${id}`, { follow_up_notes: newNotes });
+      overlay.remove();
+      await reloadInvApproval();
+    } catch(e){ alert('Failed: '+e.message); this.textContent='Save Note'; this.disabled=false; }
+  };
+
+  document.body.appendChild(overlay);
+}
+
+async function markInvResubmitted(id){
+  if(!confirm('Mark this invoice as resubmitted and move back to pending?')) return;
+  try {
+    await sbFetch('PATCH', `/rest/v1/invoices_test?id=eq.${id}`, {
+      approval_status: 'Pending',
+      rejection_reason: '',
+      next_step: '',
+    });
+    await sbFetch('POST', '/rest/v1/invoice_approvals_log_test', {
+      invoice_id: id,
+      status_before: 'Rejected',
+      status_after: 'Pending',
+      changed_by: currentUser?.email||'',
+      reason: 'Resubmitted',
+    });
+    await reloadInvApproval();
+  } catch(e){ alert('Failed: '+e.message); }
+}
+
+async function markInvResolved(id){
+  if(!confirm('Mark this invoice as resolved and close it out?')) return;
+  try {
+    await sbFetch('PATCH', `/rest/v1/invoices_test?id=eq.${id}`, {
+      approval_status: 'Resolved',
+      resolved_at: new Date().toISOString(),
+    });
+    await reloadInvApproval();
+  } catch(e){ alert('Failed: '+e.message); }
+}
+
+function renderInvApproval(){
+  const userEmail = (currentUser?.email||'').toLowerCase();
+  const canApprove = APPROVER_EMAILS.includes(userEmail);
+  const canUploadInv = UPLOADER_EMAILS.includes(userEmail);
+
+  const pending = invApprovalList.filter(i=>i.status==='Pending');
+  const rejected = invApprovalList.filter(i=>i.status==='Rejected');
+  const approved = invApprovalList.filter(i=>i.status==='Approved');
+
+  // PO Dashboard data
+  const poDashboard = {};
+  jobs.forEach(j=>{
+    if(j.poAmount){
+      if(!poDashboard[j.client]) poDashboard[j.client] = { budget: j.poAmount, spent: 0, poNumber: j.poNumber||'' };
+    }
+  });
+  approved.forEach(inv=>{
+    const job = jobs.find(j=>j.id===inv.jobId||j.client===inv.jobId);
+    const key = job?.client||inv.jobId;
+    if(!poDashboard[key]) poDashboard[key] = { budget: 0, spent: 0, poNumber: inv.finalPoNumber||'' };
+    poDashboard[key].spent += inv.invoiceAmount;
+  });
+
+  const statusBadge = s => {
+    const map = { Pending:'#f59e0b', Approved:'#16a34a', Rejected:'#dc2626', Resolved:'#6b7280' };
+    return `<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:${map[s]||'#999'}20;color:${map[s]||'#999'}">${s}</span>`;
+  };
+
+  const invCard = (inv, showActions=true) => {
+    const date = inv.uploadedAt ? new Date(inv.uploadedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—';
+    return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            ${statusBadge(inv.status)}
+            <span style="font-weight:600;font-size:14px;color:var(--text)">${inv.vendorName}</span>
+            <span style="font-size:15px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${poFmt(inv.invoiceAmount)}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-2);margin-bottom:2px">
+            <strong>${inv.jobId}</strong>${inv.finalPoNumber?' · PO: '+inv.finalPoNumber:inv.poNumber?' · PO: '+inv.poNumber:''}${inv.invoiceDate?' · '+inv.invoiceDate:''}
+          </div>
+          ${inv.description?`<div style="font-size:12px;color:var(--text-3)">${inv.description}</div>`:''}
+          ${inv.rejectionReason?`<div style="font-size:12px;color:#dc2626;margin-top:4px">⚠ ${inv.rejectionReason}</div>`:''}
+          ${inv.nextStep?`<div style="font-size:12px;color:#92400e;margin-top:2px">→ ${inv.nextStep}${inv.assignedTo?' ('+inv.assignedTo.split('@')[0]+')':''}</div>`:''}
+          ${inv.followUpNotes?`<div style="font-size:11px;color:var(--text-3);margin-top:4px;white-space:pre-wrap;border-left:2px solid var(--border);padding-left:8px">${inv.followUpNotes}</div>`:''}
+          ${inv.dropboxPath?`<div style="font-size:11px;color:var(--green-dark);margin-top:4px">📁 ${inv.dropboxPath}</div>`:''}
+          ${inv.approvalNotes?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">Note: ${inv.approvalNotes}</div>`:''}
+        </div>
+        <div style="font-size:11px;color:var(--text-3);text-align:right;white-space:nowrap">${date}<br>${inv.uploadedBy?.split('@')[0]||''}</div>
+      </div>
+      ${showActions && canApprove && inv.status==='Pending' ? `<div style="display:flex;gap:8px;margin-top:10px">
+        <button onclick="openApproveModal(${inv.id})" style="padding:6px 16px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">✓ Approve</button>
+        <button onclick="openRejectModal(${inv.id})" style="padding:6px 16px;background:#dc2626;color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">✕ Reject</button>
+      </div>` : ''}
+      ${showActions && inv.status==='Rejected' ? `<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button onclick="openAddNotesModal(${inv.id})" style="padding:5px 12px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;cursor:pointer">+ Add Notes</button>
+        <button onclick="markInvResubmitted(${inv.id})" style="padding:5px 12px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;cursor:pointer">↩ Mark Resubmitted</button>
+        <button onclick="markInvResolved(${inv.id})" style="padding:5px 12px;background:none;border:1px solid #dc2626;color:#dc2626;border-radius:var(--radius-sm);font-size:12px;cursor:pointer">✓ Mark Resolved</button>
+      </div>` : ''}
+    </div>`;
+  };
+
+  // Job selector options
+  const jobOptions = [...new Set(jobs.map(j=>j.client).filter(Boolean))].sort()
+    .map(c=>`<option value="${c}">${c}</option>`).join('');
+
+  let html = `<div style="margin-bottom:20px">
+    <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:16px">Invoice Approvals</div>`;
+
+  // Upload section
+  if(canUploadInv){
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Submit Invoice for Approval</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label class="form-label">Job *</label>
+          <select id="ia-job-select" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+            <option value="">-- Select job --</option>
+            ${jobOptions}
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Vendor *</label>
+          <input type="text" id="ia-vendor" placeholder="e.g. Sherwin-Williams" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        </div>
+        <div>
+          <label class="form-label">Amount *</label>
+          <input type="number" id="ia-amount" step="0.01" placeholder="0.00" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        </div>
+        <div>
+          <label class="form-label">Invoice Date</label>
+          <input type="date" id="ia-date" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-bottom:10px">
+        <label class="form-label">Description</label>
+        <input type="text" id="ia-desc" placeholder="What is this invoice for?" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:10px">
+        <label class="form-label">Attach PDF (optional)</label>
+        <input type="file" id="ia-file" accept=".pdf,.jpg,.jpeg,.png" style="font-size:13px">
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <button onclick="submitInvApprovalUpload()" style="padding:8px 20px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">Submit for Approval</button>
+        <div id="ia-upload-status" style="font-size:12px;color:var(--text-3)"></div>
+      </div>
+    </div>`;
+  }
+
+  // PO Dashboard
+  const dashEntries = Object.entries(poDashboard).filter(([,v])=>v.spent>0||v.budget>0);
+  if(dashEntries.length){
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">PO Spend Tracking</div>
+      <div style="display:grid;gap:10px">`;
+    dashEntries.forEach(([jobName, d])=>{
+      const pct = d.budget ? Math.round(d.spent/d.budget*100) : 0;
+      const color = pct>=100?'#dc2626':pct>=80?'#f59e0b':'#16a34a';
+      html += `<div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <span style="font-size:13px;font-weight:500;color:var(--text)">${jobName}${d.poNumber?' <span style="font-size:11px;color:var(--text-3)">'+d.poNumber+'</span>':''}</span>
+          <span style="font-size:13px;font-family:'DM Mono',monospace"><span style="color:${color};font-weight:600">${poFmt(d.spent)}</span> <span style="color:var(--text-3)">/ ${poFmt(d.budget)}</span> <span style="color:${color}">(${pct}%)</span></span>
+        </div>
+        <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+          <div style="height:100%;width:${Math.min(pct,100)}%;background:${color};border-radius:3px;transition:width .3s"></div>
+        </div>
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // Pending approvals
+  html += `<div style="margin-bottom:20px">
+    <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:10px">
+      Pending Approval <span style="font-size:12px;font-weight:400;color:var(--text-3)">(${pending.length})</span>
+    </div>`;
+  if(pending.length){
+    html += pending.map(i=>invCard(i)).join('');
+  } else {
+    html += `<div style="text-align:center;padding:24px;color:var(--text-3);font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">No invoices pending approval</div>`;
+  }
+  html += `</div>`;
+
+  // Needs Action (Rejected)
+  if(rejected.length){
+    html += `<div style="margin-bottom:20px">
+      <div style="font-size:14px;font-weight:700;color:#dc2626;margin-bottom:10px">
+        ⚠ Needs Action <span style="font-size:12px;font-weight:400;color:var(--text-3)">(${rejected.length})</span>
+      </div>
+      ${rejected.map(i=>invCard(i)).join('')}
+    </div>`;
+  }
+
+  // Approved (collapsed)
+  if(approved.length){
+    html += `<div style="margin-bottom:20px">
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:10px">
+        Approved <span style="font-size:12px;font-weight:400;color:var(--text-3)">(${approved.length})</span>
+      </div>
+      ${approved.map(i=>invCard(i,false)).join('')}
+    </div>`;
+  }
+
+  html += `</div>`;
+  document.getElementById('main-content').innerHTML = html;
 }
 
 // ── INVOICES ─────────────────────────────────────────────────────────────────

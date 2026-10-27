@@ -4874,6 +4874,7 @@ async function loadInvApproval(){
       assignedTo: r.assigned_to||'',
       followUpNotes: r.follow_up_notes||'',
       resolvedAt: r.resolved_at||'',
+      invoiceNumber: r.invoice_number||'',
     }));
     // Update badge
     const pending = invApprovalList.filter(i=>i.status==='Pending').length;
@@ -4936,6 +4937,7 @@ async function submitInvApprovalUpload(){
       description,
       uploaded_by: currentUser?.email||'',
       approval_status: 'Pending',
+      invoice_number: invNum,
     });
     if(statusEl){ statusEl.textContent='✓ Invoice submitted for approval'; statusEl.style.color='var(--green-dark)'; }
     if(fileInput) fileInput.value='';
@@ -5246,17 +5248,22 @@ function renderInvApproval(){
             <span style="font-weight:600;font-size:14px;color:var(--text)">${inv.vendorName}</span>
             <span style="font-size:15px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${poFmt(inv.invoiceAmount)}</span>
           </div>
-          <div style="font-size:12px;color:var(--text-2);margin-bottom:2px">
-            <strong>${inv.jobId}</strong>${inv.finalPoNumber?' · PO: '+inv.finalPoNumber:inv.poNumber?' · PO: '+inv.poNumber:''}${inv.invoiceDate?' · '+inv.invoiceDate:''}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:6px;font-size:12px;color:var(--text-2)">
+            <div><span style="color:var(--text-3)">Job:</span> <strong>${inv.jobId}</strong></div>
+            <div><span style="color:var(--text-3)">PO:</span> ${inv.finalPoNumber||inv.poNumber||'—'}</div>
+            <div><span style="color:var(--text-3)">Invoice #:</span> ${inv.invoiceNumber||'—'}</div>
+            <div><span style="color:var(--text-3)">Date:</span> ${inv.invoiceDate||'—'}</div>
+            <div><span style="color:var(--text-3)">Uploaded by:</span> ${inv.uploadedBy?.split('@')[0]||'—'}</div>
+            ${inv.invoiceFileName?`<div><span style="color:var(--text-3)">File:</span> 📄 ${inv.invoiceFileName}</div>`:'<div></div>'}
           </div>
-          ${inv.description?`<div style="font-size:12px;color:var(--text-3)">${inv.description}</div>`:''}
+          ${inv.description?`<div style="font-size:12px;color:var(--text-3);margin-bottom:4px">📝 ${inv.description}</div>`:''}
           ${inv.rejectionReason?`<div style="font-size:12px;color:#dc2626;margin-top:4px">⚠ ${inv.rejectionReason}</div>`:''}
           ${inv.nextStep?`<div style="font-size:12px;color:#92400e;margin-top:2px">→ ${inv.nextStep}${inv.assignedTo?' ('+inv.assignedTo.split('@')[0]+')':''}</div>`:''}
           ${inv.followUpNotes?`<div style="font-size:11px;color:var(--text-3);margin-top:4px;white-space:pre-wrap;border-left:2px solid var(--border);padding-left:8px">${inv.followUpNotes}</div>`:''}
           ${inv.dropboxPath?`<div style="font-size:11px;color:var(--green-dark);margin-top:4px">📁 ${inv.dropboxPath}</div>`:''}
           ${inv.approvalNotes?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">Note: ${inv.approvalNotes}</div>`:''}
         </div>
-        <div style="font-size:11px;color:var(--text-3);text-align:right;white-space:nowrap">${date}<br>${inv.uploadedBy?.split('@')[0]||''}</div>
+        <div style="font-size:11px;color:var(--text-3);text-align:right;white-space:nowrap">${date}</div>
       </div>
       ${showActions && canApprove && inv.status==='Pending' ? `<div style="display:flex;gap:8px;margin-top:10px">
         <button onclick="openApproveModal(${inv.id})" style="padding:6px 16px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">✓ Approve</button>
@@ -5302,9 +5309,15 @@ function renderInvApproval(){
           <input type="date" id="ia-date" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
         </div>
       </div>
-      <div style="margin-bottom:10px">
-        <label class="form-label">Description</label>
-        <input type="text" id="ia-desc" placeholder="What is this invoice for?" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label class="form-label">Invoice #</label>
+          <input type="text" id="ia-inv-num" placeholder="e.g. 9725" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        </div>
+        <div>
+          <label class="form-label">Description / Notes</label>
+          <input type="text" id="ia-desc" placeholder="What is this invoice for?" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        </div>
       </div>
       <div style="margin-bottom:10px">
         <label class="form-label">Attach PDF (optional)</label>

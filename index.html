@@ -4928,37 +4928,13 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
   const statusEl = document.getElementById('inv-upload-status');
   if(statusEl){ statusEl.textContent = 'Reading invoice...'; statusEl.style.color='var(--text-3)'; }
 
-  // If no project specified and not skipping, try AI extraction
-  if(!skipExtraction && (!projectName || projectName==='')) {
+  // Always extract and always confirm — never auto-file silently
+  if(!skipExtraction){
     try {
       const extracted = await extractInvoiceData(file);
-      if(extracted){
-        // Check if project matches a known client
-        const matchedClient = CLIENTS.find(c=>
-          c.toLowerCase()===extracted.project?.toLowerCase() ||
-          extracted.project?.toLowerCase().includes(c.toLowerCase()) ||
-          c.toLowerCase().includes(extracted.project?.toLowerCase()||'xxx')
-        );
-
-        const needsConfirm = !matchedClient || extracted.confidence==='low' || !extracted.project;
-
-        if(needsConfirm){
-          // Show confirmation modal
-          showInvoiceConfirmModal(file, extracted, notes);
-          if(statusEl){ statusEl.textContent = ''; }
-          return;
-        } else {
-          // Auto-file with high confidence match
-          projectName = matchedClient;
-          if(!notes && extracted.notes) notes = extracted.notes;
-          if(statusEl){ statusEl.textContent = `Auto-filed: ${extracted.vendor} → ${projectName}`; statusEl.style.color='var(--green-dark)'; }
-        }
-      } else {
-        // Can't read file — show manual picker
-        showInvoiceConfirmModal(file, null, notes);
-        if(statusEl){ statusEl.textContent = ''; }
-        return;
-      }
+      showInvoiceConfirmModal(file, extracted, notes);
+      if(statusEl){ statusEl.textContent = ''; }
+      return;
     } catch(e){
       console.warn('AI extraction failed:', e);
       showInvoiceConfirmModal(file, null, notes);
@@ -4966,8 +4942,6 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       return;
     }
   }
-
-  if(statusEl){ statusEl.textContent = 'Uploading...'; statusEl.style.color='var(--text-3)'; }
 
   // Build folder path: Project/Vendor/filename
   const vendor = (window._pendingVendor||'').replace(/[^a-zA-Z0-9 _-]/g,'').trim() || 'Unknown Vendor';

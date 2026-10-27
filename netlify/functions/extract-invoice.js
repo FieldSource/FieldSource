@@ -10,39 +10,43 @@ exports.handler = async function(event) {
     return { statusCode: 500, body: JSON.stringify({ error: 'API key not configured' }) };
   }
 
+  let fileData, fileType, clientList;
   try {
-    const { fileData, fileType, clientList } = JSON.parse(event.body);
+    const body = JSON.parse(event.body);
+    fileData = body.fileData;
+    fileType = body.fileType;
+    clientList = body.clientList;
+  } catch(e) {
+    return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
+  }
 
-    const isPDF = fileType === 'application/pdf';
-    const contentBlock = isPDF
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } }
-      : { type: 'image', source: { type: 'base64', media_type: fileType, data: fileData } };
+  // Limit base64 size to avoid timeouts (~10MB file limit)
+  if(fileData && fileData.length > 13000000){
+    return { statusCode: 413, body: JSON.stringify({ error: 'File too large for extraction' }) };
+  }
 
-    const requestBody = JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
-      messages: [{
-        role: 'user',
-        content: [
-          contentBlock,
-          {
-            type: 'text',
-            text: `Extract invoice details from this document. Return ONLY valid JSON:
-{
-  "vendor": "full vendor/supplier company name exactly as shown",
-  "project": "match the bill-to, job description, or service location to one of these clients: ${clientList}. Return the exact client name from the list, or your best guess if no match.",
-  "amount": total invoice amount as a number or null,
-  "invoice_number": "invoice number as string or null",
-  "invoice_date": "date as YYYY-MM-DD or null",
-  "confidence": "high if you matched a client exactly, medium if close match, low if guessing",
-  "notes": "one line describing what this invoice is for"
-}
-Return only the JSON object, no other text.`
-          }
-        ]
-      }]
-    });
+  const isPDF = fileType === 'application/pdf';
+  const contentBlock = isPDF
+    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } }
+    : { type: 'image', source: { type: 'base64', media_type: fileType, data: fileData } };
 
+  const requestBody = JSON.stringify({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 500,
+    messages: [{
+      role: 'user',
+      content: [
+        contentBlock,
+        {
+          type: 'text',
+          text: `Extract invoice details. Return ONLY this JSON object with no other text:
+{"vendor":"company name","project":"match to one of: ${clientList}","amount":0,"invoice_number":"","invoice_date":"YYYY-MM-DD","confidence":"high/medium/low","notes":"brief description"}`
+        }
+      ]
+    }]
+  });
+
+  try {
     const result = await new Promise((resolve, reject) => {
       const options = {
         hostname: 'api.anthropic.com',
@@ -63,18 +67,26 @@ Return only the JSON object, no other text.`
         res.on('end', () => resolve(data));
       });
       req.on('error', reject);
+      req.setTimeout(25000, () => { req.destroy(); reject(new Error('Timeout')); });
       req.write(requestBody);
       req.end();
     });
 
     const parsed = JSON.parse(result);
-    const text = parsed.content?.[0]?.text || '';
-    const clean = text.replace(/```json|```/g, '').trim();
+
+    if(parsed.error) {
+      return { statusCode: 500, body: JSON.stringify({ error: parsed.error.message || 'API error' }) };
+    }
+
+    const text = (parsed.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
+
+    // Validate it's JSON before returning
+    JSON.parse(text); // throws if invalid
 
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: clean,
+      body: text,
     };
   } catch(e) {
     return {

@@ -1443,7 +1443,7 @@ function renderCosts(){
   // Site summary cards
   const bySite = {};
   costEntries.forEach(c=>{ if(!bySite[c.site]) bySite[c.site]=0; bySite[c.site]+=c.amount; });
-  const siteSorted = Object.entries(bySite).sort((a,b)=>b[1]-a[1]);
+  const siteSorted = Object.entries(bySite).sort((a,b)=>a[0].localeCompare(b[0]));
 
   let html = `<div class="stats-bar" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px">
     <div class="stat-card"><div class="stat-num" style="font-size:15px">${poFmt(totalAll)}</div><div class="stat-label">Total Costs</div></div>
@@ -4861,6 +4861,9 @@ async function loadInvoices(){
       uploadedAt: r.uploaded_at||'',
       notes: r.notes||'',
       vendorName: r.vendor_name||'',
+      amount: r.amount!=null ? Number(r.amount) : null,
+      invoiceNum: r.invoice_num||'',
+      invoiceDate: r.invoice_date||'',
     }));
     invoiceLoaded = true;
   } catch(e){ invoiceFiles = []; invoiceLoaded = true; }
@@ -4955,8 +4958,32 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       file_type: file.type||'application/octet-stream',
       uploaded_by: currentUser?.email||'',
       notes: notes,
+      amount: window._pendingAmount||null,
+      invoice_num: window._pendingInvoiceNum||'',
+      invoice_date: window._pendingInvoiceDate||null,
     };
     await sbFetch('POST', '/rest/v1/invoice_files', meta);
+
+    // Auto-create direct cost entry if we have enough info
+    if(projectName && vendor && window._pendingAmount){
+      try {
+        const costRow = {
+          site: projectName,
+          vendor: vendor,
+          amount: window._pendingAmount,
+          date: window._pendingInvoiceDate || new Date().toISOString().split('T')[0],
+          notes: notes || file.name,
+          invoice_num: window._pendingInvoiceNum || '',
+          created_at: new Date().toISOString(),
+        };
+        await sbFetch('POST', '/rest/v1/direct_costs', costRow);
+        await loadCosts();
+      } catch(e){ console.warn('Could not auto-create cost entry:', e); }
+      window._pendingAmount = null;
+      window._pendingInvoiceDate = null;
+      window._pendingInvoiceNum = null;
+    }
+
     await loadInvoices();
     if(statusEl){ statusEl.textContent = `✓ Filed under ${projectName} / ${vendor}`; statusEl.style.color='var(--green-dark)'; }
     renderInvoices();
@@ -5005,10 +5032,25 @@ function showInvoiceConfirmModal(file, extracted, notes){
       <label class="form-label">Vendor *</label>
       <input type="text" id="inv-confirm-vendor" value="${suggestedVendor}" placeholder="e.g. Syngenta, Ewing Irrigation..." style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
     </div>
-    <div class="form-group">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Amount</label>
+        <input type="number" id="inv-confirm-amount" step="0.01" value="${extracted?.amount||''}" placeholder="0.00" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Invoice Date</label>
+        <input type="date" id="inv-confirm-date" value="${extracted?.invoice_date||''}" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Invoice #</label>
+        <input type="text" id="inv-confirm-invnum" value="${extracted?.invoice_number||''}" placeholder="e.g. 9725" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
       <label class="form-label">Notes</label>
       <input type="text" id="inv-confirm-notes" value="${notes||extracted?.notes||''}" placeholder="Optional description" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
     </div>
+    <div style="font-size:11px;color:var(--green-dark);background:var(--green-light);padding:6px 10px;border-radius:var(--radius-sm);margin-bottom:8px">✓ A Direct Cost entry will be created automatically from this invoice.</div>
     <div class="sheet-actions">
       <button class="btn-cancel" onclick="document.getElementById('inv-confirm-overlay').remove()">Cancel</button>
       <button class="btn-save" onclick="
@@ -5034,6 +5076,9 @@ function showInvoiceConfirmModal(file, extracted, notes){
     const n = document.getElementById('inv-confirm-notes').value.trim();
     if(!vend){ alert('Please enter a vendor name.'); return; }
     window._pendingVendor = vend;
+    window._pendingAmount = parseFloat(document.getElementById('inv-confirm-amount')?.value)||null;
+    window._pendingInvoiceDate = document.getElementById('inv-confirm-date')?.value||null;
+    window._pendingInvoiceNum = document.getElementById('inv-confirm-invnum')?.value||null;
     document.getElementById('inv-confirm-overlay').remove();
     uploadInvoiceFile('', proj, window._pendingFile, n, true);
   };
@@ -5158,7 +5203,7 @@ function renderInvoices(){
   } else {
     html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
       <div style="display:grid;grid-template-columns:28px 2fr 1fr 80px 90px 80px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
-        ${['','File','Project / Vendor','Size','Date',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+        ${['','Invoice','Project / Vendor','Size','Date',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
       </div>`;
 
     filtered.forEach(f=>{
@@ -5170,8 +5215,12 @@ function renderInvoices(){
       html += `<div style="display:grid;grid-template-columns:28px 2fr 1fr 80px 90px 80px;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:13px">
         <div style="font-size:18px">${fileIcon(f.fileType)}</div>
         <div>
-          <div style="font-weight:500;color:var(--text)">${f.fileName}</div>
-          ${f.notes?`<div style="font-size:11px;color:var(--text-3);margin-top:1px">${f.notes}</div>`:''}
+          <div style="font-weight:600;color:var(--text)">${f.invoiceNum?'Inv #'+f.invoiceNum:f.fileName}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:1px;display:flex;gap:10px;flex-wrap:wrap">
+            ${f.amount?`<span style="color:var(--green-dark);font-weight:600">${poFmt(f.amount)}</span>`:''}
+            ${f.notes?`<span>${f.notes}</span>`:''}
+            ${f.invoiceNum?`<span style="color:var(--text-3)">${f.fileName}</span>`:''}
+          </div>
         </div>
         <div><div style="color:var(--text-2);font-size:12px">${f.projectName}</div>${f.vendorName?`<div style="color:var(--text-3);font-size:11px">${f.vendorName}</div>`:''}</div>
         <div style="color:var(--text-3)">${fmtFileSize(f.fileSize)}</div>

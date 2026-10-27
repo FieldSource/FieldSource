@@ -422,15 +422,16 @@ main{padding:12px 16px 100px}
 
 <div class="view-bar" id="bizops-bar" style="display:none">
   <div class="view-bar-row">
-    <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPipeline()">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
-    <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPO()">PO Tracker</button>
+    <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPipeline()" style="display:none">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPO()" style="display:none">PO Tracker</button>
     <button class="vtab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts())">Direct Costs</button>
     <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting())">WIP</button>
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
-    <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()">Clients</button>
+    <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()" style="display:none">Clients</button>
     <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'))">Estimates</button>
     <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Invoices</button>
     <button class="vtab" id="inv-approval-tab" onclick="loadInvApproval().then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" id="materials-tab" onclick="loadMaterials().then(()=>setView('materials'))">Materials</button>
   </div>
 </div>
 
@@ -4232,12 +4233,12 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   const localIdx = allIdx[v];
   if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -4277,6 +4278,7 @@ function render(){
   else if(view==='estimates') renderEstimates();
   else if(view==='invoices') renderInvoices();
   else if(view==='inv-approval') renderInvApproval();
+  else if(view==='materials') renderMaterials();
   else if(view==='consulting-detail') renderConsultingDetail();
   else renderList();
 }
@@ -4839,6 +4841,429 @@ function toggleDayBtn(i){
 }
 function getSelectedDays(){
   return null; // job-level day picker removed — per-person days used instead
+}
+
+// ── MATERIALS ─────────────────────────────────────────────────────────────────
+let materialsList = [];
+let materialPrices = [];
+let materialsLoaded = false;
+let materialSearch = '';
+let materialCatFilter = 'All';
+
+const MATERIAL_CATS = ['All','Chemicals','Seed','Topdressing','Sod','Irrigation','Fertilizer','Equipment Parts','Fuel','Other'];
+
+async function loadMaterials(){
+  if(materialsLoaded) return;
+  try {
+    const [mats, prices] = await Promise.all([
+      sbFetch('GET', '/rest/v1/materials?select=*&order=name.asc'),
+      sbFetch('GET', '/rest/v1/material_prices?select=*&order=effective_date.desc'),
+    ]);
+    materialsList = (mats||[]).map(r=>({
+      id: r.id, name: r.name, unit: r.unit, category: r.category||'', notes: r.notes||'', createdBy: r.created_by||''
+    }));
+    materialPrices = (prices||[]).map(r=>({
+      id: r.id, materialId: r.material_id, price: Number(r.price_per_unit), effectiveDate: r.effective_date, setBy: r.set_by||'', notes: r.notes||''
+    }));
+    materialsLoaded = true;
+  } catch(e){ materialsList=[]; materialPrices=[]; materialsLoaded=true; }
+}
+
+function getCurrentPrice(materialId, asOfDate=null){
+  const date = asOfDate || new Date().toISOString().split('T')[0];
+  const prices = materialPrices
+    .filter(p=>p.materialId===materialId && p.effectiveDate<=date)
+    .sort((a,b)=>b.effectiveDate.localeCompare(a.effectiveDate));
+  return prices[0]||null;
+}
+
+function getPriceHistory(materialId){
+  return materialPrices
+    .filter(p=>p.materialId===materialId)
+    .sort((a,b)=>b.effectiveDate.localeCompare(a.effectiveDate));
+}
+
+function openMaterialModal(id=null){
+  const mat = id ? materialsList.find(m=>m.id===id) : null;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'mat-modal';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:440px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">${mat?'Edit Material':'Add Material'}</div>
+    <div class="form-group">
+      <label class="form-label">Name *</label>
+      <input type="text" id="mat-name" value="${mat?.name||''}" placeholder="e.g. Roundup Pro" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="form-group">
+        <label class="form-label">Unit *</label>
+        <input type="text" id="mat-unit" value="${mat?.unit||''}" placeholder="e.g. gallon, lb, bag" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <select id="mat-category" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
+          ${MATERIAL_CATS.filter(c=>c!=='All').map(c=>`<option value="${c}"${(mat?.category||'')==c?' selected':''}>${c}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    ${!mat?`<div class="form-group">
+      <label class="form-label">Starting Price (per unit) *</label>
+      <input type="number" id="mat-price" step="0.01" placeholder="0.00" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Effective Date</label>
+      <input type="date" id="mat-price-date" value="${new Date().toISOString().split('T')[0]}" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>`:''}
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <input type="text" id="mat-notes" value="${mat?.notes||''}" placeholder="Optional" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('mat-modal').remove()">Cancel</button>
+      <button class="btn-save" id="mat-save-btn">${mat?'Save Changes':'Add Material'}</button>
+    </div>
+  </div>`;
+
+  overlay.querySelector('#mat-save-btn').onclick = async function(){
+    const name = document.getElementById('mat-name').value.trim();
+    const unit = document.getElementById('mat-unit').value.trim();
+    const category = document.getElementById('mat-category').value;
+    const notes = document.getElementById('mat-notes').value.trim();
+    if(!name||!unit){ alert('Name and unit are required.'); return; }
+    this.textContent='Saving...'; this.disabled=true;
+    try {
+      if(mat){
+        await sbFetch('PATCH', `/rest/v1/materials?id=eq.${id}`, { name, unit, category, notes });
+        const m = materialsList.find(x=>x.id===id);
+        if(m){ m.name=name; m.unit=unit; m.category=category; m.notes=notes; }
+      } else {
+        const price = parseFloat(document.getElementById('mat-price')?.value)||0;
+        const priceDate = document.getElementById('mat-price-date')?.value || new Date().toISOString().split('T')[0];
+        const result = await sbFetch('POST', '/rest/v1/materials', { name, unit, category, notes, created_by: currentUser?.email||'' });
+        // Get the new material id
+        const newMat = await sbFetch('GET', `/rest/v1/materials?name=eq.${encodeURIComponent(name)}&order=created_at.desc&limit=1`);
+        const newId = newMat?.[0]?.id;
+        if(newId && price>0){
+          await sbFetch('POST', '/rest/v1/material_prices', { material_id: newId, price_per_unit: price, effective_date: priceDate, set_by: currentUser?.email||'' });
+        }
+        materialsLoaded = false;
+        await loadMaterials();
+      }
+      overlay.remove();
+      renderMaterials();
+    } catch(e){ alert('Failed: '+e.message); this.textContent=mat?'Save Changes':'Add Material'; this.disabled=false; }
+  };
+
+  document.body.appendChild(overlay);
+}
+
+function openUpdatePriceModal(materialId){
+  const mat = materialsList.find(m=>m.id===materialId);
+  if(!mat) return;
+  const current = getCurrentPrice(materialId);
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'mat-price-modal';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  const history = getPriceHistory(materialId);
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:440px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Update Price — ${mat.name}</div>
+    <div style="background:var(--accent);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:16px;font-size:13px">
+      Current price: <strong>${current?'$'+current.price.toFixed(2)+' / '+mat.unit:'No price set'}</strong>
+      ${current?`<span style="color:var(--text-3);margin-left:8px">as of ${current.effectiveDate}</span>`:''}
+    </div>
+    <div class="form-group">
+      <label class="form-label">New Price (per ${mat.unit}) *</label>
+      <input type="number" id="new-mat-price" step="0.01" placeholder="0.00" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Effective Date *</label>
+      <input type="date" id="new-mat-date" value="${new Date().toISOString().split('T')[0]}" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes (optional)</label>
+      <input type="text" id="new-mat-notes" placeholder="e.g. 2026 contract rate" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    ${history.length?`<div style="margin-top:4px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:8px">Price History</div>
+      ${history.map(p=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid var(--border)">
+        <span style="color:var(--text-2)">${p.effectiveDate}</span>
+        <span style="font-weight:600;font-family:'DM Mono',monospace">$${p.price.toFixed(2)} / ${mat.unit}</span>
+        <span style="color:var(--text-3)">${p.setBy?.split('@')[0]||''}</span>
+        ${p.notes?`<span style="color:var(--text-3);font-style:italic">${p.notes}</span>`:''}
+      </div>`).join('')}
+    </div>`:''}
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('mat-price-modal').remove()">Cancel</button>
+      <button class="btn-save" id="mat-price-save">Save New Price</button>
+    </div>
+  </div>`;
+
+  overlay.querySelector('#mat-price-save').onclick = async function(){
+    const price = parseFloat(document.getElementById('new-mat-price').value);
+    const date = document.getElementById('new-mat-date').value;
+    const notes = document.getElementById('new-mat-notes').value.trim();
+    if(!price||!date){ alert('Price and date are required.'); return; }
+    this.textContent='Saving...'; this.disabled=true;
+    try {
+      await sbFetch('POST', '/rest/v1/material_prices', {
+        material_id: materialId,
+        price_per_unit: price,
+        effective_date: date,
+        set_by: currentUser?.email||'',
+        notes,
+      });
+      materialsLoaded=false;
+      await loadMaterials();
+      overlay.remove();
+      renderMaterials();
+    } catch(e){ alert('Failed: '+e.message); this.textContent='Save New Price'; this.disabled=false; }
+  };
+
+  document.body.appendChild(overlay);
+}
+
+async function deleteMaterial(id, name){
+  if(!confirm(`Delete "${name}"? This will also delete all price history for it.`)) return;
+  try {
+    await sbFetch('DELETE', `/rest/v1/materials?id=eq.${id}`);
+    materialsList = materialsList.filter(m=>m.id!==id);
+    materialPrices = materialPrices.filter(p=>p.materialId!==id);
+    renderMaterials();
+  } catch(e){ alert('Failed: '+e.message); }
+}
+
+function downloadMaterialTemplate(){
+  const rows = [
+    ['Name','Unit','Category','Price','Effective Date','Notes'],
+    ['Roundup Pro','gallon','Chemicals','48.50','2026-01-01','Herbicide'],
+    ['Fertilizer 24-0-4','bag (50lb)','Fertilizer','32.00','2026-01-01',''],
+    ['Kentucky Bluegrass Seed','lb','Seed','4.25','2026-01-01',''],
+  ];
+  const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'materials_template.csv';
+  a.click();
+}
+
+async function importMaterialsCSV(file){
+  if(!file) return;
+  const statusEl = document.getElementById('mat-import-status');
+
+  const text = await file.text();
+  const lines = text.trim().split('\n');
+  const header = lines[0].split(',').map(h=>h.replace(/"/g,'').trim().toLowerCase());
+
+  const nameIdx = header.indexOf('name');
+  const unitIdx = header.indexOf('unit');
+  const catIdx = header.indexOf('category');
+  const priceIdx = header.indexOf('price');
+  const dateIdx = header.indexOf('effective date');
+  const notesIdx = header.indexOf('notes');
+
+  if(nameIdx<0||unitIdx<0){ 
+    alert('CSV must have at least Name and Unit columns.'); 
+    return; 
+  }
+
+  const rows = lines.slice(1).map(line=>{
+    // Handle quoted CSV values
+    const cols = [];
+    let cur = '', inQuote = false;
+    for(const ch of line){
+      if(ch==='"'){ inQuote=!inQuote; }
+      else if(ch===','&&!inQuote){ cols.push(cur.trim()); cur=''; }
+      else cur+=ch;
+    }
+    cols.push(cur.trim());
+    return cols;
+  }).filter(r=>r[nameIdx]);
+
+  if(!rows.length){ alert('No data rows found in CSV.'); return; }
+
+  // Show progress
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'mat-import-overlay';
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:400px;text-align:center">
+    <div class="sheet-title">Importing Materials</div>
+    <div id="mat-import-progress" style="font-size:14px;color:var(--text-2);margin:16px 0">Starting...</div>
+    <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin:0 0 16px">
+      <div id="mat-import-bar" style="height:100%;width:0%;background:var(--green);border-radius:3px;transition:width .2s"></div>
+    </div>
+    <div id="mat-import-log" style="font-size:12px;color:var(--text-3);max-height:150px;overflow-y:auto;text-align:left"></div>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  const progEl = document.getElementById('mat-import-progress');
+  const barEl = document.getElementById('mat-import-bar');
+  const logEl = document.getElementById('mat-import-log');
+
+  let created=0, updated=0, pricesSet=0, errors=0;
+  const effectiveDate = new Date().toISOString().split('T')[0];
+
+  for(let i=0; i<rows.length; i++){
+    const row = rows[i];
+    const name = row[nameIdx]?.replace(/"/g,'')||'';
+    const unit = row[unitIdx]?.replace(/"/g,'')||'';
+    const category = catIdx>=0 ? (row[catIdx]?.replace(/"/g,'')||'') : '';
+    const price = priceIdx>=0 ? parseFloat(row[priceIdx]?.replace(/"/g,'')||'0') : 0;
+    const date = dateIdx>=0 ? (row[dateIdx]?.replace(/"/g,'')||effectiveDate) : effectiveDate;
+    const notes = notesIdx>=0 ? (row[notesIdx]?.replace(/"/g,'')||'') : '';
+
+    if(!name||!unit){ errors++; continue; }
+
+    const pct = Math.round((i+1)/rows.length*100);
+    progEl.textContent = `Processing ${i+1} of ${rows.length}...`;
+    barEl.style.width = pct+'%';
+
+    try {
+      // Check if material exists
+      const existing = materialsList.find(m=>m.name.toLowerCase()===name.toLowerCase());
+
+      if(existing){
+        // Update material details
+        await sbFetch('PATCH', `/rest/v1/materials?id=eq.${existing.id}`, { unit, category, notes });
+        existing.unit=unit; existing.category=category; existing.notes=notes;
+        updated++;
+        logEl.innerHTML += `<div>✓ Updated: ${name}</div>`;
+      } else {
+        // Create new material
+        await sbFetch('POST', '/rest/v1/materials', { name, unit, category, notes, created_by: currentUser?.email||'' });
+        // Fetch new id
+        const newMats = await sbFetch('GET', `/rest/v1/materials?name=eq.${encodeURIComponent(name)}&order=created_at.desc&limit=1`);
+        const newId = newMats?.[0]?.id;
+        if(newId){
+          materialsList.push({ id:newId, name, unit, category, notes, createdBy: currentUser?.email||'' });
+          if(price>0){
+            await sbFetch('POST', '/rest/v1/material_prices', { material_id: newId, price_per_unit: price, effective_date: date, set_by: currentUser?.email||'' });
+            materialPrices.push({ id: 'tmp'+Date.now(), materialId: newId, price, effectiveDate: date, setBy: currentUser?.email||'', notes:'' });
+            pricesSet++;
+          }
+        }
+        created++;
+        logEl.innerHTML += `<div>+ Added: ${name}${price?` ($${price.toFixed(2)}/${unit})`:'no price'}</div>`;
+      }
+
+      // Set price for existing materials too if provided
+      if(existing && price>0){
+        await sbFetch('POST', '/rest/v1/material_prices', { material_id: existing.id, price_per_unit: price, effective_date: date, set_by: currentUser?.email||'' });
+        materialPrices.push({ id: 'tmp'+Date.now(), materialId: existing.id, price, effectiveDate: date, setBy: currentUser?.email||'', notes:'' });
+        pricesSet++;
+      }
+    } catch(e){
+      errors++;
+      logEl.innerHTML += `<div style="color:#dc2626">✕ Error: ${name} — ${e.message}</div>`;
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  progEl.textContent = `Done — ${created} added, ${updated} updated, ${pricesSet} prices set${errors?' ('+errors+' errors)':''}`;
+  barEl.style.width='100%';
+  logEl.innerHTML += `<div style="margin-top:8px;font-weight:600;color:var(--green-dark)">Import complete</div>`;
+
+  // Add close button
+  overlay.querySelector('.modal-sheet').innerHTML += `<div style="margin-top:16px"><button onclick="document.getElementById('mat-import-overlay').remove();renderMaterials()" style="padding:8px 20px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer;width:100%">Done</button></div>`;
+}
+
+function renderMaterials(){
+  const userEmail = (currentUser?.email||'').toLowerCase();
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes(userEmail);
+
+  let filtered = materialsList;
+  if(materialCatFilter!=='All') filtered = filtered.filter(m=>m.category===materialCatFilter);
+  if(materialSearch.trim()){
+    const q = materialSearch.trim().toLowerCase();
+    filtered = filtered.filter(m=>m.name.toLowerCase().includes(q)||m.category.toLowerCase().includes(q)||m.notes.toLowerCase().includes(q));
+  }
+
+  // Summary stats
+  const totalMaterials = materialsList.length;
+  const withPrices = materialsList.filter(m=>getCurrentPrice(m.id)).length;
+
+  let html = `<div style="margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div style="font-size:18px;font-weight:700;color:var(--text)">Materials & Pricing</div>
+      ${canEdit?`<div style="display:flex;gap:8px">
+        <button onclick="downloadMaterialTemplate()" style="padding:8px 14px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer;color:var(--text-2)">⬇ Template</button>
+        <label style="padding:8px 14px;background:none;border:1px solid var(--green);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer;color:var(--green-dark)">
+          ⬆ Import CSV
+          <input type="file" accept=".csv" style="display:none" onchange="importMaterialsCSV(this.files[0]).then(()=>this.value='')">
+        </label>
+        <button onclick="openMaterialModal()" style="padding:8px 16px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">+ Add Material</button>
+      </div>`:''}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">Total Materials</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text)">${totalMaterials}</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">Priced</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text)">${withPrices}</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid ${totalMaterials-withPrices>0?'#f59e0b':'var(--green)'}">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">Needs Price</div>
+        <div style="font-size:22px;font-weight:700;color:${totalMaterials-withPrices>0?'#f59e0b':'var(--text)'}">${totalMaterials-withPrices}</div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <input type="text" placeholder="Search materials..." value="${materialSearch}"
+        oninput="materialSearch=this.value;renderMaterials()"
+        style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+      <select onchange="materialCatFilter=this.value;renderMaterials()" style="padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+        ${MATERIAL_CATS.map(c=>`<option value="${c}"${materialCatFilter===c?' selected':''}>${c}</option>`).join('')}
+      </select>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 100px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
+        ${['Material','Category','Unit','Current Price',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+      </div>`;
+
+  if(!filtered.length){
+    html += `<div style="text-align:center;padding:40px;color:var(--text-3);font-size:13px">${materialsList.length?'No materials match your search.':'No materials added yet.'}</div>`;
+  } else {
+    filtered.forEach(m=>{
+      const current = getCurrentPrice(m.id);
+      const histCount = getPriceHistory(m.id).length;
+      html += `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 100px;padding:11px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px">
+        <div>
+          <div style="font-weight:500;font-size:13px;color:var(--text)">${m.name}</div>
+          ${m.notes?`<div style="font-size:11px;color:var(--text-3)">${m.notes}</div>`:''}
+        </div>
+        <div style="font-size:12px;color:var(--text-2)">${m.category||'—'}</div>
+        <div style="font-size:12px;color:var(--text-2)">${m.unit}</div>
+        <div>
+          ${current
+            ?`<div style="font-size:13px;font-weight:600;font-family:'DM Mono',monospace;color:var(--text)">$${current.price.toFixed(2)}</div>
+               <div style="font-size:10px;color:var(--text-3)">as of ${current.effectiveDate}${histCount>1?' · '+histCount+' entries':''}</div>`
+            :`<span style="font-size:12px;color:#f59e0b;font-weight:600">No price set</span>`}
+        </div>
+        <div style="display:flex;gap:4px;justify-content:flex-end">
+          ${canEdit?`<button onclick="openUpdatePriceModal('${m.id}')" title="Update price" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px;font-weight:600;color:var(--green-dark)">$ Price</button>`:''}
+          ${canEdit?`<button onclick="openMaterialModal('${m.id}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
+          ${canEdit?`<button onclick="deleteMaterial('${m.id}','${m.name.replace(/'/g,"\\'")}') " title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
+        </div>
+      </div>`;
+    });
+  }
+
+  html += `</div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">${filtered.length} material${filtered.length!==1?'s':''}</div>
+  </div>`;
+
+  document.getElementById('main-content').innerHTML = html;
 }
 
 // ── INVOICE APPROVAL WORKFLOW ─────────────────────────────────────────────────

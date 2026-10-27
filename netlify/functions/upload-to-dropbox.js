@@ -24,7 +24,7 @@ exports.handler = async function(event) {
   // Build Dropbox path matching existing folder structure
   const safeProject = projectName.replace(/[<>:"/\\|?*]/g, '_');
   const safeVendor = vendorName.replace(/[<>:"/\\|?*]/g, '_');
-  const dropboxPath = `/Field Source Ohio/Accounts Payable/${safeProject}/${safeVendor}/${fileName}`;
+  const dropboxPath = `/Field Source Ohio/Accounts Payable/${fileName}`;
 
   const fileBuffer = Buffer.from(fileData, 'base64');
 

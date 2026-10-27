@@ -4843,6 +4843,7 @@ function getSelectedDays(){
 let invoiceFiles = [];
 let invoiceJobFilter = 'All';
 let invoiceSearch = '';
+let invoiceVendorFilter = 'All';
 let invoiceLoaded = false;
 const INVOICE_BUCKET = 'invoices';
 
@@ -5169,10 +5170,17 @@ function renderInvoices(){
 
   let filtered = invoiceFiles;
   if(invoiceJobFilter !== 'All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  if(invoiceVendorFilter !== 'All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
   if(invoiceSearch.trim()) {
     const q = invoiceSearch.trim().toLowerCase();
-    filtered = filtered.filter(f=>f.fileName.toLowerCase().includes(q)||f.projectName.toLowerCase().includes(q)||f.notes.toLowerCase().includes(q));
+    filtered = filtered.filter(f=>f.fileName.toLowerCase().includes(q)||f.projectName.toLowerCase().includes(q)||f.vendorName.toLowerCase().includes(q)||f.notes.toLowerCase().includes(q));
   }
+  // Vendors available after project filter
+  const availableVendors = ['All', ...new Set(
+    (invoiceJobFilter==='All' ? invoiceFiles : invoiceFiles.filter(f=>f.projectName===invoiceJobFilter))
+    .map(f=>f.vendorName).filter(Boolean)
+  )].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
+  if(!availableVendors.includes(invoiceVendorFilter)) invoiceVendorFilter='All';
 
   // Unique job names for upload dropdown
   const jobOptions = [...new Set(jobs.map(j=>j.client).filter(Boolean))].sort();
@@ -5204,13 +5212,24 @@ function renderInvoices(){
       <div id="inv-upload-status" style="font-size:12px;margin-top:8px;min-height:16px"></div>
     </div>` : ''}
 
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
-      <input type="text" placeholder="Search files or projects..." value="${invoiceSearch}"
+    <div style="margin-bottom:8px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Project</div>
+      <div class="site-filter-row">${allProjects.map(p=>{
+        const safe=p.replace(/'/g,"\'");
+        return `<button class="site-chip${invoiceJobFilter===p?' active':''}" onclick="invoiceJobFilter='${safe}';invoiceVendorFilter='All';renderInvoices()">${p}</button>`;
+      }).join('')}</div>
+    </div>
+    <div style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Vendor</div>
+      <div class="site-filter-row">${availableVendors.map(v=>{
+        const safe=v.replace(/'/g,"\'");
+        return `<button class="site-chip${invoiceVendorFilter===v?' active':''}" onclick="invoiceVendorFilter='${safe}';renderInvoices()">${v}</button>`;
+      }).join('')}</div>
+    </div>
+    <div style="margin-bottom:12px">
+      <input type="text" placeholder="Search..." value="${invoiceSearch}"
         oninput="invoiceSearch=this.value;renderInvoices()"
-        style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
-      <select onchange="invoiceJobFilter=this.value;renderInvoices()" style="padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
-        ${allProjects.map(p=>`<option value="${p}"${invoiceJobFilter===p?' selected':''}>${p}</option>`).join('')}
-      </select>
+        style="width:100%;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
     </div>`;
 
   if(!filtered.length){

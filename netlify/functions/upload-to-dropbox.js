@@ -10,22 +10,16 @@ exports.handler = async function(event) {
     return { statusCode: 500, body: JSON.stringify({ error: 'Dropbox not configured' }) };
   }
 
-  let fileData, fileName, projectName, vendorName;
+  let fileData, fileName;
   try {
     const body = JSON.parse(event.body);
     fileData = body.fileData;
     fileName = body.fileName;
-    projectName = body.projectName || 'General';
-    vendorName = body.vendorName || 'Unknown Vendor';
   } catch(e) {
     return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
   }
 
-  // Build Dropbox path matching existing folder structure
-  const safeProject = projectName.replace(/[<>:"/\\|?*]/g, '_');
-  const safeVendor = vendorName.replace(/[<>:"/\\|?*]/g, '_');
   const dropboxPath = `/Field Source Ohio/Accounts Payable/${fileName}`;
-
   const fileBuffer = Buffer.from(fileData, 'base64');
 
   const args = JSON.stringify({

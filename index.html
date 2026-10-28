@@ -6509,49 +6509,73 @@ function renderInvoices(){
       </div>
     </div>
     <div style="margin-bottom:12px">
-      <input type="text" placeholder="Search invoices, vendors, content..." value="${invoiceSearch}"
-        oninput="invoiceSearch=this.value;renderInvoices()"
+      <input type="text" id="inv-search-input" placeholder="Search invoices, vendors, content..." value="${invoiceSearch}"
+        oninput="invoiceSearch=this.value;renderInvoiceList()"
         style="width:100%;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
-    </div>`;
+    </div>
+    <div id="invoice-list-container"></div>
+  </div>`;
 
+  document.getElementById('main-content').innerHTML = html;
+  renderInvoiceList();
+}
+
+function renderInvoiceList(){
+  const container = document.getElementById('invoice-list-container');
+  if(!container) return;
+
+  const allProjects2 = [...new Set(invoiceFiles.map(f=>f.projectName).filter(Boolean))].sort();
+  let filtered = invoiceFiles;
+  if(invoiceJobFilter !== 'All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  if(invoiceVendorFilter !== 'All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
+  if(invoiceSearch.trim()) {
+    const q = invoiceSearch.trim().toLowerCase();
+    filtered = filtered.filter(f=>
+      f.fileName.toLowerCase().includes(q)||
+      f.projectName.toLowerCase().includes(q)||
+      f.vendorName.toLowerCase().includes(q)||
+      f.notes.toLowerCase().includes(q)||
+      f.invoiceNum.toLowerCase().includes(q)||
+      (f.extractedText||'').toLowerCase().includes(q)
+    );
+  }
+
+  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
+
+  let html = '';
   if(!filtered.length){
     html += `<div style="text-align:center;padding:48px;color:var(--text-3);font-size:14px">${invoiceFiles.length?'No files match your search.':'No invoices uploaded yet.'}</div>`;
   } else {
-    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">
-      <div style="display:grid;grid-template-columns:28px 2fr 1.5fr 100px 90px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px;border-radius:var(--radius) var(--radius) 0 0">
-        ${['','Invoice','Project / Vendor','Date',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
-      </div>`;
-
     filtered.forEach(f=>{
-      const date = f.uploadedAt ? new Date(f.uploadedAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+      const date = f.uploadedAt ? new Date(f.uploadedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—';
       const safe = f.id.replace(/'/g,"\\'");
       const safePath = f.filePath.replace(/'/g,"\\'");
       const safeFile = f.fileName.replace(/'/g,"\\'");
       const safeProject = f.projectName.replace(/'/g,"\\'");
-      html += `<div style="display:grid;grid-template-columns:28px 2fr 1.5fr 100px 90px;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:13px">
-        <div style="font-size:18px">${fileIcon(f.fileType)}</div>
-        <div>
-          <div style="font-weight:600;color:var(--text)">${f.invoiceNum?'Inv #'+f.invoiceNum:f.fileName}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:1px;display:flex;gap:10px;flex-wrap:wrap">
-            ${f.amount?`<span style="color:var(--green-dark);font-weight:600">${poFmt(f.amount)}</span>`:''}
-            ${f.notes?`<span>${f.notes}</span>`:''}
-            ${f.invoiceNum?`<span style="color:var(--text-3)">${f.fileName}</span>`:''}
+      html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:6px;display:flex;align-items:center;gap:12px">
+        <div style="font-size:20px;flex-shrink:0">${fileIcon(f.fileType)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;color:var(--text);font-size:13px">${f.invoiceNum?'Inv #'+f.invoiceNum:f.fileName}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap">
+            <span>${f.projectName}</span>
+            ${f.vendorName?`<span>· ${f.vendorName}</span>`:''}
+            ${f.amount?`<span style="color:var(--green-dark);font-weight:600">· ${poFmt(f.amount)}</span>`:''}
+            ${f.notes?`<span>· ${f.notes}</span>`:''}
+            <span style="color:var(--text-3)">${date}</span>
           </div>
+          ${f.invoiceNum?`<div style="font-size:10px;color:var(--text-3);margin-top:1px">${f.fileName}</div>`:''}
         </div>
-        <div><div style="color:var(--text-2);font-size:12px">${f.projectName}</div>${f.vendorName?`<div style="color:var(--text-3);font-size:11px">${f.vendorName}</div>`:''}</div>
-        <div style="color:var(--text-3);font-size:12px">${date}</div>
-        <div style="display:flex;gap:6px;align-items:center">
-          <button onclick="openInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Open in new tab" style="background:none;border:1px solid var(--border);border-radius:4px;padding:4px 9px;cursor:pointer;font-size:13px">↗</button>
-          ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:4px 9px;cursor:pointer;font-size:14px">✏️</button>`:''}
-          ${canUpload?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid #fca5a5;border-radius:4px;padding:4px 9px;cursor:pointer;font-size:14px">🗑️</button>`:''}
+        <div style="display:flex;gap:5px;flex-shrink:0">
+          <button onclick="openInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Open" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:14px">↗</button>
+          ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 10px;cursor:pointer;font-size:14px">✏️</button>`:''}
+          ${canUpload?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid #fca5a5;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:14px">🗑️</button>`:''}
         </div>
       </div>`;
     });
-    html += `</div><div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">${filtered.length} file${filtered.length!==1?'s':''}</div>`;
+    html += `<div style="font-size:11px;color:var(--text-3);margin-top:6px;text-align:right">${filtered.length} file${filtered.length!==1?'s':''}</div>`;
   }
 
-  html += '</div>';
-  document.getElementById('main-content').innerHTML = html;
+  container.innerHTML = html;
 }
 function toggleTouchUp(){
   touchUpOn=!touchUpOn;

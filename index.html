@@ -5877,6 +5877,45 @@ async function extractInvoiceData(file){
   }
 }
 
+// ── INVOICE QUEUE ─────────────────────────────────────────────
+let invoiceQueue = [];
+let invoiceQueueIndex = 0;
+let invoiceQueueResults = [];
+
+async function startInvoiceQueue(files){
+  if(!files.length) return;
+  invoiceQueue = [...files];
+  invoiceQueueIndex = 0;
+  invoiceQueueResults = [];
+  await processNextInQueue();
+}
+
+async function processNextInQueue(){
+  if(invoiceQueueIndex >= invoiceQueue.length){
+    // All done — show summary if more than 1
+    if(invoiceQueue.length > 1){
+      showQueueSummary();
+    }
+    return;
+  }
+  const file = invoiceQueue[invoiceQueueIndex];
+  const statusEl = document.getElementById('inv-upload-status');
+  if(statusEl){ statusEl.textContent = `Reading file ${invoiceQueueIndex+1} of ${invoiceQueue.length}...`; statusEl.style.color='var(--text-3)'; }
+  await uploadInvoiceFile('', '', file, '', false);
+}
+
+function showQueueSummary(){
+  const done = invoiceQueueResults.filter(r=>r.ok).length;
+  const failed = invoiceQueueResults.filter(r=>!r.ok).length;
+  const statusEl = document.getElementById('inv-upload-status');
+  if(statusEl){
+    statusEl.textContent = `✓ ${done} of ${invoiceQueue.length} invoices filed${failed?' · '+failed+' skipped':''}`;
+    statusEl.style.color = 'var(--green-dark)';
+  }
+  invoiceQueue = [];
+  invoiceQueueIndex = 0;
+}
+
 async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtraction=false){
   if(!file) return;
   const maxSize = 25 * 1024 * 1024;
@@ -6073,9 +6112,13 @@ function showInvoiceConfirmModal(file, extracted, notes){
     suggestedProject.toLowerCase().includes(c.toLowerCase())
   ) || '';
 
+  const queueLabel = invoiceQueue.length > 1 ? ` (${invoiceQueueIndex+1} of ${invoiceQueue.length})` : '';
   overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
     <div class="sheet-handle"></div>
-    <div class="sheet-title">Confirm Invoice Filing</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <div class="sheet-title" style="margin-bottom:0">Confirm Invoice Filing${queueLabel}</div>
+      ${invoiceQueue.length>1?`<div style="font-size:12px;color:var(--text-3)">${invoiceQueue.length-invoiceQueueIndex-1} remaining after this</div>`:''}
+    </div>
     ${extracted ? `<div style="background:var(--accent);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px;font-size:13px">
       <div style="font-weight:600;color:var(--text);margin-bottom:4px">📄 ${file.name}</div>
       ${extracted.vendor?`<div style="color:var(--text-2)">Vendor detected: <strong>${extracted.vendor}</strong></div>`:''}
@@ -6119,7 +6162,7 @@ function showInvoiceConfirmModal(file, extracted, notes){
     </div>
     <div style="font-size:11px;color:var(--green-dark);background:var(--green-light);padding:6px 10px;border-radius:var(--radius-sm);margin-bottom:8px">✓ A Direct Cost entry will be created automatically from this invoice.</div>
     <div class="sheet-actions">
-      <button class="btn-cancel" onclick="document.getElementById('inv-confirm-overlay').remove()">Cancel</button>
+      <button class="btn-cancel" onclick="document.getElementById('inv-confirm-overlay').remove();invoiceQueueResults.push({ok:false,name:window._pendingFile?.name});invoiceQueueIndex++;processNextInQueue()">${invoiceQueue.length>1?'Skip':'Cancel'}</button>
       <button class="btn-save" onclick="
         const proj = document.getElementById('inv-confirm-project').value;
         const vend = document.getElementById('inv-confirm-vendor').value.trim();
@@ -6147,7 +6190,11 @@ function showInvoiceConfirmModal(file, extracted, notes){
     window._pendingInvoiceDate = document.getElementById('inv-confirm-date')?.value||null;
     window._pendingInvoiceNum = document.getElementById('inv-confirm-invnum')?.value||null;
     document.getElementById('inv-confirm-overlay').remove();
-    uploadInvoiceFile('', proj, window._pendingFile, n, true);
+    invoiceQueueResults.push({ok:true, name: window._pendingFile?.name});
+    invoiceQueueIndex++;
+    uploadInvoiceFile('', proj, window._pendingFile, n, true).then(()=>{
+      processNextInQueue();
+    });
   };
 
   document.body.appendChild(overlay);
@@ -6313,6 +6360,20 @@ async function retryAllDropbox(){
   if(btn){ btn.textContent=`Done — ${success} sent${failed?' ('+failed+' failed)':''}`; }
 }
 
+async function openInvoiceFile(filePath, fileName, projectName){
+  try {
+    const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/invoices/${filePath}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${sbToken()}`, 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresIn: 300 }),
+    });
+    const data = await res.json();
+    if(!data.signedURL) throw new Error('Could not generate link');
+    const fullUrl = `https://pldlvtlbgxizbppaliag.supabase.co/storage/v1${data.signedURL}`;
+    window.open(fullUrl, '_blank');
+  } catch(e){ alert('Could not open file: ' + e.message); }
+}
+
 async function downloadInvoiceFile(filePath, fileName, projectName){
   try {
     const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/${INVOICE_BUCKET}/${filePath}`, {
@@ -6409,15 +6470,15 @@ function renderInvoices(){
       <div id="inv-drop-zone" style="border:2px dashed var(--border-2);border-radius:var(--radius-sm);padding:24px;text-align:center;cursor:pointer;transition:border-color .15s"
         ondragover="event.preventDefault();this.style.borderColor='var(--green)'"
         ondragleave="this.style.borderColor='var(--border-2)'"
-        ondrop="event.preventDefault();this.style.borderColor='var(--border-2)';const f=event.dataTransfer.files[0];if(f){const n=document.getElementById('inv-notes');uploadInvoiceFile('','',f,n.value);}">
+        ondrop="event.preventDefault();this.style.borderColor='var(--border-2)';const files=[...event.dataTransfer.files];if(files.length){startInvoiceQueue(files);}">
         <div style="font-size:24px;margin-bottom:6px">📁</div>
-        <div style="font-size:13px;color:var(--text-2);margin-bottom:8px">Drag & drop file here, or</div>
+        <div style="font-size:13px;color:var(--text-2);margin-bottom:8px">Drag & drop one or multiple files, or</div>
         <label style="padding:6px 16px;background:var(--green);color:#fff;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">
           Browse Files
-          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.docx,.csv,.xls" style="display:none"
-            onchange="const n=document.getElementById('inv-notes');const ff=this.files[0];uploadInvoiceFile('','',ff,n.value).then(()=>this.value='')">
+          <input type="file" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.docx,.csv,.xls" multiple style="display:none"
+            onchange="startInvoiceQueue([...this.files]);this.value=''">
         </label>
-        <div style="font-size:11px;color:var(--text-3);margin-top:8px">PDF, image, Excel, Word — max 25MB</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:8px">PDF, image, Excel, Word — max 25MB · select multiple files at once</div>
       </div>
       <div id="inv-upload-status" style="font-size:12px;margin-top:8px;min-height:16px"></div>
     </div>` : ''}
@@ -6470,10 +6531,10 @@ function renderInvoices(){
         <div style="color:var(--text-3)">${fmtFileSize(f.fileSize)}</div>
         <div style="color:var(--text-3)">${date}</div>
         <div style="display:flex;gap:6px">
-          <button onclick="downloadInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Download" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">⬇</button>
+          <button onclick="openInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Open" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">↗</button>
           ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
-          ${canUpload&&!dropboxRetryMode?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
-          ${canUpload&&!dropboxRetryMode?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
+          ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
+          ${canUpload?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
         </div>
       </div>`;
     });

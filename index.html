@@ -5821,6 +5821,10 @@ let invoiceVendorFilter = 'All';
 let invoiceYearFilter = 'All';
 let invoiceMonthFilter = 'All';
 let invoiceLoaded = false;
+let invoiceView = 'list'; // 'list' or 'reports'
+let reportMinAmount = '';
+let reportDateFrom = '';
+let reportDateTo = '';
 const INVOICE_BUCKET = 'invoices';
 
 async function loadInvoices(){
@@ -6434,6 +6438,148 @@ function fileIcon(type){
   return '📄';
 }
 
+function renderInvoiceReports(){
+  const inv = invoiceFiles;
+
+  // Apply date range filter
+  let filtered = inv;
+  if(reportDateFrom) filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,10)>=reportDateFrom);
+  if(reportDateTo) filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,10)<=reportDateTo);
+  if(invoiceJobFilter!=='All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  if(invoiceVendorFilter!=='All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
+  if(reportMinAmount) filtered = filtered.filter(f=>f.amount&&f.amount>=parseFloat(reportMinAmount));
+
+  const totalSpend = filtered.reduce((s,f)=>s+(f.amount||0),0);
+  const projectsFromFiles = [...new Set(inv.map(f=>f.projectName).filter(Boolean))].sort();
+  const allProjects = ['All',...projectsFromFiles];
+  const allVendors = ['All',...new Set(inv.map(f=>f.vendorName).filter(Boolean))].sort();
+
+  // By vendor
+  const byVendor = {};
+  filtered.forEach(f=>{ if(!f.vendorName) return; if(!byVendor[f.vendorName]) byVendor[f.vendorName]={total:0,count:0}; byVendor[f.vendorName].total+=f.amount||0; byVendor[f.vendorName].count++; });
+  const vendorSorted = Object.entries(byVendor).sort((a,b)=>b[1].total-a[1].total);
+
+  // By project
+  const byProject = {};
+  filtered.forEach(f=>{ if(!f.projectName) return; if(!byProject[f.projectName]) byProject[f.projectName]={total:0,count:0}; byProject[f.projectName].total+=f.amount||0; byProject[f.projectName].count++; });
+  const projectSorted = Object.entries(byProject).sort((a,b)=>b[1].total-a[1].total);
+
+  // By month
+  const byMonth = {};
+  filtered.forEach(f=>{ if(!f.uploadedAt||!f.amount) return; const m=f.uploadedAt.slice(0,7); if(!byMonth[m]) byMonth[m]={total:0,count:0}; byMonth[m].total+=f.amount; byMonth[m].count++; });
+  const monthSorted = Object.entries(byMonth).sort((a,b)=>b[0].localeCompare(a[0]));
+
+  // Large invoices
+  const largeInvoices = filtered.filter(f=>f.amount&&f.amount>=(parseFloat(reportMinAmount)||0)).sort((a,b)=>b.amount-a.amount);
+
+  const maxVendor = vendorSorted.length ? vendorSorted[0][1].total : 1;
+  const maxProject = projectSorted.length ? projectSorted[0][1].total : 1;
+  const maxMonth = monthSorted.length ? Math.max(...monthSorted.map(m=>m[1].total)) : 1;
+
+  let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+    <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Filters</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:8px">
+      <div>
+        <label class="form-label">Project</label>
+        <select onchange="invoiceJobFilter=this.value;renderInvoiceReports()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+          ${allProjects.map(p=>`<option value="${p}"${invoiceJobFilter===p?' selected':''}>${p}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="form-label">Vendor</label>
+        <select onchange="invoiceVendorFilter=this.value;renderInvoiceReports()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+          ${allVendors.map(v=>`<option value="${v}"${invoiceVendorFilter===v?' selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="form-label">Uploaded From</label>
+        <input type="date" value="${reportDateFrom}" onchange="reportDateFrom=this.value;renderInvoiceReports()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div>
+        <label class="form-label">Uploaded To</label>
+        <input type="date" value="${reportDateTo}" onchange="reportDateTo=this.value;renderInvoiceReports()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div>
+        <label class="form-label">Min Amount ($)</label>
+        <input type="number" value="${reportMinAmount}" placeholder="0" onchange="reportMinAmount=this.value;renderInvoiceReports()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--text-3)">${filtered.length} invoices · <strong style="color:var(--green-dark)">${poFmt(totalSpend)}</strong> total</div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+
+    <!-- By Vendor -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+      <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px">By Vendor</div>
+      ${vendorSorted.slice(0,10).map(([v,d])=>`<div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+          <span style="color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${v}</span>
+          <span style="font-family:'DM Mono',monospace;font-weight:600;color:var(--green-dark);flex-shrink:0">${poFmt(d.total)} <span style="color:var(--text-3);font-weight:400">(${d.count})</span></span>
+        </div>
+        <div style="height:5px;background:var(--border);border-radius:3px;overflow:hidden">
+          <div style="height:100%;width:${(d.total/maxVendor*100).toFixed(1)}%;background:var(--green);border-radius:3px"></div>
+        </div>
+      </div>`).join('')}
+      ${!vendorSorted.length?'<div style="color:var(--text-3);font-size:13px">No data</div>':''}
+    </div>
+
+    <!-- By Project -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+      <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px">By Project</div>
+      ${projectSorted.slice(0,10).map(([p,d])=>`<div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+          <span style="color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${p}</span>
+          <span style="font-family:'DM Mono',monospace;font-weight:600;color:var(--green-dark);flex-shrink:0">${poFmt(d.total)} <span style="color:var(--text-3);font-weight:400">(${d.count})</span></span>
+        </div>
+        <div style="height:5px;background:var(--border);border-radius:3px;overflow:hidden">
+          <div style="height:100%;width:${(d.total/maxProject*100).toFixed(1)}%;background:#3b82f6;border-radius:3px"></div>
+        </div>
+      </div>`).join('')}
+      ${!projectSorted.length?'<div style="color:var(--text-3);font-size:13px">No data</div>':''}
+    </div>
+  </div>
+
+  <!-- Monthly Spend -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px">Monthly Spend</div>
+    ${monthSorted.map(([m,d])=>{
+      const label = new Date(m+'-15').toLocaleDateString('en-US',{month:'long',year:'numeric'});
+      const pct = (d.total/maxMonth*100).toFixed(1);
+      return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <div style="width:130px;font-size:12px;color:var(--text-2);flex-shrink:0">${label}</div>
+        <div style="flex:1;height:18px;background:var(--border);border-radius:3px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:#f59e0b;border-radius:3px"></div>
+        </div>
+        <div style="font-size:12px;font-weight:600;font-family:'DM Mono',monospace;color:var(--text);flex-shrink:0;width:90px;text-align:right">${poFmt(d.total)}</div>
+        <div style="font-size:11px;color:var(--text-3);flex-shrink:0;width:30px">${d.count}</div>
+      </div>`;
+    }).join('')}
+    ${!monthSorted.length?'<div style="color:var(--text-3);font-size:13px">No data</div>':''}
+  </div>
+
+  <!-- Large Invoices -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px">All Invoices${reportMinAmount?' over '+poFmt(parseFloat(reportMinAmount)):''} — Largest First</div>
+    ${largeInvoices.slice(0,20).map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);gap:10px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;color:var(--text)">${f.vendorName||f.fileName}</div>
+        <div style="font-size:11px;color:var(--text-3)">${f.projectName}${f.invoiceDate?' · '+f.invoiceDate:''}</div>
+      </div>
+      <div style="font-size:14px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green-dark);flex-shrink:0">${poFmt(f.amount||0)}</div>
+    </div>`).join('')}
+    ${!largeInvoices.length?'<div style="color:var(--text-3);font-size:13px">No invoices match the current filters</div>':''}
+  </div>`;
+
+  document.getElementById('main-content').innerHTML = `<div style="margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:18px;font-weight:700">Invoice Reports</div>
+      <button onclick="invoiceView='list';invoiceJobFilter='All';invoiceVendorFilter='All';reportDateFrom='';reportDateTo='';reportMinAmount='';renderInvoices()" style="padding:6px 14px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;cursor:pointer;font-family:inherit">← Back to Invoices</button>
+    </div>
+    ${html}
+  </div>`;
+}
+
 function renderInvoices(){
   const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
   const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com'].includes(userEmail);
@@ -6469,6 +6615,7 @@ function renderInvoices(){
   let html = `<div style="margin-bottom:20px">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
       <div style="font-size:18px;font-weight:700;color:var(--text)">Invoices</div>
+      <button onclick="invoiceView='reports';renderInvoiceReports()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">📊 Reports</button>
     </div>
 
     ${canUpload ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">

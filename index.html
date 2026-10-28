@@ -2738,12 +2738,12 @@ function setPortal(portal){
   // Navigate to default view for portal
   if(portal==='tracker') setView('week');
   else if(portal==='bizops'){
-    loadPipelines().then(()=>{ loadPO(); loadCosts(); }).then(()=>{
-      view='pipeline';
+    loadCosts().then(()=>{
+      view='costs';
       document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-      const bar = document.getElementById('bizops-bar');
-      if(bar){ const tabs = bar.querySelectorAll('.vtab'); if(tabs[0]) tabs[0].classList.add('active'); }
-      renderPipeline();
+      const costsTab = document.getElementById('costs-tab');
+      if(costsTab) costsTab.classList.add('active');
+      renderCosts();
     });
   }
   else if(portal==='consulting'){

@@ -6,7 +6,6 @@ exports.handler = async function(event) {
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
   if(!apiKey){
     return { statusCode: 500, body: JSON.stringify({ error: 'API key not configured' }) };
   }
@@ -30,7 +29,8 @@ exports.handler = async function(event) {
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } }
     : { type: 'image', source: { type: 'base64', media_type: fileType, data: fileData } };
 
-  const requestBody = JSON.stringify({
+  // First call: extract structured fields
+  const structuredBody = JSON.stringify({
     model: 'claude-sonnet-4-6',
     max_tokens: 500,
     messages: [{
@@ -46,52 +46,75 @@ exports.handler = async function(event) {
     }]
   });
 
-  const headers = {
-    'Content-Type': 'application/json',
-    'Content-Length': Buffer.byteLength(requestBody),
-    'x-api-key': apiKey,
-    'anthropic-version': '2023-06-01',
-    'anthropic-beta': 'pdfs-2024-09-25',
-  };
-  if(workspaceId) headers['anthropic-workspace-id'] = workspaceId;
+  // Second call: extract full text content for search
+  const textBody = JSON.stringify({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2000,
+    messages: [{
+      role: 'user',
+      content: [
+        contentBlock,
+        {
+          type: 'text',
+          text: 'Extract ALL text content from this invoice exactly as it appears. Include all line items, descriptions, addresses, dates, amounts, and any other text. Return plain text only, no formatting.'
+        }
+      ]
+    }]
+  });
 
-  try {
-    const result = await new Promise((resolve, reject) => {
+  function callAnthropicAPI(requestBody) {
+    return new Promise((resolve, reject) => {
       const options = {
         hostname: 'api.anthropic.com',
         path: '/v1/messages',
         method: 'POST',
-        headers,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'Content-Length': Buffer.byteLength(requestBody),
+        }
       };
-
       const req = https.request(options, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
-        res.on('end', () => resolve(data));
+        res.on('end', () => {
+          try { resolve(JSON.parse(data)); }
+          catch(e) { reject(new Error('Invalid JSON response: ' + data.slice(0, 200))); }
+        });
       });
       req.on('error', reject);
-      req.setTimeout(25000, () => { req.destroy(); reject(new Error('Timeout')); });
       req.write(requestBody);
       req.end();
     });
+  }
 
-    const parsed = JSON.parse(result);
-    if(parsed.error) {
-      return { statusCode: 500, body: JSON.stringify({ error: parsed.error.message || 'API error' }) };
+  try {
+    // Run both extractions in parallel
+    const [structuredResult, textResult] = await Promise.all([
+      callAnthropicAPI(structuredBody),
+      callAnthropicAPI(textBody),
+    ]);
+
+    // Parse structured fields
+    let extracted = {};
+    const structuredText = structuredResult?.content?.[0]?.text || '';
+    try {
+      const clean = structuredText.replace(/```json|```/g, '').trim();
+      extracted = JSON.parse(clean);
+    } catch(e) {
+      extracted = { confidence: 'low', notes: 'Could not parse invoice' };
     }
 
-    const text = (parsed.content?.[0]?.text || '').replace(/```json|```/g, '').trim();
-    JSON.parse(text);
+    // Get full text
+    const fullText = textResult?.content?.[0]?.text || '';
 
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
-      body: text,
+      body: JSON.stringify({ ...extracted, full_text: fullText }),
     };
   } catch(e) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: e.message }),
-    };
+    return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
   }
 };

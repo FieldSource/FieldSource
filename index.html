@@ -6439,6 +6439,130 @@ function fileIcon(type){
   return '📄';
 }
 
+function getReportFilteredInvoices(){
+  let filtered = invoiceFiles;
+  if(reportDateFrom) filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,10)>=reportDateFrom);
+  if(reportDateTo) filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,10)<=reportDateTo);
+  if(invoiceJobFilter!=='All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  if(invoiceVendorFilter!=='All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
+  if(reportMinAmount) filtered = filtered.filter(f=>f.amount&&f.amount>=parseFloat(reportMinAmount));
+  return filtered;
+}
+
+function downloadInvoiceReport(type){
+  const filtered = getReportFilteredInvoices();
+  const total = filtered.reduce((s,f)=>s+(f.amount||0),0);
+
+  // Build summaries
+  const byVendor = {};
+  filtered.forEach(f=>{ if(!f.vendorName) return; if(!byVendor[f.vendorName]) byVendor[f.vendorName]={total:0,count:0}; byVendor[f.vendorName].total+=f.amount||0; byVendor[f.vendorName].count++; });
+  const byProject = {};
+  filtered.forEach(f=>{ if(!f.projectName) return; if(!byProject[f.projectName]) byProject[f.projectName]={total:0,count:0}; byProject[f.projectName].total+=f.amount||0; byProject[f.projectName].count++; });
+  const byMonth = {};
+  filtered.forEach(f=>{ if(!f.uploadedAt||!f.amount) return; const m=f.uploadedAt.slice(0,7); if(!byMonth[m]) byMonth[m]={total:0,count:0}; byMonth[m].total+=f.amount; byMonth[m].count++; });
+
+  if(type==='csv'){
+    // Build multi-sheet CSV (3 sections separated by blank rows)
+    const lines = [];
+    const dateStr = new Date().toLocaleDateString('en-US');
+    lines.push(`Field Source Invoice Report — ${dateStr}`);
+    lines.push(`Filters: Project=${invoiceJobFilter}, Vendor=${invoiceVendorFilter}, From=${reportDateFrom||'—'}, To=${reportDateTo||'—'}, Min Amount=${reportMinAmount||'—'}`);
+    lines.push(`Total: ${filtered.length} invoices, ${poFmt(total)}`);
+    lines.push('');
+
+    lines.push('BY VENDOR');
+    lines.push('Vendor,Total,Count');
+    Object.entries(byVendor).sort((a,b)=>b[1].total-a[1].total).forEach(([v,d])=>lines.push(`"${v}",${d.total.toFixed(2)},${d.count}`));
+    lines.push('');
+
+    lines.push('BY PROJECT');
+    lines.push('Project,Total,Count');
+    Object.entries(byProject).sort((a,b)=>b[1].total-a[1].total).forEach(([p,d])=>lines.push(`"${p}",${d.total.toFixed(2)},${d.count}`));
+    lines.push('');
+
+    lines.push('BY MONTH');
+    lines.push('Month,Total,Count');
+    Object.entries(byMonth).sort((a,b)=>b[0].localeCompare(a[0])).forEach(([m,d])=>{
+      const label = new Date(m+'-15').toLocaleDateString('en-US',{month:'long',year:'numeric'});
+      lines.push(`"${label}",${d.total.toFixed(2)},${d.count}`);
+    });
+    lines.push('');
+
+    lines.push('ALL INVOICES');
+    lines.push('Vendor,Project,Amount,Invoice Date,Uploaded,Invoice #,Notes');
+    filtered.sort((a,b)=>b.amount-a.amount).forEach(f=>{
+      lines.push(`"${f.vendorName||''}","${f.projectName||''}",${(f.amount||0).toFixed(2)},"${f.invoiceDate||''}","${f.uploadedAt?f.uploadedAt.slice(0,10):''}","${f.invoiceNum||''}","${(f.notes||'').replace(/"/g,"'")}"`);
+    });
+
+    const csv = lines.join('\n');
+    const blob = new Blob([csv], {type:'text/csv'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `FieldSource_Invoice_Report_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+
+  } else if(type==='pdf'){
+    // Build HTML and print to PDF
+    const dateStr = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+    const win = window.open('','_blank');
+    win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>Field Source Invoice Report</title>
+    <style>
+      body{font-family:Arial,sans-serif;color:#1a1f18;padding:32px;max-width:900px;margin:0 auto;font-size:12px}
+      h1{color:#2a6a22;font-size:20px;margin-bottom:4px}
+      h2{color:#2a6a22;font-size:14px;margin:24px 0 8px;border-bottom:2px solid #2a6a22;padding-bottom:4px}
+      .meta{color:#666;font-size:11px;margin-bottom:24px}
+      .summary{display:flex;gap:24px;background:#f0f7ee;padding:12px 16px;border-radius:6px;margin-bottom:24px}
+      .summary div{text-align:center}
+      .summary .num{font-size:20px;font-weight:700;color:#2a6a22}
+      .summary .lbl{font-size:10px;color:#666;text-transform:uppercase}
+      table{width:100%;border-collapse:collapse;margin-bottom:8px}
+      th{background:#2a6a22;color:#fff;padding:6px 10px;text-align:left;font-size:11px}
+      td{padding:6px 10px;border-bottom:1px solid #e8f5e3;font-size:11px}
+      tr:nth-child(even) td{background:#f7faf6}
+      .bar-cell{position:relative}
+      .bar{height:10px;background:#3a8c2f;border-radius:3px;display:inline-block}
+      .amount{font-weight:700;color:#2a6a22}
+      @media print{body{padding:16px}}
+    </style></head><body>
+    <h1>Field Source Invoice Report</h1>
+    <div class="meta">Generated ${dateStr} · ${filtered.length} invoices · ${invoiceJobFilter!=='All'?'Project: '+invoiceJobFilter+' · ':''}${invoiceVendorFilter!=='All'?'Vendor: '+invoiceVendorFilter+' · ':''}${reportDateFrom?'From: '+reportDateFrom+' · ':''}${reportDateTo?'To: '+reportDateTo:''}
+    </div>
+    <div class="summary">
+      <div><div class="num">${filtered.length}</div><div class="lbl">Invoices</div></div>
+      <div><div class="num">${poFmt(total)}</div><div class="lbl">Total Spend</div></div>
+      <div><div class="num">${Object.keys(byVendor).length}</div><div class="lbl">Vendors</div></div>
+      <div><div class="num">${Object.keys(byProject).length}</div><div class="lbl">Projects</div></div>
+    </div>
+
+    <h2>By Vendor</h2>
+    <table><tr><th>Vendor</th><th>Total</th><th>Count</th></tr>
+    ${Object.entries(byVendor).sort((a,b)=>b[1].total-a[1].total).map(([v,d])=>`<tr><td>${v}</td><td class="amount">${poFmt(d.total)}</td><td>${d.count}</td></tr>`).join('')}
+    </table>
+
+    <h2>By Project</h2>
+    <table><tr><th>Project</th><th>Total</th><th>Count</th></tr>
+    ${Object.entries(byProject).sort((a,b)=>b[1].total-a[1].total).map(([p,d])=>`<tr><td>${p}</td><td class="amount">${poFmt(d.total)}</td><td>${d.count}</td></tr>`).join('')}
+    </table>
+
+    <h2>Monthly Spend</h2>
+    <table><tr><th>Month</th><th>Total</th><th>Count</th></tr>
+    ${Object.entries(byMonth).sort((a,b)=>b[0].localeCompare(a[0])).map(([m,d])=>{
+      const label=new Date(m+'-15').toLocaleDateString('en-US',{month:'long',year:'numeric'});
+      return `<tr><td>${label}</td><td class="amount">${poFmt(d.total)}</td><td>${d.count}</td></tr>`;
+    }).join('')}
+    </table>
+
+    <h2>All Invoices</h2>
+    <table><tr><th>Vendor</th><th>Project</th><th>Amount</th><th>Inv Date</th><th>Uploaded</th><th>Invoice #</th></tr>
+    ${filtered.sort((a,b)=>(b.amount||0)-(a.amount||0)).map(f=>`<tr><td>${f.vendorName||'—'}</td><td>${f.projectName||'—'}</td><td class="amount">${poFmt(f.amount||0)}</td><td>${f.invoiceDate||'—'}</td><td>${f.uploadedAt?f.uploadedAt.slice(0,10):'—'}</td><td>${f.invoiceNum||'—'}</td></tr>`).join('')}
+    </table>
+    </body></html>`);
+    win.document.close();
+    setTimeout(()=>win.print(), 500);
+  }
+}
+
 function renderInvoiceReports(){
   const inv = invoiceFiles;
 
@@ -6575,7 +6699,11 @@ function renderInvoiceReports(){
   document.getElementById('main-content').innerHTML = `<div style="margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div style="font-size:18px;font-weight:700">Invoice Reports</div>
-      <button onclick="invoiceView='list';invoiceJobFilter='All';invoiceVendorFilter='All';reportDateFrom='';reportDateTo='';reportMinAmount='';renderInvoices()" style="padding:6px 14px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;cursor:pointer;font-family:inherit">← Back to Invoices</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button onclick="downloadInvoiceReport('csv')" style="padding:6px 14px;background:none;border:1px solid var(--green);color:var(--green-dark);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">⬇ Excel / CSV</button>
+        <button onclick="downloadInvoiceReport('pdf')" style="padding:6px 14px;background:none;border:1px solid var(--green);color:var(--green-dark);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">⬇ PDF</button>
+        <button onclick="invoiceView='list';invoiceJobFilter='All';invoiceVendorFilter='All';reportDateFrom='';reportDateTo='';reportMinAmount='';renderInvoices()" style="padding:6px 14px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;cursor:pointer;font-family:inherit">← Back</button>
+      </div>
     </div>
     ${html}
   </div>`;

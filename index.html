@@ -5839,6 +5839,7 @@ async function loadInvoices(){
       amount: r.amount!=null ? Number(r.amount) : null,
       invoiceNum: r.invoice_num||'',
       invoiceDate: r.invoice_date||'',
+      extractedText: r.extracted_text||'',
     }));
     invoiceLoaded = true;
   } catch(e){ invoiceFiles = []; invoiceLoaded = true; }
@@ -5928,6 +5929,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
   if(!skipExtraction){
     try {
       const extracted = await extractInvoiceData(file);
+      window._pendingFullText = extracted?.full_text||'';
       showInvoiceConfirmModal(file, extracted, notes);
       if(statusEl){ statusEl.textContent = ''; }
       return;
@@ -5975,6 +5977,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       amount: window._pendingAmount||null,
       invoice_num: window._pendingInvoiceNum||'',
       invoice_date: window._pendingInvoiceDate||null,
+      extracted_text: window._pendingExtractedText||'',
     };
     await sbFetch('POST', '/rest/v1/invoice_files', meta);
 
@@ -6189,6 +6192,7 @@ function showInvoiceConfirmModal(file, extracted, notes){
     window._pendingAmount = parseFloat(document.getElementById('inv-confirm-amount')?.value)||null;
     window._pendingInvoiceDate = document.getElementById('inv-confirm-date')?.value||null;
     window._pendingInvoiceNum = document.getElementById('inv-confirm-invnum')?.value||null;
+    window._pendingExtractedText = window._pendingFullText||'';
     document.getElementById('inv-confirm-overlay').remove();
     invoiceQueueResults.push({ok:true, name: window._pendingFile?.name});
     invoiceQueueIndex++;
@@ -6441,7 +6445,14 @@ function renderInvoices(){
   if(invoiceVendorFilter !== 'All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
   if(invoiceSearch.trim()) {
     const q = invoiceSearch.trim().toLowerCase();
-    filtered = filtered.filter(f=>f.fileName.toLowerCase().includes(q)||f.projectName.toLowerCase().includes(q)||f.vendorName.toLowerCase().includes(q)||f.notes.toLowerCase().includes(q));
+    filtered = filtered.filter(f=>
+      f.fileName.toLowerCase().includes(q)||
+      f.projectName.toLowerCase().includes(q)||
+      f.vendorName.toLowerCase().includes(q)||
+      f.notes.toLowerCase().includes(q)||
+      f.invoiceNum.toLowerCase().includes(q)||
+      (f.extractedText||'').toLowerCase().includes(q)
+    );
   }
   // Vendors available after project filter
   const availableVendors = ['All', ...new Set(
@@ -6498,7 +6509,7 @@ function renderInvoices(){
       </div>
     </div>
     <div style="margin-bottom:12px">
-      <input type="text" placeholder="Search..." value="${invoiceSearch}"
+      <input type="text" placeholder="Search invoices, vendors, content..." value="${invoiceSearch}"
         oninput="invoiceSearch=this.value;renderInvoices()"
         style="width:100%;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
     </div>`;
@@ -6506,9 +6517,9 @@ function renderInvoices(){
   if(!filtered.length){
     html += `<div style="text-align:center;padding:48px;color:var(--text-3);font-size:14px">${invoiceFiles.length?'No files match your search.':'No invoices uploaded yet.'}</div>`;
   } else {
-    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
-      <div style="display:grid;grid-template-columns:28px 2fr 1fr 70px 90px 100px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
-        ${['','Invoice','Project / Vendor','Size','Date',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">
+      <div style="display:grid;grid-template-columns:28px 2fr 1.5fr 100px 90px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px;border-radius:var(--radius) var(--radius) 0 0">
+        ${['','Invoice','Project / Vendor','Date',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
       </div>`;
 
     filtered.forEach(f=>{
@@ -6517,7 +6528,7 @@ function renderInvoices(){
       const safePath = f.filePath.replace(/'/g,"\\'");
       const safeFile = f.fileName.replace(/'/g,"\\'");
       const safeProject = f.projectName.replace(/'/g,"\\'");
-      html += `<div style="display:grid;grid-template-columns:28px 2fr 1fr 70px 90px 100px;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:13px">
+      html += `<div style="display:grid;grid-template-columns:28px 2fr 1.5fr 100px 90px;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:13px">
         <div style="font-size:18px">${fileIcon(f.fileType)}</div>
         <div>
           <div style="font-weight:600;color:var(--text)">${f.invoiceNum?'Inv #'+f.invoiceNum:f.fileName}</div>
@@ -6528,8 +6539,7 @@ function renderInvoices(){
           </div>
         </div>
         <div><div style="color:var(--text-2);font-size:12px">${f.projectName}</div>${f.vendorName?`<div style="color:var(--text-3);font-size:11px">${f.vendorName}</div>`:''}</div>
-        <div style="color:var(--text-3)">${fmtFileSize(f.fileSize)}</div>
-        <div style="color:var(--text-3)">${date}</div>
+        <div style="color:var(--text-3);font-size:12px">${date}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <button onclick="openInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Open in new tab" style="background:none;border:1px solid var(--border);border-radius:4px;padding:4px 9px;cursor:pointer;font-size:13px">↗</button>
           ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:4px 9px;cursor:pointer;font-size:14px">✏️</button>`:''}

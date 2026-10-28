@@ -2572,6 +2572,7 @@ function startPolling(){
       // Don't re-render if in consulting detail view or any overlay modal is open
       if(view==='consulting-home' && consultingView==='detail') return;
       if(document.querySelector('.modal-overlay')) return;
+      if(view==='invoices' && invoiceView==='reports') return;
       // Preserve scroll position during background refresh
       const scrollContainer = document.querySelector('.week-scroll') || document.querySelector('#main-content > div[style*="overflow"]');
       const savedScroll = scrollContainer ? scrollContainer.scrollLeft : 0;
@@ -4276,7 +4277,7 @@ function render(){
   else if(view==='fleet-loans') renderFleet();
   else if(view==='fuel') renderFuel();
   else if(view==='estimates') renderEstimates();
-  else if(view==='invoices') renderInvoices();
+  else if(view==='invoices'){ if(invoiceView==='reports') renderInvoiceReports(); else renderInvoices(); }
   else if(view==='inv-approval') renderInvApproval();
   else if(view==='materials') renderMaterials();
   else if(view==='consulting-detail') renderConsultingDetail();

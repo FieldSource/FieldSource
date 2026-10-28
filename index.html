@@ -6161,9 +6161,60 @@ let dropboxRetryMode = false;
 let dropboxRetrySelected = new Set();
 
 function toggleDropboxRetryMode(){
-  dropboxRetryMode = !dropboxRetryMode;
-  dropboxRetrySelected = new Set();
-  renderInvoices();
+  // Open a modal instead of re-rendering the list
+  openDropboxRetryModal();
+}
+
+function openDropboxRetryModal(){
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'dropbox-retry-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  const rows = invoiceFiles.map(f=>`
+    <label style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer">
+      <input type="checkbox" data-id="${f.id}" style="width:18px;height:18px;accent-color:var(--green);flex-shrink:0">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:500;font-size:13px;color:var(--text)">${f.invoiceNum?'Inv #'+f.invoiceNum:f.fileName}</div>
+        <div style="font-size:11px;color:var(--text-3)">${f.projectName}${f.vendorName?' · '+f.vendorName:''}${f.amount?' · $'+Number(f.amount).toLocaleString():''}</div>
+      </div>
+    </label>`).join('');
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Retry to Dropbox</div>
+    <div style="font-size:13px;color:var(--text-2);margin-bottom:12px">Select the invoices to send to Dropbox:</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <button onclick="document.querySelectorAll('#dropbox-retry-overlay input[type=checkbox]').forEach(c=>c.checked=true)" style="padding:4px 12px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;cursor:pointer">Select all</button>
+      <button onclick="document.querySelectorAll('#dropbox-retry-overlay input[type=checkbox]').forEach(c=>c.checked=false)" style="padding:4px 12px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;cursor:pointer">Clear all</button>
+    </div>
+    <div style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0 12px">${rows}</div>
+    <div id="dropbox-retry-status" style="font-size:12px;color:var(--text-3);margin-top:8px;min-height:16px"></div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('dropbox-retry-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="dropbox-retry-send-btn" onclick="sendCheckedToDropbox()">↗ Send to Dropbox</button>
+    </div>
+  </div>`;
+
+  document.body.appendChild(overlay);
+}
+
+async function sendCheckedToDropbox(){
+  const checked = [...document.querySelectorAll('#dropbox-retry-overlay input[type=checkbox]:checked')];
+  if(!checked.length){ alert('Select at least one invoice.'); return; }
+  const btn = document.getElementById('dropbox-retry-send-btn');
+  const status = document.getElementById('dropbox-retry-status');
+  if(btn){ btn.disabled=true; btn.textContent=`Sending 0 of ${checked.length}...`; }
+  let success=0, failed=0;
+  for(let i=0; i<checked.length; i++){
+    const id = checked[i].dataset.id;
+    if(status) status.textContent = `Sending ${i+1} of ${checked.length}...`;
+    try { await retryDropboxUpload(id, true); success++; }
+    catch(e){ failed++; }
+  }
+  if(status){ status.textContent = `✓ ${success} sent${failed?' · '+failed+' failed':''}`;  status.style.color='var(--green-dark)'; }
+  if(btn){ btn.textContent='Done'; btn.disabled=false; }
+  setTimeout(()=>{ document.getElementById('dropbox-retry-overlay')?.remove(); }, 2000);
 }
 
 function updateDropboxCount(){
@@ -6385,13 +6436,6 @@ function renderInvoices(){
         </select>
       </div>
     </div>
-    ${dropboxRetryMode?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--radius);padding:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <div style="font-size:13px;color:#92400e;font-weight:500">Check the invoices to send to Dropbox</div>
-      <div style="display:flex;gap:8px">
-        <button onclick="toggleDropboxRetryMode()" style="padding:6px 14px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;cursor:pointer;font-family:inherit">Cancel</button>
-        <button id="retry-selected-btn" onclick="sendSelectedToDropbox()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">↗ Send ${dropboxRetrySelected.size||0} to Dropbox</button>
-      </div>
-    </div>`:''}
     <div style="margin-bottom:12px">
       <input type="text" placeholder="Search..." value="${invoiceSearch}"
         oninput="invoiceSearch=this.value;renderInvoices()"
@@ -6428,7 +6472,6 @@ function renderInvoices(){
         <div style="display:flex;gap:6px">
           <button onclick="downloadInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Download" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">⬇</button>
           ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
-          ${canUpload&&dropboxRetryMode?`<input type="checkbox" class="dropbox-retry-cb" data-id="${safe}" onchange="updateDropboxCount()" style="width:18px;height:18px;accent-color:var(--green);cursor:pointer" title="Select for Dropbox retry">`:''}
           ${canUpload&&!dropboxRetryMode?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
           ${canUpload&&!dropboxRetryMode?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
         </div>

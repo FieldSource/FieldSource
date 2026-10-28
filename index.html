@@ -6157,6 +6157,102 @@ function sbToken(){
   return currentToken || localStorage.getItem('fs_token') || SUPABASE_KEY;
 }
 
+let dropboxRetryMode = false;
+
+function toggleDropboxRetryMode(){
+  dropboxRetryMode = !dropboxRetryMode;
+  renderInvoices();
+}
+
+async function sendSelectedToDropbox(){
+  const checked = [...document.querySelectorAll('[id^="retry-cb-"]:checked')];
+  if(!checked.length){ alert('Select at least one invoice to retry.'); return; }
+  const btn = document.getElementById('retry-selected-btn');
+  if(btn){ btn.textContent=`Sending ${checked.length}...`; btn.disabled=true; }
+  let success=0, failed=0;
+  for(const cb of checked){
+    const id = cb.id.replace('retry-cb-','');
+    try {
+      await retryDropboxUpload(id, true);
+      success++;
+    } catch(e){ failed++; }
+  }
+  const msg = document.createElement('div');
+  msg.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1f18;color:#fff;padding:10px 20px;border-radius:99px;font-size:13px;font-weight:600;z-index:9999';
+  msg.textContent=`✓ ${success} sent to Dropbox${failed?' ('+failed+' failed)':''}`;
+  document.body.appendChild(msg);
+  setTimeout(()=>msg.remove(),3000);
+  dropboxRetryMode = false;
+  renderInvoices();
+}
+
+async function retryDropboxUpload(id, silent=false){
+  const f = invoiceFiles.find(x=>x.id===id);
+  if(!f) return;
+  try {
+    // Download file from Supabase storage
+    const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/invoices/${f.filePath}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${sbToken()}`, 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresIn: 60 }),
+    });
+    const data = await res.json();
+    if(!data.signedURL) throw new Error('Could not get signed URL');
+    const fullUrl = `https://pldlvtlbgxizbppaliag.supabase.co/storage/v1${data.signedURL}`;
+    const fileRes = await fetch(fullUrl);
+    const blob = await fileRes.blob();
+    const base64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
+    // Upload to Dropbox
+    const dropRes = await fetch('/.netlify/functions/upload-to-dropbox', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
+    });
+    const dropData = await dropRes.json();
+    if(dropData.error) throw new Error(dropData.error);
+    if(!silent){
+      const msg = document.createElement('div');
+      msg.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1f18;color:#fff;padding:10px 20px;border-radius:99px;font-size:13px;font-weight:600;z-index:9999';
+      msg.textContent='✓ Sent to Dropbox';
+      document.body.appendChild(msg);
+      setTimeout(()=>msg.remove(),2500);
+    }
+  } catch(e){
+    if(!silent) alert('Failed: '+e.message);
+    else throw e;
+  }
+}
+
+async function retryAllDropbox(){
+  const btn = document.getElementById('retry-all-dropbox-btn');
+  if(btn){ btn.textContent='Sending...'; btn.disabled=true; }
+  let success=0, failed=0;
+  for(const f of invoiceFiles){
+    try {
+      const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/invoices/${f.filePath}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${sbToken()}`, 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expiresIn: 60 }),
+      });
+      const data = await res.json();
+      if(!data.signedURL) throw new Error('No signed URL');
+      const fullUrl = `https://pldlvtlbgxizbppaliag.supabase.co/storage/v1${data.signedURL}`;
+      const fileRes = await fetch(fullUrl);
+      const blob = await fileRes.blob();
+      const base64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
+      const dropRes = await fetch('/.netlify/functions/upload-to-dropbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
+      });
+      const dropData = await dropRes.json();
+      if(dropData.error) throw new Error(dropData.error);
+      success++;
+    } catch(e){ failed++; }
+  }
+  if(btn){ btn.textContent=`Done — ${success} sent${failed?' ('+failed+' failed)':''}`; }
+}
+
 async function downloadInvoiceFile(filePath, fileName, projectName){
   try {
     const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/${INVOICE_BUCKET}/${filePath}`, {
@@ -6242,7 +6338,10 @@ function renderInvoices(){
     </div>
 
     ${canUpload ? `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px">
-      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:12px">Upload Invoice</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-size:13px;font-weight:600;color:var(--text)">Upload Invoice</div>
+        <button onclick="toggleDropboxRetryMode()" id="retry-mode-btn" style="padding:6px 14px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-weight:600;cursor:pointer;color:var(--text-2)">↗ Retry to Dropbox</button>
+      </div>
       <div style="margin-bottom:10px">
         <label class="form-label">Notes (optional)</label>
         <input type="text" id="inv-notes" placeholder="e.g. August invoice, Permit fees..." style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
@@ -6277,6 +6376,13 @@ function renderInvoices(){
         </select>
       </div>
     </div>
+    ${dropboxRetryMode?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--radius);padding:12px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="font-size:13px;color:#92400e;font-weight:500">Check the invoices to send to Dropbox</div>
+      <div style="display:flex;gap:8px">
+        <button onclick="toggleDropboxRetryMode()" style="padding:6px 14px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;cursor:pointer;font-family:inherit">Cancel</button>
+        <button id="retry-selected-btn" onclick="sendSelectedToDropbox()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">↗ Send Selected to Dropbox</button>
+      </div>
+    </div>`:''}
     <div style="margin-bottom:12px">
       <input type="text" placeholder="Search..." value="${invoiceSearch}"
         oninput="invoiceSearch=this.value;renderInvoices()"
@@ -6313,7 +6419,9 @@ function renderInvoices(){
         <div style="display:flex;gap:6px">
           <button onclick="downloadInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Download" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">⬇</button>
           ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
-          ${canUpload?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
+          ${canUpload&&dropboxRetryMode?`<input type="checkbox" id="retry-cb-${safe}" style="width:16px;height:16px;accent-color:var(--green);cursor:pointer" title="Select for Dropbox retry">`:''}
+          ${canUpload&&!dropboxRetryMode?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
+          ${canUpload&&!dropboxRetryMode?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
         </div>
       </div>`;
     });

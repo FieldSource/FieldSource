@@ -3571,9 +3571,281 @@ async function deleteFleetLoan(id){
   renderFleet();
 }
 
-let estimates = [];
-let estimateStatusFilter = 'All';
-let estimateTypeFilter = 'All';
+
+
+
+async function loadEstimates(){
+  try {
+    const data = await sbFetch('GET', '/rest/v1/qb_estimates?select=*&order=estimate_date.desc');
+    estimates = (data||[]).map(r=>({
+      id: r.id,
+      qbId: r.qb_estimate_id||'',
+      customerName: r.customer_name||'',
+      estimateNumber: r.estimate_number||'',
+      estimateDate: r.estimate_date||'',
+      dueDate: r.due_date||'',
+      total: Number(r.total)||0,
+      status: r.status||'pending_review',
+      qbStatus: r.qb_status||'',
+      notes: r.notes||'',
+      declinedReason: r.declined_reason||'',
+      declinedDetails: r.declined_details||'',
+      syncedAt: r.synced_at||'',
+    }));
+  } catch(e){ estimates = []; }
+}
+
+async function syncEstimatesFromQB(){
+  const btn = document.getElementById('qb-sync-btn');
+  const status = document.getElementById('qb-sync-status');
+  if(btn){ btn.disabled=true; btn.textContent='Syncing...'; }
+  if(status){ status.textContent='Connecting to QuickBooks...'; status.style.color='var(--text-3)'; }
+  try {
+    const res = await fetch('/.netlify/functions/qb-sync', { method:'POST' });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    lastSyncTime = new Date();
+    if(status){ status.textContent=`✓ Synced ${data.synced} estimates · ${lastSyncTime.toLocaleTimeString()}`; status.style.color='var(--green-dark)'; }
+    await loadEstimates();
+    renderEstimates();
+  } catch(e){
+    if(status){ status.textContent='Sync failed: '+e.message; status.style.color='#dc2626'; }
+  }
+  if(btn){ btn.disabled=false; btn.textContent='↻ Sync from QuickBooks'; }
+}
+
+async function loadEstimateLines(estimateId){
+  try {
+    const data = await sbFetch('GET', `/rest/v1/qb_estimate_lines?estimate_id=eq.${estimateId}&order=line_number.asc`);
+    return data||[];
+  } catch(e){ return []; }
+}
+
+function openEstimateDetail(id){
+  const est = estimates.find(e=>e.id===id);
+  if(!est) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'est-detail-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:560px">
+    <div class="sheet-handle"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="sheet-title" style="margin-bottom:0">Estimate #${est.estimateNumber||est.qbId}</div>
+      <span style="padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;background:${EST_STATUS_COLORS[est.status]?.bg||'#f1f5f9'};color:${EST_STATUS_COLORS[est.status]?.text||'#475569'}">${EST_STATUS_LABELS[est.status]||est.status}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:13px">
+      <div><span style="color:var(--text-3)">Customer:</span> <strong>${est.customerName}</strong></div>
+      <div><span style="color:var(--text-3)">Total:</span> <strong style="color:var(--green-dark)">${poFmt(est.total)}</strong></div>
+      <div><span style="color:var(--text-3)">Date:</span> ${est.estimateDate||'—'}</div>
+      <div><span style="color:var(--text-3)">QB Status:</span> ${est.qbStatus||'—'}</div>
+    </div>
+    <div id="est-lines-container" style="margin-bottom:16px"><div style="font-size:12px;color:var(--text-3)">Loading line items...</div></div>
+    ${est.status==='pending_review'?`<div class="sheet-actions">
+      <button onclick="document.getElementById('est-detail-overlay').remove();openDeclineModal(${id})" style="padding:10px 20px;background:#dc2626;color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">✕ Decline</button>
+      <button onclick="document.getElementById('est-detail-overlay').remove();openApproveEstModal(${id})" style="padding:10px 20px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">✓ Approve</button>
+    </div>`:`<div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('est-detail-overlay').remove()">Close</button></div>`}
+  </div>`;
+  document.body.appendChild(overlay);
+  loadEstimateLines(id).then(lines=>{
+    const container = document.getElementById('est-lines-container');
+    if(!container) return;
+    if(!lines.length){ container.innerHTML='<div style="font-size:12px;color:var(--text-3)">No line items</div>'; return; }
+    container.innerHTML = `<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-3);margin-bottom:6px">Line Items</div>
+      <div style="background:var(--accent);border-radius:var(--radius-sm);overflow:hidden">
+        <div style="display:grid;grid-template-columns:3fr 60px 80px 80px;padding:6px 10px;font-size:11px;font-weight:700;color:var(--text-3);border-bottom:1px solid var(--border)">
+          <div>Description</div><div>Qty</div><div>Unit Price</div><div style="text-align:right">Amount</div>
+        </div>
+        ${lines.map(l=>`<div style="display:grid;grid-template-columns:3fr 60px 80px 80px;padding:7px 10px;font-size:12px;border-bottom:1px solid var(--border)">
+          <div>${l.description}</div><div>${l.quantity||''}</div>
+          <div>${l.unit_price?'$'+Number(l.unit_price).toFixed(2):''}</div>
+          <div style="text-align:right;font-weight:500">${poFmt(Number(l.amount))}</div>
+        </div>`).join('')}
+        <div style="display:grid;grid-template-columns:3fr 60px 80px 80px;padding:8px 10px;font-size:13px;font-weight:700">
+          <div>Total</div><div></div><div></div>
+          <div style="text-align:right;color:var(--green-dark)">${poFmt(lines.reduce((s,l)=>s+Number(l.amount),0))}</div>
+        </div>
+      </div>`;
+  });
+}
+
+function openApproveEstModal(id){
+  const est = estimates.find(e=>e.id===id);
+  if(!est) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'est-approve-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:440px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Approve Estimate</div>
+    <div style="background:var(--accent);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px">
+      <div style="font-weight:600;font-size:14px">${est.customerName}</div>
+      <div style="font-size:13px;color:var(--text-2)">Estimate #${est.estimateNumber||est.qbId} · <strong style="color:var(--green-dark)">${poFmt(est.total)}</strong></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notes (optional)</label>
+      <textarea id="est-approve-notes" rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box;resize:vertical"></textarea>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('est-approve-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="est-approve-btn">✓ Approve & Create Job</button>
+    </div>
+  </div>`;
+  overlay.querySelector('#est-approve-btn').onclick = async function(){
+    const notes = document.getElementById('est-approve-notes')?.value||'';
+    this.textContent='Approving...'; this.disabled=true;
+    try {
+      const res = await fetch('/.netlify/functions/qb-approve', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ estimateId: id, qbEstimateId: est.qbId, customerName: est.customerName, total: est.total, notes, approvedBy: currentUser?.email||'' }),
+      });
+      const data = await res.json();
+      if(data.error) throw new Error(data.error);
+      overlay.remove(); await loadEstimates(); renderEstimates();
+    } catch(e){ alert('Failed: '+e.message); this.textContent='✓ Approve & Create Job'; this.disabled=false; }
+  };
+  document.body.appendChild(overlay);
+}
+
+function openDeclineModal(id){
+  const est = estimates.find(e=>e.id===id);
+  if(!est) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'est-decline-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:440px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Decline Estimate</div>
+    <div style="background:var(--accent);border-radius:var(--radius-sm);padding:10px;margin-bottom:16px;font-size:13px">
+      <strong>${est.customerName}</strong> · ${poFmt(est.total)}
+    </div>
+    <div class="form-group">
+      <label class="form-label">Reason *</label>
+      <select id="est-decline-reason" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
+        <option value="">-- Select reason --</option>
+        <option>Budget exceeded</option><option>Wrong customer</option><option>Duplicate estimate</option>
+        <option>Scope changed</option><option>Customer declined</option><option>Other</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Details</label>
+      <textarea id="est-decline-details" rows="2" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box;resize:vertical"></textarea>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('est-decline-overlay').remove()">Cancel</button>
+      <button id="est-decline-btn" style="padding:10px 20px;background:#dc2626;color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">Decline & Log</button>
+    </div>
+  </div>`;
+  overlay.querySelector('#est-decline-btn').onclick = async function(){
+    const reason = document.getElementById('est-decline-reason')?.value;
+    if(!reason){ alert('Please select a reason.'); return; }
+    const details = document.getElementById('est-decline-details')?.value||'';
+    this.textContent='Saving...'; this.disabled=true;
+    try {
+      const res = await fetch('/.netlify/functions/qb-decline', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ estimateId: id, reason, details, nextStep:'Ali to contact customer', assignedTo:'ali@fieldsourceohio.com', declinedBy: currentUser?.email||'' }),
+      });
+      const data = await res.json();
+      if(data.error) throw new Error(data.error);
+      overlay.remove(); await loadEstimates(); renderEstimates();
+    } catch(e){ alert('Failed: '+e.message); this.textContent='Decline & Log'; this.disabled=false; }
+  };
+  document.body.appendChild(overlay);
+}
+
+const EST_STATUS_LABELS = {
+  'pending_review':'Pending Review','accepted_in_tracker':'Approved',
+  'declined_in_tracker':'Declined','sent_to_customer':'Sent to Customer',
+};
+const EST_STATUS_COLORS = {
+  'pending_review':{bg:'#fef3c7',text:'#92400e'},
+  'accepted_in_tracker':{bg:'#dcfce7',text:'#14532d'},
+  'declined_in_tracker':{bg:'#fee2e2',text:'#991b1b'},
+  'sent_to_customer':{bg:'#ede9fe',text:'#6d28d9'},
+};
+
+function renderEstimates(){
+  const userEmail = (currentUser?.email||'').toLowerCase();
+  const canApprove = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','wes@fieldsourceohio.com'].includes(userEmail);
+  let filtered = estimates;
+  if(estStatusFilter !== 'all') filtered = filtered.filter(e=>e.status===estStatusFilter);
+  if(estCustomerFilter !== 'All') filtered = filtered.filter(e=>e.customerName===estCustomerFilter);
+  if(estSearch.trim()){ const q=estSearch.trim().toLowerCase(); filtered=filtered.filter(e=>e.customerName.toLowerCase().includes(q)||e.estimateNumber.toLowerCase().includes(q)); }
+  const customers = ['All',...new Set(estimates.map(e=>e.customerName).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
+  const pending = estimates.filter(e=>e.status==='pending_review');
+  const approved = estimates.filter(e=>e.status==='accepted_in_tracker');
+  const declined = estimates.filter(e=>e.status==='declined_in_tracker');
+  const totalPendingValue = pending.reduce((s,e)=>s+e.total,0);
+  let html = `<div style="margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+      <div style="font-size:18px;font-weight:700">Estimate Tracker</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div id="qb-sync-status" style="font-size:12px;color:var(--text-3)">${lastSyncTime?'Last synced: '+lastSyncTime.toLocaleTimeString():''}</div>
+        <button id="qb-sync-btn" onclick="syncEstimatesFromQB()" style="padding:8px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">↻ Sync from QuickBooks</button>
+      </div>
+    </div>
+    ${!estimates.length?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:var(--radius);padding:16px;margin-bottom:16px;font-size:13px;color:#92400e">
+      <strong>QuickBooks not connected yet.</strong> Click "Sync from QuickBooks" to pull estimates.
+      If this is your first time, you may need to <a href="/.netlify/functions/qb-connect" style="color:var(--green-dark);font-weight:600">connect QuickBooks first</a>.
+    </div>`:''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid #f59e0b;cursor:pointer" onclick="estStatusFilter='pending_review';renderEstimates()">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">Pending Review</div>
+        <div style="font-size:22px;font-weight:700">${pending.length}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">${poFmt(totalPendingValue)}</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green);cursor:pointer" onclick="estStatusFilter='accepted_in_tracker';renderEstimates()">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">Approved</div>
+        <div style="font-size:22px;font-weight:700">${approved.length}</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px">${poFmt(approved.reduce((s,e)=>s+e.total,0))}</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid #dc2626;cursor:pointer" onclick="estStatusFilter='declined_in_tracker';renderEstimates()">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">Declined</div>
+        <div style="font-size:22px;font-weight:700">${declined.length}</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--border);cursor:pointer" onclick="estStatusFilter='all';renderEstimates()">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">All</div>
+        <div style="font-size:22px;font-weight:700">${estimates.length}</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <input type="text" placeholder="Search customer or estimate #..." value="${estSearch}" oninput="estSearch=this.value;renderEstimates()"
+        style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+      <select onchange="estCustomerFilter=this.value;renderEstimates()" style="padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+        ${customers.map(c=>`<option value="${c}"${estCustomerFilter===c?' selected':''}>${c}</option>`).join('')}
+      </select>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="display:grid;grid-template-columns:80px 2fr 1fr 100px 80px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
+        ${['Est #','Customer','Total','Status',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-2)">${h}</div>`).join('')}
+      </div>`;
+  if(!filtered.length){
+    html += `<div style="text-align:center;padding:40px;color:var(--text-3);font-size:13px">${estimates.length?'No estimates match your filter.':'No estimates synced yet.'}</div>`;
+  } else {
+    filtered.forEach(est=>{
+      const sc = EST_STATUS_COLORS[est.status]||{bg:'#f1f5f9',text:'#475569'};
+      const label = EST_STATUS_LABELS[est.status]||est.status;
+      html += `<div style="display:grid;grid-template-columns:80px 2fr 1fr 100px 80px;padding:11px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;cursor:pointer" onclick="openEstimateDetail(${est.id})">
+        <div style="font-size:12px;font-family:'DM Mono',monospace;color:var(--text-3)">#${est.estimateNumber||est.qbId}</div>
+        <div><div style="font-weight:500;font-size:13px">${est.customerName}</div>${est.estimateDate?`<div style="font-size:11px;color:var(--text-3)">${est.estimateDate}</div>`:''}</div>
+        <div style="font-size:14px;font-weight:600;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(est.total)}</div>
+        <div><span style="display:inline-block;padding:3px 8px;border-radius:10px;font-size:10px;font-weight:700;background:${sc.bg};color:${sc.text}">${label}</span></div>
+        <div style="display:flex;gap:4px">
+          ${canApprove&&est.status==='pending_review'?`
+            <button onclick="event.stopPropagation();openApproveEstModal(${est.id})" style="background:var(--green);color:#fff;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px;font-weight:600">✓</button>
+            <button onclick="event.stopPropagation();openDeclineModal(${est.id})" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px;font-weight:600">✕</button>
+          `:'<button onclick="event.stopPropagation();openEstimateDetail('+est.id+')" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px">View</button>'}
+        </div>
+      </div>`;
+    });
+  }
+  html += `</div><div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">${filtered.length} estimate${filtered.length!==1?'s':''}</div></div>`;
+  document.getElementById('main-content').innerHTML = html;
+}
+
 // ── JOB TRACKER ───────────────────────────────────────────────────────────────
 let trackerJobs = [];
 let trackerWorkItems = [];
@@ -3586,366 +3858,183 @@ let jtSelectedJob = null;
 async function loadJobTracker(){
   if(jobTrackerLoaded) return;
   try {
-    const [jobs, workItems, visits] = await Promise.all([
+    const [jobs2, workItems, visits] = await Promise.all([
       sbFetch('GET', '/rest/v1/tracker_jobs?select=*&order=created_at.desc'),
       sbFetch('GET', '/rest/v1/tracker_work_items?select=*&order=line.asc'),
       sbFetch('GET', '/rest/v1/tracker_visits?select=*&order=planned_date.asc'),
     ]);
-    trackerJobs = (jobs||[]);
+    trackerJobs = (jobs2||[]);
     trackerWorkItems = (workItems||[]);
     trackerVisits = (visits||[]);
     jobTrackerLoaded = true;
   } catch(e){ trackerJobs=[]; trackerWorkItems=[]; trackerVisits=[]; jobTrackerLoaded=true; }
 }
 
-async function reloadJobTracker(){
-  jobTrackerLoaded = false;
-  await loadJobTracker();
-  renderJobTracker();
-}
+async function reloadJobTracker(){ jobTrackerLoaded=false; await loadJobTracker(); renderJobTracker(); }
 
-function getJobWorkItems(estimateNum){
-  return trackerWorkItems.filter(wi=>wi.estimate_number===estimateNum).sort((a,b)=>a.line-b.line);
-}
-
-function getJobVisits(estimateNum){
-  return trackerVisits.filter(v=>v.estimate_number===estimateNum).sort((a,b)=>{
-    if(!a.planned_date) return 1;
-    if(!b.planned_date) return -1;
-    return a.planned_date.localeCompare(b.planned_date);
-  });
-}
+function getJobWorkItems(en){ return trackerWorkItems.filter(wi=>wi.estimate_number===en).sort((a,b)=>a.line-b.line); }
+function getJobVisits(en){ return trackerVisits.filter(v=>v.estimate_number===en).sort((a,b)=>{ if(!a.planned_date) return 1; if(!b.planned_date) return -1; return a.planned_date.localeCompare(b.planned_date); }); }
 
 function calcCompletion(job){
   const wis = getJobWorkItems(job.estimate_number);
-  const visits = getJobVisits(job.estimate_number).filter(v=>v.status==='Done');
+  const doneVisits = getJobVisits(job.estimate_number).filter(v=>v.status==='Done');
   if(!wis.length) return null;
-
-  let totalValue = 0, completedValue = 0;
+  let totalValue=0, completedValue=0;
   wis.forEach(wi=>{
     totalValue += Number(wi.contract_value)||0;
     const method = wi.completion_method;
     let pct = 0;
-    visits.forEach(v=>{
-      const actuals = v.actuals?.items||[];
-      const item = actuals.find(a=>a.work_item_id===wi.work_item_id);
+    doneVisits.forEach(v=>{
+      const items = v.actuals?.items||[];
+      const item = items.find(a=>a.work_item_id===wi.work_item_id);
       if(!item) return;
-      if(method==='unit' && wi.contract_qty){
-        pct += (Number(item.actual_qty)||0) / Number(wi.contract_qty) * 100;
-      } else if(method==='lump_sum'){
-        pct += Number(item.actual_pct)||0;
-      } else if(method==='milestone'){
-        pct = item.milestone_met ? 100 : pct;
-      }
+      if(method==='unit' && wi.contract_qty) pct += (Number(item.actual_qty)||0)/Number(wi.contract_qty)*100;
+      else if(method==='lump_sum') pct += Number(item.actual_pct)||0;
+      else if(method==='milestone') pct = item.milestone_met ? 100 : pct;
     });
-    pct = Math.min(pct, 100);
-    completedValue += (pct/100) * (Number(wi.contract_value)||0);
+    pct = Math.min(pct,100);
+    completedValue += (pct/100)*(Number(wi.contract_value)||0);
   });
   return totalValue ? Math.round(completedValue/totalValue*100) : 0;
 }
 
-function openJobDetail(estimateNum){
-  jtSelectedJob = estimateNum;
-  renderJobTracker();
-}
+function openJobDetail(en){ jtSelectedJob=en; renderJobTracker(); }
 
-async function updateVisitStatus(visitId, newStatus){
-  try {
-    await sbFetch('PATCH', `/rest/v1/tracker_visits?visit_id=eq.${visitId}`, {
-      status: newStatus,
-      updated_at: new Date().toISOString(),
-    });
-    const v = trackerVisits.find(x=>x.visit_id===visitId);
-    if(v) v.status = newStatus;
-    renderJobTracker();
-  } catch(e){ alert('Failed: '+e.message); }
-}
-
-function openVisitActualsModal(visitId){
+async function openVisitActualsModal(visitId){
   const visit = trackerVisits.find(v=>v.visit_id===visitId);
   if(!visit) return;
   const wis = getJobWorkItems(visit.estimate_number);
-  const actuals = visit.actuals || {};
-  const items = actuals.items || [];
-
+  const actuals = visit.actuals||{};
+  const items = actuals.items||[];
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  overlay.id = 'visit-actuals-overlay';
-  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
-
+  overlay.className='modal-overlay'; overlay.id='visit-actuals-overlay';
+  overlay.onclick=e=>{ if(e.target===overlay) overlay.remove(); };
   const wisHtml = wis.map(wi=>{
-    const existing = items.find(a=>a.work_item_id===wi.work_item_id)||{};
-    if(wi.completion_method==='unit'){
-      return `<div style="margin-bottom:10px">
-        <label class="form-label">${wi.description} <span style="color:var(--text-3)">(${wi.unit} — contract: ${wi.contract_qty})</span></label>
-        <input type="number" step="0.01" data-wi="${wi.work_item_id}" data-field="actual_qty" value="${existing.actual_qty||''}" placeholder="Qty completed" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
-      </div>`;
-    } else if(wi.completion_method==='lump_sum'){
-      return `<div style="margin-bottom:10px">
-        <label class="form-label">${wi.description} <span style="color:var(--text-3)">(% complete this visit)</span></label>
-        <input type="number" min="0" max="100" data-wi="${wi.work_item_id}" data-field="actual_pct" value="${existing.actual_pct||''}" placeholder="% e.g. 25" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
-      </div>`;
-    } else {
-      return `<div style="margin-bottom:10px">
-        <label class="form-label">${wi.description} <span style="color:var(--text-3)">(milestone)</span></label>
-        <select data-wi="${wi.work_item_id}" data-field="milestone_met" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
-          <option value="">Not complete</option>
-          <option value="true"${existing.milestone_met?' selected':''}>✓ Milestone complete</option>
-        </select>
-      </div>`;
-    }
+    const existing=items.find(a=>a.work_item_id===wi.work_item_id)||{};
+    if(wi.completion_method==='unit') return `<div style="margin-bottom:10px"><label class="form-label">${wi.description} <span style="color:var(--text-3)">(${wi.unit} — contract: ${wi.contract_qty})</span></label><input type="number" step="0.01" data-wi="${wi.work_item_id}" data-field="actual_qty" value="${existing.actual_qty||''}" placeholder="Qty completed" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box"></div>`;
+    if(wi.completion_method==='lump_sum') return `<div style="margin-bottom:10px"><label class="form-label">${wi.description} <span style="color:var(--text-3)">(% complete this visit)</span></label><input type="number" min="0" max="100" data-wi="${wi.work_item_id}" data-field="actual_pct" value="${existing.actual_pct||''}" placeholder="% e.g. 25" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box"></div>`;
+    return `<div style="margin-bottom:10px"><label class="form-label">${wi.description} (milestone)</label><select data-wi="${wi.work_item_id}" data-field="milestone_met" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)"><option value="">Not complete</option><option value="true"${existing.milestone_met?' selected':''}>✓ Milestone complete</option></select></div>`;
   }).join('');
-
-  overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
-    <div class="sheet-handle"></div>
-    <div class="sheet-title">Record Completion — ${visitId}</div>
-    <div style="font-size:12px;color:var(--text-3);margin-bottom:14px">${visit.planned_date||'Unscheduled'}</div>
-    ${wisHtml}
-    <div class="form-group">
-      <label class="form-label">Notes</label>
-      <textarea id="visit-notes" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box;resize:vertical">${actuals.notes||''}</textarea>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Crew Hours (e.g. "Dan 8, Wes 6")</label>
-      <input type="text" id="visit-crew-hours" value="${(actuals.crew_hours||[]).map(h=>h.person_or_role+' '+h.hours).join(', ')}" placeholder="Name hours, Name hours" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
-    </div>
-    <div class="sheet-actions">
-      <button class="btn-cancel" onclick="document.getElementById('visit-actuals-overlay').remove()">Cancel</button>
-      <button class="btn-save" id="visit-actuals-save">Save & Mark Done</button>
-    </div>
-  </div>`;
-
+  overlay.innerHTML=`<div class="modal-sheet" style="max-width:480px"><div class="sheet-handle"></div><div class="sheet-title">Record Completion — ${visitId}</div><div style="font-size:12px;color:var(--text-3);margin-bottom:14px">${visit.planned_date||'Unscheduled'}</div>${wisHtml}<div class="form-group"><label class="form-label">Notes</label><textarea id="visit-notes" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box;resize:vertical">${actuals.notes||''}</textarea></div><div class="form-group"><label class="form-label">Crew Hours (e.g. "Dan 8, Wes 6")</label><input type="text" id="visit-crew-hours" value="${(actuals.crew_hours||[]).map(h=>h.person_or_role+' '+h.hours).join(', ')}" placeholder="Name hours, Name hours" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box"></div><div class="sheet-actions"><button class="btn-cancel" onclick="document.getElementById('visit-actuals-overlay').remove()">Cancel</button><button class="btn-save" id="visit-actuals-save">Save & Mark Done</button></div></div>`;
   overlay.querySelector('#visit-actuals-save').onclick = async function(){
-    const inputs = overlay.querySelectorAll('[data-wi]');
-    const itemsOut = [];
-    inputs.forEach(inp=>{
-      const wiId = inp.dataset.wi;
-      const field = inp.dataset.field;
-      const val = inp.value;
-      let entry = itemsOut.find(x=>x.work_item_id===wiId);
-      if(!entry){ entry={work_item_id:wiId}; itemsOut.push(entry); }
-      if(field==='actual_qty') entry.actual_qty = val ? Number(val) : null;
-      if(field==='actual_pct') entry.actual_pct = val ? Number(val) : null;
-      if(field==='milestone_met') entry.milestone_met = val==='true';
-    });
-
-    const notes = document.getElementById('visit-notes')?.value||'';
-    const crewRaw = document.getElementById('visit-crew-hours')?.value||'';
-    const crew_hours = crewRaw.split(',').map(s=>s.trim()).filter(Boolean).map(s=>{
-      const parts = s.split(' ');
-      const hours = parseFloat(parts.pop())||0;
-      return { person_or_role: parts.join(' '), hours };
-    });
-
-    const newActuals = {
-      ...actuals,
-      items: itemsOut,
-      notes,
-      crew_hours,
-      completed_date: new Date().toISOString().split('T')[0],
-      completed_by: currentUser?.email||'',
-    };
-
+    const inputs=overlay.querySelectorAll('[data-wi]');
+    const itemsOut=[];
+    inputs.forEach(inp=>{ const wiId=inp.dataset.wi; const field=inp.dataset.field; const val=inp.value; let entry=itemsOut.find(x=>x.work_item_id===wiId); if(!entry){entry={work_item_id:wiId};itemsOut.push(entry);} if(field==='actual_qty') entry.actual_qty=val?Number(val):null; if(field==='actual_pct') entry.actual_pct=val?Number(val):null; if(field==='milestone_met') entry.milestone_met=val==='true'; });
+    const notes=document.getElementById('visit-notes')?.value||'';
+    const crewRaw=document.getElementById('visit-crew-hours')?.value||'';
+    const crew_hours=crewRaw.split(',').map(s=>s.trim()).filter(Boolean).map(s=>{ const parts=s.split(' '); const hours=parseFloat(parts.pop())||0; return {person_or_role:parts.join(' '),hours}; });
+    const newActuals={...actuals,items:itemsOut,notes,crew_hours,completed_date:new Date().toISOString().split('T')[0],completed_by:currentUser?.email||''};
     this.textContent='Saving...'; this.disabled=true;
     try {
-      await sbFetch('PATCH', `/rest/v1/tracker_visits?visit_id=eq.${visitId}`, {
-        actuals: newActuals,
-        status: 'Done',
-        updated_at: new Date().toISOString(),
-      });
-      const v = trackerVisits.find(x=>x.visit_id===visitId);
-      if(v){ v.actuals=newActuals; v.status='Done'; }
-      overlay.remove();
-      renderJobTracker();
+      await sbFetch('PATCH',`/rest/v1/tracker_visits?visit_id=eq.${visitId}`,{actuals:newActuals,status:'Done',updated_at:new Date().toISOString()});
+      const v=trackerVisits.find(x=>x.visit_id===visitId); if(v){v.actuals=newActuals;v.status='Done';}
+      overlay.remove(); renderJobTracker();
     } catch(e){ alert('Failed: '+e.message); this.textContent='Save & Mark Done'; this.disabled=false; }
   };
-
   document.body.appendChild(overlay);
 }
 
 function renderJobTracker(){
-  const JOB_STATUS_COLORS = {
-    'Scheduled':  {bg:'#dbeafe',text:'#1d4ed8'},
-    'Active':     {bg:'#dcfce7',text:'#14532d'},
-    'On hold':    {bg:'#fef3c7',text:'#92400e'},
-    'Complete':   {bg:'#f0fdf4',text:'#166534'},
-    'Cancelled':  {bg:'#fee2e2',text:'#991b1b'},
-  };
-  const VISIT_STATUS_COLORS = {
-    'Planned':       {bg:'#dbeafe',text:'#1d4ed8'},
-    'Scheduled':     {bg:'#e0f2fe',text:'#0369a1'},
-    'In progress':   {bg:'#fef3c7',text:'#92400e'},
-    'Done':          {bg:'#dcfce7',text:'#14532d'},
-    'Rescheduled':   {bg:'#ede9fe',text:'#6d28d9'},
-    'Weather delay': {bg:'#fce7f3',text:'#9d174d'},
-    'Cancelled':     {bg:'#fee2e2',text:'#991b1b'},
-    'Unscheduled':   {bg:'#f1f5f9',text:'#475569'},
-  };
-
-  // If a job is selected, show detail view
+  const JOB_STATUS_COLORS={'Scheduled':{bg:'#dbeafe',text:'#1d4ed8'},'Active':{bg:'#dcfce7',text:'#14532d'},'On hold':{bg:'#fef3c7',text:'#92400e'},'Complete':{bg:'#f0fdf4',text:'#166534'},'Cancelled':{bg:'#fee2e2',text:'#991b1b'}};
+  const VISIT_STATUS_COLORS={'Planned':{bg:'#dbeafe',text:'#1d4ed8'},'Scheduled':{bg:'#e0f2fe',text:'#0369a1'},'In progress':{bg:'#fef3c7',text:'#92400e'},'Done':{bg:'#dcfce7',text:'#14532d'},'Rescheduled':{bg:'#ede9fe',text:'#6d28d9'},'Weather delay':{bg:'#fce7f3',text:'#9d174d'},'Cancelled':{bg:'#fee2e2',text:'#991b1b'},'Unscheduled':{bg:'#f1f5f9',text:'#475569'}};
   if(jtSelectedJob){
-    const job = trackerJobs.find(j=>j.estimate_number===jtSelectedJob);
-    if(!job){ jtSelectedJob=null; renderJobTracker(); return; }
-    const wis = getJobWorkItems(job.estimate_number);
-    const visits = getJobVisits(job.estimate_number);
-    const pct = calcCompletion(job);
-    const sc = JOB_STATUS_COLORS[job.status]||{bg:'#f1f5f9',text:'#475569'};
-
-    let html = `<div>
-      <button onclick="jtSelectedJob=null;renderJobTracker()" style="background:none;border:none;color:var(--text-3);cursor:pointer;font-size:13px;padding:0;margin-bottom:12px">← Back to all jobs</button>
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:16px">
-        <div>
-          <div style="font-size:18px;font-weight:700;color:var(--text)">${job.job_name}</div>
-          <div style="font-size:13px;color:var(--text-2);margin-top:2px">${job.client}${job.site?' · '+job.site:''}</div>
-        </div>
-        <span style="padding:4px 12px;border-radius:10px;font-size:12px;font-weight:700;background:${sc.bg};color:${sc.text}">${job.status}</span>
+    const job=trackerJobs.find(j=>j.estimate_number===jtSelectedJob);
+    if(!job){jtSelectedJob=null;renderJobTracker();return;}
+    const wis=getJobWorkItems(job.estimate_number);
+    const visits=getJobVisits(job.estimate_number);
+    const pct=calcCompletion(job);
+    const sc=JOB_STATUS_COLORS[job.status]||{bg:'#f1f5f9',text:'#475569'};
+    let html=`<div><button onclick="jtSelectedJob=null;renderJobTracker()" style="background:none;border:none;color:var(--text-3);cursor:pointer;font-size:13px;padding:0;margin-bottom:12px">← Back to all jobs</button>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+      <div><div style="font-size:18px;font-weight:700">${job.job_name}</div><div style="font-size:13px;color:var(--text-2);margin-top:2px">${job.client}${job.site?' · '+job.site:''}</div></div>
+      <span style="padding:4px 12px;border-radius:10px;font-size:12px;font-weight:700;background:${sc.bg};color:${sc.text}">${job.status}</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px"><div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Contract</div><div style="font-size:18px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(job.contract_total)}</div></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px"><div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Complete</div><div style="font-size:18px;font-weight:700">${pct!==null?pct+'%':'—'}</div></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px"><div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">PO #</div><div style="font-size:14px;font-weight:600">${job.po_number||'—'}</div></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px"><div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">PM</div><div style="font-size:13px;font-weight:500">${job.pm||'—'}</div></div>
+    </div>
+    <div style="margin-bottom:20px"><div style="font-size:13px;font-weight:700;margin-bottom:8px">Work Items (${wis.length})</div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="display:grid;grid-template-columns:30px 3fr 70px 70px 90px 90px;padding:8px 12px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
+        ${['#','Description','Qty','Unit','Value','Method'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-2)">${h}</div>`).join('')}
       </div>
-
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
-          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Contract</div>
-          <div style="font-size:18px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(job.contract_total)}</div>
-        </div>
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
-          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Complete</div>
-          <div style="font-size:18px;font-weight:700;color:var(--text)">${pct!==null?pct+'%':'—'}</div>
-          ${pct!==null?`<div style="height:4px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct>=100?'var(--green)':pct>=80?'#f59e0b':'var(--green)'};border-radius:2px"></div></div>`:''}
-        </div>
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
-          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">PO #</div>
-          <div style="font-size:14px;font-weight:600;color:var(--text)">${job.po_number||'—'}</div>
-        </div>
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
-          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">PM</div>
-          <div style="font-size:13px;font-weight:500;color:var(--text)">${job.pm||'—'}</div>
-        </div>
-      </div>
-
-      <div style="margin-bottom:20px">
-        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">Work Items (${wis.length})</div>
-        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
-          <div style="display:grid;grid-template-columns:30px 3fr 70px 70px 90px 90px;padding:8px 12px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
-            ${['#','Description','Qty','Unit','Value','Method'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-2)">${h}</div>`).join('')}
+      ${wis.map(wi=>`<div style="display:grid;grid-template-columns:30px 3fr 70px 70px 90px 90px;padding:9px 12px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:12px">
+        <div style="color:var(--text-3)">${wi.line}</div>
+        <div><div style="font-weight:500">${wi.description}</div>${wi.qb_item?`<div style="font-size:11px;color:var(--text-3)">${wi.qb_item}</div>`:''}</div>
+        <div>${wi.contract_qty}</div><div>${wi.unit}</div>
+        <div style="font-weight:600;font-family:'DM Mono',monospace">${poFmt(wi.contract_value)}</div>
+        <div><span style="background:var(--accent);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;color:var(--text-2)">${wi.completion_method}</span></div>
+      </div>`).join('')}
+    </div></div>
+    <div><div style="font-size:13px;font-weight:700;margin-bottom:8px">Visits (${visits.length})</div>
+    ${visits.length?visits.map(v=>{
+      const vc=VISIT_STATUS_COLORS[v.status]||{bg:'#f1f5f9',text:'#475569'};
+      const doneItems=(v.actuals?.items||[]).length;
+      return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div><div style="font-weight:600;font-size:13px">${v.visit_id}</div>
+          <div style="font-size:12px;color:var(--text-2);margin-top:2px">${v.planned_date||`<em>${v.target_window||'Unscheduled'}</em>`}${v.crew?' · '+v.crew:''}</div>
+          ${doneItems?`<div style="font-size:11px;color:var(--green-dark);margin-top:2px">✓ ${doneItems} item${doneItems!==1?'s':''} recorded</div>`:''}</div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <span style="padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;background:${vc.bg};color:${vc.text}">${v.status}</span>
+            ${v.status!=='Done'&&v.status!=='Cancelled'?`<button onclick="openVisitActualsModal('${v.visit_id}')" style="padding:4px 12px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:600;cursor:pointer">Record</button>`:''}
+            ${v.status==='Done'?`<button onclick="openVisitActualsModal('${v.visit_id}')" style="padding:4px 12px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;cursor:pointer">Edit</button>`:''}
           </div>
-          ${wis.map(wi=>`<div style="display:grid;grid-template-columns:30px 3fr 70px 70px 90px 90px;padding:9px 12px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:12px">
-            <div style="color:var(--text-3)">${wi.line}</div>
-            <div>
-              <div style="font-weight:500;color:var(--text)">${wi.description}</div>
-              ${wi.qb_item?`<div style="font-size:11px;color:var(--text-3)">${wi.qb_item}</div>`:''}
-            </div>
-            <div style="color:var(--text-2)">${wi.contract_qty}</div>
-            <div style="color:var(--text-2)">${wi.unit}</div>
-            <div style="font-weight:600;font-family:'DM Mono',monospace;color:var(--text)">${poFmt(wi.contract_value)}</div>
-            <div><span style="background:var(--accent);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;color:var(--text-2)">${wi.completion_method}</span></div>
-          </div>`).join('')}
         </div>
-      </div>
-
-      <div>
-        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">Visits (${visits.length})</div>
-        ${visits.length?visits.map(v=>{
-          const vc = VISIT_STATUS_COLORS[v.status]||{bg:'#f1f5f9',text:'#475569'};
-          const doneItems = (v.actuals?.items||[]).length;
-          return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px">
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-              <div>
-                <div style="font-weight:600;font-size:13px;color:var(--text)">${v.visit_id}</div>
-                <div style="font-size:12px;color:var(--text-2);margin-top:2px">
-                  ${v.planned_date||`<em>${v.target_window||'Unscheduled'}</em>`}
-                  ${v.crew?` · ${v.crew}`:''}
-                </div>
-                ${doneItems?`<div style="font-size:11px;color:var(--green-dark);margin-top:2px">✓ ${doneItems} item${doneItems!==1?'s':''} recorded</div>`:''}
-              </div>
-              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-                <span style="padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;background:${vc.bg};color:${vc.text}">${v.status}</span>
-                ${v.status!=='Done'&&v.status!=='Cancelled'?`<button onclick="openVisitActualsModal('${v.visit_id}')" style="padding:4px 12px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:600;cursor:pointer">Record</button>`:''}
-                ${v.status==='Done'?`<button onclick="openVisitActualsModal('${v.visit_id}')" style="padding:4px 12px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;cursor:pointer">Edit</button>`:''}
-              </div>
-            </div>
-            ${v.actuals?.notes?`<div style="font-size:12px;color:var(--text-3);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">${v.actuals.notes}</div>`:''}
-          </div>`;
-        }).join(''):`<div style="text-align:center;padding:24px;color:var(--text-3);font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">No visits scheduled yet</div>`}
-      </div>
-    </div>`;
-
-    document.getElementById('main-content').innerHTML = html;
-    return;
+        ${v.actuals?.notes?`<div style="font-size:12px;color:var(--text-3);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">${v.actuals.notes}</div>`:''}
+      </div>`;
+    }).join(''):`<div style="text-align:center;padding:24px;color:var(--text-3);font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">No visits scheduled yet</div>`}
+    </div></div>`;
+    document.getElementById('main-content').innerHTML=html; return;
   }
-
-  // Job list view
-  const jobTypes = ['All','Project','Maintenance'];
-  let filtered = trackerJobs;
-  if(jtJobFilter!=='All') filtered = filtered.filter(j=>j.job_type===jtJobFilter);
-  if(jtSearch.trim()){
-    const q = jtSearch.trim().toLowerCase();
-    filtered = filtered.filter(j=>j.job_name.toLowerCase().includes(q)||j.client.toLowerCase().includes(q)||j.estimate_number.toLowerCase().includes(q));
-  }
-
-  const totalContract = trackerJobs.reduce((s,j)=>s+Number(j.contract_total||0),0);
-  const active = trackerJobs.filter(j=>j.status==='Active'||j.status==='Scheduled').length;
-
-  let html = `<div style="margin-bottom:20px">
+  const jobTypes=['All','Project','Maintenance'];
+  let filtered=trackerJobs;
+  if(jtJobFilter!=='All') filtered=filtered.filter(j=>j.job_type===jtJobFilter);
+  if(jtSearch.trim()){const q=jtSearch.trim().toLowerCase();filtered=filtered.filter(j=>j.job_name.toLowerCase().includes(q)||j.client.toLowerCase().includes(q)||(j.estimate_number||'').toLowerCase().includes(q));}
+  const totalContract=trackerJobs.reduce((s,j)=>s+Number(j.contract_total||0),0);
+  const active=trackerJobs.filter(j=>j.status==='Active'||j.status==='Scheduled').length;
+  let html=`<div style="margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px">
-      <div style="font-size:18px;font-weight:700;color:var(--text)">Job Tracker</div>
+      <div style="font-size:18px;font-weight:700">Job Tracker</div>
       <div style="font-size:12px;color:var(--text-3)">Populated automatically when estimates are approved in QuickBooks</div>
     </div>
-
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
-        <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Total Jobs</div>
-        <div style="font-size:22px;font-weight:700;color:var(--text)">${trackerJobs.length}</div>
-      </div>
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
-        <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Active</div>
-        <div style="font-size:22px;font-weight:700;color:var(--text)">${active}</div>
-      </div>
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
-        <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Contract Value</div>
-        <div style="font-size:18px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(totalContract)}</div>
-      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)"><div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Total Jobs</div><div style="font-size:22px;font-weight:700">${trackerJobs.length}</div></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)"><div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Active</div><div style="font-size:22px;font-weight:700">${active}</div></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)"><div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Contract Value</div><div style="font-size:18px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(totalContract)}</div></div>
     </div>
-
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-      <input type="text" placeholder="Search jobs..." value="${jtSearch}"
-        oninput="jtSearch=this.value;renderJobTracker()"
-        style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+      <input type="text" placeholder="Search jobs..." value="${jtSearch}" oninput="jtSearch=this.value;renderJobTracker()" style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
       <select onchange="jtJobFilter=this.value;renderJobTracker()" style="padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
         ${jobTypes.map(t=>`<option value="${t}"${jtJobFilter===t?' selected':''}>${t}</option>`).join('')}
       </select>
     </div>
-
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
       <div style="display:grid;grid-template-columns:80px 2fr 1.5fr 90px 80px 80px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
         ${['Est #','Job','Client','Contract','Status','Done'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-2)">${h}</div>`).join('')}
       </div>`;
-
   if(!filtered.length){
-    html += `<div style="text-align:center;padding:40px;color:var(--text-3);font-size:13px">${trackerJobs.length?'No jobs match your search.':'No jobs yet — jobs appear here automatically when estimates are approved in QuickBooks.'}</div>`;
+    html+=`<div style="text-align:center;padding:40px;color:var(--text-3);font-size:13px">${trackerJobs.length?'No jobs match.':'No jobs yet — appear automatically when estimates are approved in QuickBooks.'}</div>`;
   } else {
     filtered.forEach(job=>{
-      const sc = JOB_STATUS_COLORS[job.status]||{bg:'#f1f5f9',text:'#475569'};
-      const pct = calcCompletion(job);
-      const visits = getJobVisits(job.estimate_number);
-      const nextVisit = visits.find(v=>v.status==='Planned'||v.status==='Scheduled');
-      html += `<div style="display:grid;grid-template-columns:80px 2fr 1.5fr 90px 80px 80px;padding:11px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;cursor:pointer" onclick="openJobDetail('${job.estimate_number}')">
+      const sc=JOB_STATUS_COLORS[job.status]||{bg:'#f1f5f9',text:'#475569'};
+      const pct=calcCompletion(job);
+      const visits=getJobVisits(job.estimate_number);
+      const nextVisit=visits.find(v=>v.status==='Planned'||v.status==='Scheduled');
+      html+=`<div style="display:grid;grid-template-columns:80px 2fr 1.5fr 90px 80px 80px;padding:11px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;cursor:pointer" onclick="openJobDetail('${job.estimate_number}')">
         <div style="font-size:12px;font-family:'DM Mono',monospace;color:var(--text-3)">#${job.estimate_number}</div>
-        <div>
-          <div style="font-weight:500;font-size:13px;color:var(--text)">${job.job_name}</div>
-          ${nextVisit?`<div style="font-size:11px;color:var(--text-3)">Next: ${nextVisit.planned_date||'Unscheduled'}</div>`:''}
-        </div>
+        <div><div style="font-weight:500;font-size:13px">${job.job_name}</div>${nextVisit?`<div style="font-size:11px;color:var(--text-3)">Next: ${nextVisit.planned_date||'Unscheduled'}</div>`:''}</div>
         <div style="font-size:12px;color:var(--text-2)">${job.client}</div>
         <div style="font-size:13px;font-weight:600;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(job.contract_total)}</div>
         <div><span style="display:inline-block;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;background:${sc.bg};color:${sc.text}">${job.status}</span></div>
-        <div style="font-size:13px;font-weight:600;color:var(--text)">${pct!==null?pct+'%':'—'}</div>
+        <div style="font-size:13px;font-weight:600">${pct!==null?pct+'%':'—'}</div>
       </div>`;
     });
   }
-
-  html += `</div>
-    <div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">${filtered.length} job${filtered.length!==1?'s':''}</div>
-  </div>`;
-
-  document.getElementById('main-content').innerHTML = html;
+  html+=`</div><div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">${filtered.length} job${filtered.length!==1?'s':''}</div></div>`;
+  document.getElementById('main-content').innerHTML=html;
 }
 
 // ── MATERIALS ─────────────────────────────────────────────────────────────────
@@ -6723,7 +6812,7 @@ const USER_DISPLAY_NAMES = {
   'matt@fieldsourceohio.com': 'Matt',
   'gibson@fieldsourceohio.com': 'Gibson',
   'jones@fieldsourceohio.com': 'Cameron',
-  'kaleb@fieldsourceohio.com': 'Kaleb',
+    'kaleb@fieldsourceohio.com': 'Kaleb',
   'gase@fieldsourceohio.com': 'Gase',
   'alterman@fieldsourceohio.com': 'Will Alterman'
 };

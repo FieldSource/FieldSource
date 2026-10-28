@@ -432,6 +432,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Invoices</button>
     <button class="vtab" id="inv-approval-tab" onclick="loadInvApproval().then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="materials-tab" onclick="loadMaterials().then(()=>setView('materials'))">Materials</button>
+    <button class="vtab" id="job-tracker-tab" onclick="loadJobTracker().then(()=>setView('job-tracker'))">Job Tracker</button>
   </div>
 </div>
 
@@ -3573,6 +3574,380 @@ async function deleteFleetLoan(id){
 let estimates = [];
 let estimateStatusFilter = 'All';
 let estimateTypeFilter = 'All';
+// ── JOB TRACKER ───────────────────────────────────────────────────────────────
+let trackerJobs = [];
+let trackerWorkItems = [];
+let trackerVisits = [];
+let jobTrackerLoaded = false;
+let jtJobFilter = 'All';
+let jtSearch = '';
+let jtSelectedJob = null;
+
+async function loadJobTracker(){
+  if(jobTrackerLoaded) return;
+  try {
+    const [jobs, workItems, visits] = await Promise.all([
+      sbFetch('GET', '/rest/v1/tracker_jobs?select=*&order=created_at.desc'),
+      sbFetch('GET', '/rest/v1/tracker_work_items?select=*&order=line.asc'),
+      sbFetch('GET', '/rest/v1/tracker_visits?select=*&order=planned_date.asc'),
+    ]);
+    trackerJobs = (jobs||[]);
+    trackerWorkItems = (workItems||[]);
+    trackerVisits = (visits||[]);
+    jobTrackerLoaded = true;
+  } catch(e){ trackerJobs=[]; trackerWorkItems=[]; trackerVisits=[]; jobTrackerLoaded=true; }
+}
+
+async function reloadJobTracker(){
+  jobTrackerLoaded = false;
+  await loadJobTracker();
+  renderJobTracker();
+}
+
+function getJobWorkItems(estimateNum){
+  return trackerWorkItems.filter(wi=>wi.estimate_number===estimateNum).sort((a,b)=>a.line-b.line);
+}
+
+function getJobVisits(estimateNum){
+  return trackerVisits.filter(v=>v.estimate_number===estimateNum).sort((a,b)=>{
+    if(!a.planned_date) return 1;
+    if(!b.planned_date) return -1;
+    return a.planned_date.localeCompare(b.planned_date);
+  });
+}
+
+function calcCompletion(job){
+  const wis = getJobWorkItems(job.estimate_number);
+  const visits = getJobVisits(job.estimate_number).filter(v=>v.status==='Done');
+  if(!wis.length) return null;
+
+  let totalValue = 0, completedValue = 0;
+  wis.forEach(wi=>{
+    totalValue += Number(wi.contract_value)||0;
+    const method = wi.completion_method;
+    let pct = 0;
+    visits.forEach(v=>{
+      const actuals = v.actuals?.items||[];
+      const item = actuals.find(a=>a.work_item_id===wi.work_item_id);
+      if(!item) return;
+      if(method==='unit' && wi.contract_qty){
+        pct += (Number(item.actual_qty)||0) / Number(wi.contract_qty) * 100;
+      } else if(method==='lump_sum'){
+        pct += Number(item.actual_pct)||0;
+      } else if(method==='milestone'){
+        pct = item.milestone_met ? 100 : pct;
+      }
+    });
+    pct = Math.min(pct, 100);
+    completedValue += (pct/100) * (Number(wi.contract_value)||0);
+  });
+  return totalValue ? Math.round(completedValue/totalValue*100) : 0;
+}
+
+function openJobDetail(estimateNum){
+  jtSelectedJob = estimateNum;
+  renderJobTracker();
+}
+
+async function updateVisitStatus(visitId, newStatus){
+  try {
+    await sbFetch('PATCH', `/rest/v1/tracker_visits?visit_id=eq.${visitId}`, {
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    });
+    const v = trackerVisits.find(x=>x.visit_id===visitId);
+    if(v) v.status = newStatus;
+    renderJobTracker();
+  } catch(e){ alert('Failed: '+e.message); }
+}
+
+function openVisitActualsModal(visitId){
+  const visit = trackerVisits.find(v=>v.visit_id===visitId);
+  if(!visit) return;
+  const wis = getJobWorkItems(visit.estimate_number);
+  const actuals = visit.actuals || {};
+  const items = actuals.items || [];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'visit-actuals-overlay';
+  overlay.onclick = e=>{ if(e.target===overlay) overlay.remove(); };
+
+  const wisHtml = wis.map(wi=>{
+    const existing = items.find(a=>a.work_item_id===wi.work_item_id)||{};
+    if(wi.completion_method==='unit'){
+      return `<div style="margin-bottom:10px">
+        <label class="form-label">${wi.description} <span style="color:var(--text-3)">(${wi.unit} — contract: ${wi.contract_qty})</span></label>
+        <input type="number" step="0.01" data-wi="${wi.work_item_id}" data-field="actual_qty" value="${existing.actual_qty||''}" placeholder="Qty completed" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>`;
+    } else if(wi.completion_method==='lump_sum'){
+      return `<div style="margin-bottom:10px">
+        <label class="form-label">${wi.description} <span style="color:var(--text-3)">(% complete this visit)</span></label>
+        <input type="number" min="0" max="100" data-wi="${wi.work_item_id}" data-field="actual_pct" value="${existing.actual_pct||''}" placeholder="% e.g. 25" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      </div>`;
+    } else {
+      return `<div style="margin-bottom:10px">
+        <label class="form-label">${wi.description} <span style="color:var(--text-3)">(milestone)</span></label>
+        <select data-wi="${wi.work_item_id}" data-field="milestone_met" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+          <option value="">Not complete</option>
+          <option value="true"${existing.milestone_met?' selected':''}>✓ Milestone complete</option>
+        </select>
+      </div>`;
+    }
+  }).join('');
+
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
+    <div class="sheet-handle"></div>
+    <div class="sheet-title">Record Completion — ${visitId}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:14px">${visit.planned_date||'Unscheduled'}</div>
+    ${wisHtml}
+    <div class="form-group">
+      <label class="form-label">Notes</label>
+      <textarea id="visit-notes" rows="2" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box;resize:vertical">${actuals.notes||''}</textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Crew Hours (e.g. "Dan 8, Wes 6")</label>
+      <input type="text" id="visit-crew-hours" value="${(actuals.crew_hours||[]).map(h=>h.person_or_role+' '+h.hours).join(', ')}" placeholder="Name hours, Name hours" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+    </div>
+    <div class="sheet-actions">
+      <button class="btn-cancel" onclick="document.getElementById('visit-actuals-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="visit-actuals-save">Save & Mark Done</button>
+    </div>
+  </div>`;
+
+  overlay.querySelector('#visit-actuals-save').onclick = async function(){
+    const inputs = overlay.querySelectorAll('[data-wi]');
+    const itemsOut = [];
+    inputs.forEach(inp=>{
+      const wiId = inp.dataset.wi;
+      const field = inp.dataset.field;
+      const val = inp.value;
+      let entry = itemsOut.find(x=>x.work_item_id===wiId);
+      if(!entry){ entry={work_item_id:wiId}; itemsOut.push(entry); }
+      if(field==='actual_qty') entry.actual_qty = val ? Number(val) : null;
+      if(field==='actual_pct') entry.actual_pct = val ? Number(val) : null;
+      if(field==='milestone_met') entry.milestone_met = val==='true';
+    });
+
+    const notes = document.getElementById('visit-notes')?.value||'';
+    const crewRaw = document.getElementById('visit-crew-hours')?.value||'';
+    const crew_hours = crewRaw.split(',').map(s=>s.trim()).filter(Boolean).map(s=>{
+      const parts = s.split(' ');
+      const hours = parseFloat(parts.pop())||0;
+      return { person_or_role: parts.join(' '), hours };
+    });
+
+    const newActuals = {
+      ...actuals,
+      items: itemsOut,
+      notes,
+      crew_hours,
+      completed_date: new Date().toISOString().split('T')[0],
+      completed_by: currentUser?.email||'',
+    };
+
+    this.textContent='Saving...'; this.disabled=true;
+    try {
+      await sbFetch('PATCH', `/rest/v1/tracker_visits?visit_id=eq.${visitId}`, {
+        actuals: newActuals,
+        status: 'Done',
+        updated_at: new Date().toISOString(),
+      });
+      const v = trackerVisits.find(x=>x.visit_id===visitId);
+      if(v){ v.actuals=newActuals; v.status='Done'; }
+      overlay.remove();
+      renderJobTracker();
+    } catch(e){ alert('Failed: '+e.message); this.textContent='Save & Mark Done'; this.disabled=false; }
+  };
+
+  document.body.appendChild(overlay);
+}
+
+function renderJobTracker(){
+  const JOB_STATUS_COLORS = {
+    'Scheduled':  {bg:'#dbeafe',text:'#1d4ed8'},
+    'Active':     {bg:'#dcfce7',text:'#14532d'},
+    'On hold':    {bg:'#fef3c7',text:'#92400e'},
+    'Complete':   {bg:'#f0fdf4',text:'#166534'},
+    'Cancelled':  {bg:'#fee2e2',text:'#991b1b'},
+  };
+  const VISIT_STATUS_COLORS = {
+    'Planned':       {bg:'#dbeafe',text:'#1d4ed8'},
+    'Scheduled':     {bg:'#e0f2fe',text:'#0369a1'},
+    'In progress':   {bg:'#fef3c7',text:'#92400e'},
+    'Done':          {bg:'#dcfce7',text:'#14532d'},
+    'Rescheduled':   {bg:'#ede9fe',text:'#6d28d9'},
+    'Weather delay': {bg:'#fce7f3',text:'#9d174d'},
+    'Cancelled':     {bg:'#fee2e2',text:'#991b1b'},
+    'Unscheduled':   {bg:'#f1f5f9',text:'#475569'},
+  };
+
+  // If a job is selected, show detail view
+  if(jtSelectedJob){
+    const job = trackerJobs.find(j=>j.estimate_number===jtSelectedJob);
+    if(!job){ jtSelectedJob=null; renderJobTracker(); return; }
+    const wis = getJobWorkItems(job.estimate_number);
+    const visits = getJobVisits(job.estimate_number);
+    const pct = calcCompletion(job);
+    const sc = JOB_STATUS_COLORS[job.status]||{bg:'#f1f5f9',text:'#475569'};
+
+    let html = `<div>
+      <button onclick="jtSelectedJob=null;renderJobTracker()" style="background:none;border:none;color:var(--text-3);cursor:pointer;font-size:13px;padding:0;margin-bottom:12px">← Back to all jobs</button>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+        <div>
+          <div style="font-size:18px;font-weight:700;color:var(--text)">${job.job_name}</div>
+          <div style="font-size:13px;color:var(--text-2);margin-top:2px">${job.client}${job.site?' · '+job.site:''}</div>
+        </div>
+        <span style="padding:4px 12px;border-radius:10px;font-size:12px;font-weight:700;background:${sc.bg};color:${sc.text}">${job.status}</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Contract</div>
+          <div style="font-size:18px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(job.contract_total)}</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Complete</div>
+          <div style="font-size:18px;font-weight:700;color:var(--text)">${pct!==null?pct+'%':'—'}</div>
+          ${pct!==null?`<div style="height:4px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct>=100?'var(--green)':pct>=80?'#f59e0b':'var(--green)'};border-radius:2px"></div></div>`:''}
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">PO #</div>
+          <div style="font-size:14px;font-weight:600;color:var(--text)">${job.po_number||'—'}</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">PM</div>
+          <div style="font-size:13px;font-weight:500;color:var(--text)">${job.pm||'—'}</div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:20px">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">Work Items (${wis.length})</div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+          <div style="display:grid;grid-template-columns:30px 3fr 70px 70px 90px 90px;padding:8px 12px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
+            ${['#','Description','Qty','Unit','Value','Method'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-2)">${h}</div>`).join('')}
+          </div>
+          ${wis.map(wi=>`<div style="display:grid;grid-template-columns:30px 3fr 70px 70px 90px 90px;padding:9px 12px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:12px">
+            <div style="color:var(--text-3)">${wi.line}</div>
+            <div>
+              <div style="font-weight:500;color:var(--text)">${wi.description}</div>
+              ${wi.qb_item?`<div style="font-size:11px;color:var(--text-3)">${wi.qb_item}</div>`:''}
+            </div>
+            <div style="color:var(--text-2)">${wi.contract_qty}</div>
+            <div style="color:var(--text-2)">${wi.unit}</div>
+            <div style="font-weight:600;font-family:'DM Mono',monospace;color:var(--text)">${poFmt(wi.contract_value)}</div>
+            <div><span style="background:var(--accent);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;color:var(--text-2)">${wi.completion_method}</span></div>
+          </div>`).join('')}
+        </div>
+      </div>
+
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px">Visits (${visits.length})</div>
+        ${visits.length?visits.map(v=>{
+          const vc = VISIT_STATUS_COLORS[v.status]||{bg:'#f1f5f9',text:'#475569'};
+          const doneItems = (v.actuals?.items||[]).length;
+          return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <div>
+                <div style="font-weight:600;font-size:13px;color:var(--text)">${v.visit_id}</div>
+                <div style="font-size:12px;color:var(--text-2);margin-top:2px">
+                  ${v.planned_date||`<em>${v.target_window||'Unscheduled'}</em>`}
+                  ${v.crew?` · ${v.crew}`:''}
+                </div>
+                ${doneItems?`<div style="font-size:11px;color:var(--green-dark);margin-top:2px">✓ ${doneItems} item${doneItems!==1?'s':''} recorded</div>`:''}
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <span style="padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;background:${vc.bg};color:${vc.text}">${v.status}</span>
+                ${v.status!=='Done'&&v.status!=='Cancelled'?`<button onclick="openVisitActualsModal('${v.visit_id}')" style="padding:4px 12px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:600;cursor:pointer">Record</button>`:''}
+                ${v.status==='Done'?`<button onclick="openVisitActualsModal('${v.visit_id}')" style="padding:4px 12px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;cursor:pointer">Edit</button>`:''}
+              </div>
+            </div>
+            ${v.actuals?.notes?`<div style="font-size:12px;color:var(--text-3);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">${v.actuals.notes}</div>`:''}
+          </div>`;
+        }).join(''):`<div style="text-align:center;padding:24px;color:var(--text-3);font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">No visits scheduled yet</div>`}
+      </div>
+    </div>`;
+
+    document.getElementById('main-content').innerHTML = html;
+    return;
+  }
+
+  // Job list view
+  const jobTypes = ['All','Project','Maintenance'];
+  let filtered = trackerJobs;
+  if(jtJobFilter!=='All') filtered = filtered.filter(j=>j.job_type===jtJobFilter);
+  if(jtSearch.trim()){
+    const q = jtSearch.trim().toLowerCase();
+    filtered = filtered.filter(j=>j.job_name.toLowerCase().includes(q)||j.client.toLowerCase().includes(q)||j.estimate_number.toLowerCase().includes(q));
+  }
+
+  const totalContract = trackerJobs.reduce((s,j)=>s+Number(j.contract_total||0),0);
+  const active = trackerJobs.filter(j=>j.status==='Active'||j.status==='Scheduled').length;
+
+  let html = `<div style="margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+      <div style="font-size:18px;font-weight:700;color:var(--text)">Job Tracker</div>
+      <div style="font-size:12px;color:var(--text-3)">Populated automatically when estimates are approved in QuickBooks</div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
+        <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Total Jobs</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text)">${trackerJobs.length}</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
+        <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Active</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text)">${active}</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;border-top:3px solid var(--green)">
+        <div style="font-size:11px;color:var(--text-3);text-transform:uppercase;font-weight:600;margin-bottom:4px">Contract Value</div>
+        <div style="font-size:18px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(totalContract)}</div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <input type="text" placeholder="Search jobs..." value="${jtSearch}"
+        oninput="jtSearch=this.value;renderJobTracker()"
+        style="flex:1;min-width:180px;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+      <select onchange="jtJobFilter=this.value;renderJobTracker()" style="padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
+        ${jobTypes.map(t=>`<option value="${t}"${jtJobFilter===t?' selected':''}>${t}</option>`).join('')}
+      </select>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="display:grid;grid-template-columns:80px 2fr 1.5fr 90px 80px 80px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
+        ${['Est #','Job','Client','Contract','Status','Done'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--text-2)">${h}</div>`).join('')}
+      </div>`;
+
+  if(!filtered.length){
+    html += `<div style="text-align:center;padding:40px;color:var(--text-3);font-size:13px">${trackerJobs.length?'No jobs match your search.':'No jobs yet — jobs appear here automatically when estimates are approved in QuickBooks.'}</div>`;
+  } else {
+    filtered.forEach(job=>{
+      const sc = JOB_STATUS_COLORS[job.status]||{bg:'#f1f5f9',text:'#475569'};
+      const pct = calcCompletion(job);
+      const visits = getJobVisits(job.estimate_number);
+      const nextVisit = visits.find(v=>v.status==='Planned'||v.status==='Scheduled');
+      html += `<div style="display:grid;grid-template-columns:80px 2fr 1.5fr 90px 80px 80px;padding:11px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;cursor:pointer" onclick="openJobDetail('${job.estimate_number}')">
+        <div style="font-size:12px;font-family:'DM Mono',monospace;color:var(--text-3)">#${job.estimate_number}</div>
+        <div>
+          <div style="font-weight:500;font-size:13px;color:var(--text)">${job.job_name}</div>
+          ${nextVisit?`<div style="font-size:11px;color:var(--text-3)">Next: ${nextVisit.planned_date||'Unscheduled'}</div>`:''}
+        </div>
+        <div style="font-size:12px;color:var(--text-2)">${job.client}</div>
+        <div style="font-size:13px;font-weight:600;font-family:'DM Mono',monospace;color:var(--green-dark)">${poFmt(job.contract_total)}</div>
+        <div><span style="display:inline-block;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;background:${sc.bg};color:${sc.text}">${job.status}</span></div>
+        <div style="font-size:13px;font-weight:600;color:var(--text)">${pct!==null?pct+'%':'—'}</div>
+      </div>`;
+    });
+  }
+
+  html += `</div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px;text-align:right">${filtered.length} job${filtered.length!==1?'s':''}</div>
+  </div>`;
+
+  document.getElementById('main-content').innerHTML = html;
+}
+
 // ── MATERIALS ─────────────────────────────────────────────────────────────────
 let materialsList = [];
 let materialPrices = [];

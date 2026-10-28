@@ -6507,7 +6507,7 @@ function renderInvoices(){
     html += `<div style="text-align:center;padding:48px;color:var(--text-3);font-size:14px">${invoiceFiles.length?'No files match your search.':'No invoices uploaded yet.'}</div>`;
   } else {
     html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
-      <div style="display:grid;grid-template-columns:28px 2fr 1fr 80px 90px 80px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
+      <div style="display:grid;grid-template-columns:28px 2fr 1fr 70px 90px 100px;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border);gap:8px">
         ${['','Invoice','Project / Vendor','Size','Date',''].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
       </div>`;
 
@@ -6517,7 +6517,7 @@ function renderInvoices(){
       const safePath = f.filePath.replace(/'/g,"\\'");
       const safeFile = f.fileName.replace(/'/g,"\\'");
       const safeProject = f.projectName.replace(/'/g,"\\'");
-      html += `<div style="display:grid;grid-template-columns:28px 2fr 1fr 80px 90px 80px;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:13px">
+      html += `<div style="display:grid;grid-template-columns:28px 2fr 1fr 70px 90px 100px;padding:10px 14px;border-bottom:1px solid var(--border);align-items:center;gap:8px;font-size:13px">
         <div style="font-size:18px">${fileIcon(f.fileType)}</div>
         <div>
           <div style="font-weight:600;color:var(--text)">${f.invoiceNum?'Inv #'+f.invoiceNum:f.fileName}</div>

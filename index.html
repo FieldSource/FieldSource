@@ -6158,20 +6158,28 @@ function sbToken(){
 }
 
 let dropboxRetryMode = false;
+let dropboxRetrySelected = new Set();
 
 function toggleDropboxRetryMode(){
   dropboxRetryMode = !dropboxRetryMode;
+  dropboxRetrySelected = new Set();
   renderInvoices();
 }
 
-async function sendSelectedToDropbox(){
-  const checked = [...document.querySelectorAll('[id^="retry-cb-"]:checked')];
-  if(!checked.length){ alert('Select at least one invoice to retry.'); return; }
+function toggleDropboxCheckbox(id, el){
+  if(el.checked) dropboxRetrySelected.add(id);
+  else dropboxRetrySelected.delete(id);
+  // Update count on button without re-rendering
   const btn = document.getElementById('retry-selected-btn');
-  if(btn){ btn.textContent=`Sending ${checked.length}...`; btn.disabled=true; }
+  if(btn) btn.textContent = `↗ Send ${dropboxRetrySelected.size} to Dropbox`;
+}
+
+async function sendSelectedToDropbox(){
+  if(!dropboxRetrySelected.size){ alert('Select at least one invoice to retry.'); return; }
+  const btn = document.getElementById('retry-selected-btn');
+  if(btn){ btn.textContent=`Sending ${dropboxRetrySelected.size}...`; btn.disabled=true; }
   let success=0, failed=0;
-  for(const cb of checked){
-    const id = cb.id.replace('retry-cb-','');
+  for(const id of dropboxRetrySelected){
     try {
       await retryDropboxUpload(id, true);
       success++;
@@ -6380,7 +6388,7 @@ function renderInvoices(){
       <div style="font-size:13px;color:#92400e;font-weight:500">Check the invoices to send to Dropbox</div>
       <div style="display:flex;gap:8px">
         <button onclick="toggleDropboxRetryMode()" style="padding:6px 14px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;cursor:pointer;font-family:inherit">Cancel</button>
-        <button id="retry-selected-btn" onclick="sendSelectedToDropbox()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">↗ Send Selected to Dropbox</button>
+        <button id="retry-selected-btn" onclick="sendSelectedToDropbox()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">↗ Send ${dropboxRetrySelected.size||0} to Dropbox</button>
       </div>
     </div>`:''}
     <div style="margin-bottom:12px">
@@ -6419,7 +6427,7 @@ function renderInvoices(){
         <div style="display:flex;gap:6px">
           <button onclick="downloadInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Download" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">⬇</button>
           ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
-          ${canUpload&&dropboxRetryMode?`<input type="checkbox" id="retry-cb-${safe}" style="width:16px;height:16px;accent-color:var(--green);cursor:pointer" title="Select for Dropbox retry">`:''}
+          ${canUpload&&dropboxRetryMode?`<input type="checkbox" id="retry-cb-${safe}" ${dropboxRetrySelected.has('${safe}')?'checked':''} onchange="toggleDropboxCheckbox('${safe}',this)" style="width:18px;height:18px;accent-color:var(--green);cursor:pointer" title="Select for Dropbox retry">`:''}
           ${canUpload&&!dropboxRetryMode?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">✏</button>`:''}
           ${canUpload&&!dropboxRetryMode?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid var(--border);border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px;color:#dc2626">✕</button>`:''}
         </div>

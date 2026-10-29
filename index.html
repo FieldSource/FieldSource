@@ -5813,17 +5813,15 @@ function renderInvApproval(){
     html += `</div></div>`;
   }
 
-  // Pending approvals
-  html += `<div style="margin-bottom:20px">
-    <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:10px">
-      Pending Approval <span style="font-size:12px;font-weight:400;color:var(--text-3)">(${pending.length})</span>
-    </div>`;
+  // PO/legacy pending approvals — only show if there are items
   if(pending.length){
+    html += `<div style="margin-bottom:20px">
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:10px">
+        PO Invoice Approvals <span style="font-size:12px;font-weight:400;color:var(--text-3)">(${pending.length})</span>
+      </div>`;
     html += pending.map(i=>invCard(i)).join('');
-  } else {
-    html += `<div style="text-align:center;padding:24px;color:var(--text-3);font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">No invoices pending approval</div>`;
+    html += `</div>`;
   }
-  html += `</div>`;
 
   // Needs Action (Rejected)
   if(rejected.length){

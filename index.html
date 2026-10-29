@@ -5853,9 +5853,11 @@ async function loadInvoices(){
 }
 
 async function extractInvoiceData(file){
+  console.log('extractInvoiceData called, file.type:', file.type, 'file.name:', file.name, 'file.size:', file.size);
   const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   const isImage = file.type.startsWith('image/') || file.name.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/);
-  if(!isPDF && !isImage) return null;
+  console.log('isPDF:', isPDF, 'isImage:', isImage);
+  if(!isPDF && !isImage){ console.log('Skipping extraction - not PDF or image'); return null; }
   // Force correct mime type for PDFs regardless of what browser reports
   const mimeType = isPDF ? 'application/pdf' : file.type;
 

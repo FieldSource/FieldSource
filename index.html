@@ -5834,8 +5834,7 @@ const INVOICE_BUCKET = 'invoices';
 
 function updateApprovalBell(){
   const isDan = (currentUser?.email||'').toLowerCase() === 'haller@fieldsourceohio.com';
-  const isAdmin = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes((currentUser?.email||'').toLowerCase());
-  if(!isDan && !isAdmin){ document.getElementById('approval-bell').style.display='none'; return; }
+  if(!isDan){ document.getElementById('approval-bell').style.display='none'; return; }
   const pending = invoiceFiles.filter(f=>f.approvalStatus==='pending').length;
   const bell = document.getElementById('approval-bell');
   const badge = document.getElementById('approval-badge');
@@ -8387,7 +8386,7 @@ function showApp(){
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
   loadJobs().then(()=>{
-    loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates(); startPolling();
+    loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates(); loadInvoices().then(()=>updateApprovalBell()); startPolling();
     // Default portal based on user
     if(userEmail==='brian@fieldsourceohio.com'){
       setPortal('consulting');

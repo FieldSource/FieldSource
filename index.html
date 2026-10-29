@@ -6146,7 +6146,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
     });
     if(!uploadRes.ok){ throw new Error('Storage upload failed: ' + uploadRes.statusText); }
 
-    const requiresApproval = (projectName||'').toLowerCase().includes('canal winchester');
+    const requiresApproval = ['canal winchester','elgin'].some(p=>(projectName||'').toLowerCase().includes(p));
     const meta = {
       job_id: null,
       project_name: projectName||'General',

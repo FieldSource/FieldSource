@@ -3600,6 +3600,14 @@ async function loadEstimates(){
       tips: r.tips||false,
       createdAt: r.created_at||'',
       createdDate: r.est_created_date || (r.created_at||'').slice(0,10),
+      qbNumber: r.qb_estimate_number||'',
+      amount: r.amount!=null ? Number(r.amount) : null,
+      client: r.client||'',
+      qbStatus: r.qb_status||'',
+      invoicedToDate: r.invoiced_to_date!=null ? Number(r.invoiced_to_date) : null,
+      unbilledBalance: r.unbilled_balance!=null ? Number(r.unbilled_balance) : null,
+      acceptedDate: r.accepted_date||'',
+      source: r.source||'manual',
     }));
   } catch(e){ estimates = []; }
 }
@@ -3672,6 +3680,11 @@ function renderEstimates(){
 
   filtered.sort((a,b)=>{
     if(estimateSortBy==='name') return (a.projectName||'').localeCompare(b.projectName||'');
+    if(estimateSortBy==='amount'){
+      const av = a.amount??-1, bv = b.amount??-1;
+      if(av!==bv) return bv-av;
+      return (a.projectName||'').localeCompare(b.projectName||'');
+    }
     if(estimateSortBy==='created'){
       const ac = a.createdDate||'', bc = b.createdDate||'';
       if(ac!==bc) return bc.localeCompare(ac); // newest first
@@ -3696,7 +3709,7 @@ function renderEstimates(){
     <div style="font-size:18px;font-weight:700;color:var(--text)">Estimate Tracker</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       <span style="font-size:12px;color:var(--text-3)">Sort:</span>
-      ${[['due','Due Date'],['created','Created'],['name','Name'],['status','Status']].map(([val,label])=>`<button onclick="estimateSortBy='${val}';renderEstimates()" class="site-chip${estimateSortBy===val?' active':''}" style="padding:4px 10px">${label}</button>`).join('')}
+      ${[['due','Due Date'],['created','Created'],['amount','Amount'],['name','Name'],['status','Status']].map(([val,label])=>`<button onclick="estimateSortBy='${val}';renderEstimates()" class="site-chip${estimateSortBy===val?' active':''}" style="padding:4px 10px">${label}</button>`).join('')}
       ${canEdit?`<button onclick="openEstimateModal()" class="btn-save" style="font-size:13px;padding:6px 14px;margin-left:8px">+ Add Estimate</button>`:''}
     </div>
   </div>
@@ -3714,7 +3727,7 @@ function renderEstimates(){
     <span style="font-size:12px;color:var(--text-3)">to</span>
     <input type="date" value="${estimateCreatedTo}" onchange="estimateCreatedTo=this.value;renderEstimates()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg)">
     ${(estimateCreatedFrom||estimateCreatedTo)?`<button onclick="estimateCreatedFrom='';estimateCreatedTo='';renderEstimates()" class="site-chip" style="padding:4px 10px">Clear</button>`:''}
-    <span style="font-size:12px;color:var(--text-3);margin-left:auto">${filtered.length} of ${estimates.length}</span>
+    <span style="font-size:12px;color:var(--text-3);margin-left:auto">${filtered.length} of ${estimates.length} · <b style="color:var(--text)">${fmtEstMoney(filtered.reduce((t,e)=>t+(e.amount||0),0))}</b></span>
   </div>`;
 
   if(!filtered.length){
@@ -3723,9 +3736,10 @@ function renderEstimates(){
     html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">`;
 
     // Header
-    html += `<div style="display:grid;grid-template-columns:2fr 100px 100px 100px 110px 80px 80px 60px;gap:0;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border)">
+    html += `<div style="display:grid;grid-template-columns:2fr 100px 110px 100px 100px 110px 70px 70px 50px;gap:0;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border)">
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Project</div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Type</div>
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Amount</div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Created</div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Due Date</div>
       <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Status</div>
@@ -3737,13 +3751,18 @@ function renderEstimates(){
     filtered.forEach(e=>{
       const sc = ESTIMATE_STATUS_COLORS[e.status]||{bg:'#f1f5f9',text:'#475569'};
       const overdue = e.estDueDate && e.estDueDate < today && e.status!=='Estimate In Progress';
-      html += `<div onclick="${canEdit?`openEstimateModal('${e.id}')`:''}" style="display:grid;grid-template-columns:2fr 100px 100px 100px 110px 80px 80px 60px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);${canEdit?'cursor:pointer;':''}align-items:start">
+      html += `<div onclick="${canEdit?`openEstimateModal('${e.id}')`:''}" style="display:grid;grid-template-columns:2fr 100px 110px 100px 100px 110px 70px 70px 50px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);${canEdit?'cursor:pointer;':''}align-items:start">
         <div>
           <div style="font-size:13px;font-weight:600;color:var(--text)">${e.projectName}</div>
+          ${(e.qbNumber||e.client)?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.qbNumber?`Est #${e.qbNumber}`:''}${e.qbNumber&&e.client?' · ':''}${e.client}${e.qbStatus?` · QB ${e.qbStatus}`:''}</div>`:''}
           ${e.scope?`<div style="font-size:11px;color:var(--text-2);margin-top:2px">${e.scope}</div>`:''}
           ${e.notes?`<div style="font-size:11px;color:var(--text-3);margin-top:2px;font-style:italic">${e.notes}</div>`:''}
         </div>
         <div style="font-size:12px;color:var(--text-2)">${e.type}</div>
+        <div style="font-size:12px;color:var(--text)">
+          <div style="font-weight:600">${e.amount!=null?fmtEstMoney(e.amount):'<span style="color:var(--text-3);font-weight:400">—</span>'}</div>
+          ${e.unbilledBalance!=null&&e.qbStatus==='Accepted'?`<div style="font-size:10px;color:var(--text-3)">${fmtEstMoney(e.unbilledBalance)} unbilled</div>`:''}
+        </div>
         <div style="font-size:12px;color:var(--text-2)">${e.createdDate||'—'}</div>
         <div style="font-size:12px;color:${overdue?'#dc2626':'var(--text-2)'};font-weight:${overdue?'600':'400'}">${e.estDueDate||'TBD'}</div>
         <div><span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:${sc.bg};color:${sc.text}">${e.status}</span></div>
@@ -3756,6 +3775,10 @@ function renderEstimates(){
   }
 
   document.getElementById('main-content').innerHTML = html;
+}
+
+function fmtEstMoney(n){
+  return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
 }
 
 function setEstimateCreatedPreset(k){
@@ -3790,10 +3813,21 @@ function openEstimateModal(id=null){
         <select id="est-status">${ESTIMATE_STATUSES.map(s=>`<option value="${s}"${est&&est.status===s?' selected':(!est&&s==='Not Started'?' selected':'')}>${s}</option>`).join('')}</select>
       </div>
     </div>
-    <div class="form-group" style="margin-top:10px;margin-bottom:0">
-      <label class="form-label">Date Created</label>
-      <input type="date" id="est-created" value="${est?(est.createdDate||''):new Date().toLocaleDateString('en-CA')}">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Date Created</label>
+        <input type="date" id="est-created" value="${est?(est.createdDate||''):new Date().toLocaleDateString('en-CA')}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Amount ($)</label>
+        <input type="text" inputmode="decimal" id="est-amount" placeholder="e.g. 14750" value="${est&&est.amount!=null?est.amount:''}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">QB Estimate #</label>
+        <input type="text" id="est-qbnum" placeholder="e.g. 1854" value="${est?(est.qbNumber||''):''}">
+      </div>
     </div>
+    ${est&&est.source==='quickbooks'?`<div style="font-size:11px;color:var(--text-3);margin-top:6px">Amount, date and client sync from QuickBooks daily; edits to them here get overwritten.</div>`:''}
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label">Project Year</label>
@@ -3854,16 +3888,22 @@ async function saveEstimate(id){
     proposal_needed: document.getElementById('est-proposal')?.checked||false,
     tips: document.getElementById('est-tips')?.checked||false,
     est_created_date: document.getElementById('est-created').value || null,
+    amount: (v=>v===''?null:(isNaN(parseFloat(v))?null:parseFloat(v)))(document.getElementById('est-amount').value.replace(/[$,\s]/g,'')),
+    qb_estimate_number: document.getElementById('est-qbnum').value.trim() || null,
     updated_at: new Date().toISOString(),
   };
+  if(row.qb_estimate_number){
+    const dup = estimates.find(e=>e.qbNumber===row.qb_estimate_number && e.id!==id);
+    if(dup){ errEl.textContent=`Estimate #${row.qb_estimate_number} is already on "${dup.projectName}". Delete one of them first.`; btn.disabled=false; btn.textContent='Save'; return; }
+  }
   try {
     if(id){
       await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, row);
       const est = estimates.find(e=>e.id===id);
-      if(est) Object.assign(est, {projectName:row.project_name, type:row.type, status:row.status, projectDate:row.project_date, estDueDate:row.est_due_date||'', days:row.days, scope:row.scope, notes:row.notes, proposalNeeded:row.proposal_needed, tips:row.tips, createdDate:row.est_created_date||''});
+      if(est) Object.assign(est, {projectName:row.project_name, type:row.type, status:row.status, projectDate:row.project_date, estDueDate:row.est_due_date||'', days:row.days, scope:row.scope, notes:row.notes, proposalNeeded:row.proposal_needed, tips:row.tips, createdDate:row.est_created_date||'', amount:row.amount, qbNumber:row.qb_estimate_number||''});
     } else {
       const res = await sbFetch('POST', '/rest/v1/estimates', row);
-      if(res&&res[0]) estimates.push({...row, id:res[0].id, projectName:row.project_name, estDueDate:row.est_due_date||'', projectDate:row.project_date, proposalNeeded:row.proposal_needed, createdAt:new Date().toISOString(), createdDate:row.est_created_date||''});
+      if(res&&res[0]) estimates.push({...row, id:res[0].id, projectName:row.project_name, estDueDate:row.est_due_date||'', projectDate:row.project_date, proposalNeeded:row.proposal_needed, createdAt:new Date().toISOString(), createdDate:row.est_created_date||'', amount:row.amount, qbNumber:row.qb_estimate_number||'', source:'manual'});
     }
     document.getElementById('est-overlay').remove();
     renderEstimates();

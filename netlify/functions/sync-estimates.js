@@ -95,6 +95,23 @@ exports.handler = async (event) => {
       qb_status: qbStatus,
       invoiced_to_date: money(r.invoiced_to_date),
       unbilled_balance: money(r.unbilled_balance),
+      qb_link: /^https?:\/\//.test(String(r.qb_link||'')) ? String(r.qb_link) : null,
+      line_items: Array.isArray(r.line_items) ? r.line_items.map(l => ({
+        item: String(l.item || '').slice(0, 200),
+        description: String(l.description || '').slice(0, 600),
+        qty: l.qty === '' || l.qty == null ? null : Number(l.qty),
+        rate: money(l.rate),
+        value: money(l.value),
+        pct: l.pct === '' || l.pct == null ? null : Number(l.pct),
+        earned: money(l.earned) || 0,
+        notes: String(l.notes || '').slice(0, 300),
+      })) : null,
+      prior_invoices: Array.isArray(r.prior_invoices) ? r.prior_invoices.map(i => ({
+        number: String(i.number || ''),
+        date: isoDate(i.date),
+        amount: money(i.amount),
+        notes: String(i.notes || '').slice(0, 300),
+      })) : null,
     });
   }
 
@@ -121,6 +138,9 @@ exports.handler = async (event) => {
       qb_status: r.qb_status,
       invoiced_to_date: r.invoiced_to_date,
       unbilled_balance: r.unbilled_balance,
+      qb_link: r.qb_link,
+      line_items: r.line_items,
+      prior_invoices: r.prior_invoices,
       qb_synced_at: now,
     };
     const ex = existing.get(num);

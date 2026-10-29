@@ -381,6 +381,10 @@ main{padding:12px 16px 100px}
     </div>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
+    <div id="approval-bell" style="display:none;position:relative;cursor:pointer" onclick="setPortal('bizops');setView('invoices')" title="Invoices pending approval">
+      <span style="font-size:20px">🔔</span>
+      <span id="approval-badge" style="position:absolute;top:-4px;right:-6px;background:#dc2626;color:#fff;border-radius:99px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center">0</span>
+    </div>
     <div class="user-chip">
       <span id="header-user-name"></span>
       <button class="logout-btn" onclick="doLogout()">Sign out</button>
@@ -5828,6 +5832,69 @@ let reportDateFrom = '';
 let reportDateTo = '';
 const INVOICE_BUCKET = 'invoices';
 
+function updateApprovalBell(){
+  const isDan = (currentUser?.email||'').toLowerCase() === 'haller@fieldsourceohio.com';
+  const isAdmin = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes((currentUser?.email||'').toLowerCase());
+  if(!isDan && !isAdmin){ document.getElementById('approval-bell').style.display='none'; return; }
+  const pending = invoiceFiles.filter(f=>f.approvalStatus==='pending').length;
+  const bell = document.getElementById('approval-bell');
+  const badge = document.getElementById('approval-badge');
+  if(bell) bell.style.display = pending > 0 ? '' : 'none';
+  if(badge) badge.textContent = pending;
+}
+
+async function approveInvoice(id){
+  const f = invoiceFiles.find(x=>x.id===id);
+  if(!f) return;
+  const btn = document.getElementById('approve-btn-'+id);
+  if(btn){ btn.textContent='Approving...'; btn.disabled=true; }
+  try {
+    await sbFetch('PATCH', `/rest/v1/invoice_files?id=eq.${id}`, {
+      approval_status: 'approved',
+      approved_by: currentUser?.email||'',
+      approved_at: new Date().toISOString(),
+    });
+    // Now send to Dropbox
+    const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/invoices/${f.filePath}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${sbToken()}`, 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresIn: 60 }),
+    });
+    const data = await res.json();
+    if(data.signedURL){
+      const fullUrl = `https://pldlvtlbgxizbppaliag.supabase.co/storage/v1${data.signedURL}`;
+      const fileRes = await fetch(fullUrl);
+      const blob = await fileRes.blob();
+      const base64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
+      await fetch('/.netlify/functions/upload-to-dropbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
+      });
+    }
+    await loadInvoices();
+    updateApprovalBell();
+    renderInvoiceList();
+  } catch(e){
+    alert('Approval failed: ' + e.message);
+    if(btn){ btn.textContent='Approve'; btn.disabled=false; }
+  }
+}
+
+async function rejectInvoice(id){
+  const reason = prompt('Reason for rejection (required):');
+  if(!reason) return;
+  await sbFetch('PATCH', `/rest/v1/invoice_files?id=eq.${id}`, {
+    approval_status: 'rejected',
+    approved_by: currentUser?.email||'',
+    approved_at: new Date().toISOString(),
+    approval_notes: reason,
+  });
+  await loadInvoices();
+  updateApprovalBell();
+  renderInvoiceList();
+}
+
 async function loadInvoices(){
   try {
     const data = await sbFetch('GET', '/rest/v1/invoice_files?select=*&order=uploaded_at.desc');
@@ -5847,8 +5914,13 @@ async function loadInvoices(){
       invoiceNum: r.invoice_num||'',
       invoiceDate: r.invoice_date||'',
       extractedText: r.extracted_text||'',
+      approvalStatus: r.approval_status||'approved',
+      approvedBy: r.approved_by||'',
+      approvedAt: r.approved_at||'',
+      approvalNotes: r.approval_notes||'',
     }));
     invoiceLoaded = true;
+    updateApprovalBell();
   } catch(e){ invoiceFiles = []; invoiceLoaded = true; }
 }
 
@@ -5979,6 +6051,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
     });
     if(!uploadRes.ok){ throw new Error('Storage upload failed: ' + uploadRes.statusText); }
 
+    const requiresApproval = (projectName||'').toLowerCase().includes('canal winchester');
     const meta = {
       job_id: null,
       project_name: projectName||'General',
@@ -5993,6 +6066,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       invoice_num: window._pendingInvoiceNum||'',
       invoice_date: window._pendingInvoiceDate||null,
       extracted_text: window._pendingExtractedText||'',
+      approval_status: requiresApproval ? 'pending' : 'approved',
     };
     await sbFetch('POST', '/rest/v1/invoice_files', meta);
 
@@ -6016,23 +6090,30 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       window._pendingInvoiceNum = null;
     }
 
-    // Upload to Dropbox Accounts Payable folder
-    try {
-      const base64 = await new Promise((res,rej)=>{
-        const r = new FileReader();
-        r.onload = ()=>res(r.result.split(',')[1]);
-        r.onerror = rej;
-        r.readAsDataURL(file);
-      });
-      await fetch('/.netlify/functions/upload-to-dropbox', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fileData: base64, fileName: file.name, projectName, vendorName: vendor }),
-      });
-    } catch(e){ console.warn('Dropbox upload failed:', e); }
+    // Upload to Dropbox — skip if pending approval
+    if(!requiresApproval){
+      try {
+        const base64 = await new Promise((res,rej)=>{
+          const r = new FileReader();
+          r.onload = ()=>res(r.result.split(',')[1]);
+          r.onerror = rej;
+          r.readAsDataURL(file);
+        });
+        await fetch('/.netlify/functions/upload-to-dropbox', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileData: base64, fileName: file.name, projectName, vendorName: vendor }),
+        });
+      } catch(e){ console.warn('Dropbox upload failed:', e); }
+    }
 
     await loadInvoices();
-    if(statusEl){ statusEl.textContent = `✓ Filed under ${projectName} / ${vendor}`; statusEl.style.color='var(--green-dark)'; }
+    if(statusEl){
+      statusEl.textContent = requiresApproval
+        ? `✓ Filed — pending Dan Haller approval before Dropbox`
+        : `✓ Filed under ${projectName} / ${vendor}`;
+      statusEl.style.color = requiresApproval ? '#f59e0b' : 'var(--green-dark)';
+    }
     renderInvoices();
   } catch(e){
     console.error('Upload error:', e);
@@ -6843,6 +6924,7 @@ function renderInvoiceList(){
   }
 
   const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
+  const canApprove = ['haller@fieldsourceohio.com','jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
 
   let html = '';
   if(!filtered.length){
@@ -6875,7 +6957,18 @@ function renderInvoiceList(){
           ${canUpload?`<button onclick="openInvoiceEditModal('${safe}')" title="Edit" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:13px">✏️</button>`:''}
           ${canUpload?`<button onclick="deleteInvoiceFile('${safe}','${safePath}','${safeFile}')" title="Delete" style="background:none;border:1px solid #fca5a5;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:13px">🗑️</button>`:''}
         </div>
-      </div>`;
+      </div>
+      ${f.approvalStatus==='pending'?`<div style="background:#fff7ed;border:1px solid #fed7aa;border-top:none;border-radius:0 0 var(--radius) var(--radius);padding:8px 14px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div style="font-size:12px;color:#92400e;font-weight:500">⏳ Pending approval from Dan Haller before sending to Dropbox</div>
+        ${canApprove?`<div style="display:flex;gap:6px">
+          <button id="approve-btn-${safe}" onclick="approveInvoice('${safe}')" style="padding:4px 12px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:600;cursor:pointer">✓ Approve</button>
+          <button onclick="rejectInvoice('${safe}')" style="padding:4px 12px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:12px;cursor:pointer;color:#dc2626">✕ Reject</button>
+        </div>`:''}
+      </div>`:''}
+      ${f.approvalStatus==='rejected'?`<div style="background:#fef2f2;border:1px solid #fca5a5;border-top:none;border-radius:0 0 var(--radius) var(--radius);padding:8px 14px;font-size:12px;color:#dc2626">
+        ✕ Rejected${f.approvalNotes?' — '+f.approvalNotes:''} ${f.approvedBy?'by '+f.approvedBy:''}
+      </div>`:''}
+      `;
     });
     html += `<div style="font-size:11px;color:var(--text-3);margin-top:6px;text-align:right">${filtered.length} file${filtered.length!==1?'s':''}</div>`;
   }

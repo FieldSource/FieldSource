@@ -434,7 +434,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()" style="display:none">Clients</button>
     <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'))">Estimates</button>
     <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Invoices</button>
-    <button class="vtab" id="inv-approval-tab" onclick="loadInvApproval().then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" id="inv-approval-tab" onclick="Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="materials-tab" onclick="loadMaterials().then(()=>setView('materials'))">Materials</button>
   </div>
 </div>
@@ -5959,9 +5959,16 @@ function goToInvoices(){
 }
 
 function updateApprovalBell(){
-  const isDan = (currentUser?.email||'').toLowerCase() === 'haller@fieldsourceohio.com';
-  if(!isDan){ document.getElementById('approval-bell').style.display='none'; return; }
-  const pending = invoiceFiles.filter(f=>f.approvalStatus==='pending').length;
+  const userEmail = (currentUser?.email||'').toLowerCase();
+  const isJake = userEmail === 'jake@fieldsourceohio.com';
+  const isDan = userEmail === 'haller@fieldsourceohio.com';
+  if(!isJake && !isDan){ document.getElementById('approval-bell').style.display='none'; return; }
+  const pending = invoiceFiles.filter(f=>{
+    if(f.approvalStatus !== 'pending') return false;
+    if(isJake) return true;
+    // Dan only sees his assigned projects
+    return ['canal winchester','elgin'].some(p=>f.projectName.toLowerCase().includes(p));
+  }).length;
   const bell = document.getElementById('approval-bell');
   const badge = document.getElementById('approval-badge');
   if(bell) bell.style.display = pending > 0 ? '' : 'none';

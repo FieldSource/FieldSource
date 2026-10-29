@@ -29,24 +29,33 @@ exports.handler = async function(event) {
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } }
     : { type: 'image', source: { type: 'base64', media_type: fileType, data: fileData } };
 
-  // First call: extract structured fields
   const structuredBody = JSON.stringify({
     model: 'claude-sonnet-4-6',
-    max_tokens: 500,
+    max_tokens: 600,
     messages: [{
       role: 'user',
       content: [
         contentBlock,
         {
           type: 'text',
-          text: `Extract invoice details. Return ONLY this JSON object with no other text:
-{"vendor":"company name","project":"match to one of: ${clientList}","amount":0,"invoice_number":"","invoice_date":"YYYY-MM-DD","confidence":"high/medium/low","notes":"brief description"}`
+          text: `You are extracting data from an invoice. Read every part of the document carefully including headers, footers, line items, and any monospace or unusual fonts.
+
+Extract the following and return ONLY a JSON object with no other text:
+- vendor: the company sending the invoice (not Field Source — that is the customer)
+- project: the job site or project name. Try to match one of these clients: ${clientList}. Look for fields like "Job Name", "PO#", "Job#", "Project", or location names.
+- amount: the final total amount due (look for "Total:", "Amount Due", "Balance Due" — use the largest/final total)
+- invoice_number: the invoice or contract number
+- invoice_date: the invoice date in YYYY-MM-DD format
+- confidence: "high", "medium", or "low"
+- notes: one line describing what this invoice is for
+
+Example output:
+{"vendor":"Vandalia Rental","project":"Canal Winchester","amount":6467.14,"invoice_number":"1603506-0002","invoice_date":"2026-10-28","confidence":"high","notes":"Roller rental 4 weeks"}`
         }
       ]
     }]
   });
 
-  // Second call: extract full text content for search
   const textBody = JSON.stringify({
     model: 'claude-sonnet-4-6',
     max_tokens: 2000,
@@ -56,13 +65,13 @@ exports.handler = async function(event) {
         contentBlock,
         {
           type: 'text',
-          text: 'Extract ALL text content from this invoice exactly as it appears. Include all line items, descriptions, addresses, dates, amounts, and any other text. Return plain text only, no formatting.'
+          text: 'Extract ALL text content from this invoice exactly as it appears. Include all line items, descriptions, addresses, dates, amounts, and any other text. Return plain text only.'
         }
       ]
     }]
   });
 
-  function callAnthropicAPI(requestBody) {
+  function callAPI(body) {
     return new Promise((resolve, reject) => {
       const options = {
         hostname: 'api.anthropic.com',
@@ -72,7 +81,7 @@ exports.handler = async function(event) {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
-          'Content-Length': Buffer.byteLength(requestBody),
+          'Content-Length': Buffer.byteLength(body),
         }
       };
       const req = https.request(options, (res) => {
@@ -80,33 +89,32 @@ exports.handler = async function(event) {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           try { resolve(JSON.parse(data)); }
-          catch(e) { reject(new Error('Invalid JSON response: ' + data.slice(0, 200))); }
+          catch(e) { reject(new Error('Invalid response: ' + data.slice(0, 200))); }
         });
       });
       req.on('error', reject);
-      req.write(requestBody);
+      req.write(body);
       req.end();
     });
   }
 
   try {
-    // Run both extractions in parallel
     const [structuredResult, textResult] = await Promise.all([
-      callAnthropicAPI(structuredBody),
-      callAnthropicAPI(textBody),
+      callAPI(structuredBody),
+      callAPI(textBody),
     ]);
 
-    // Parse structured fields
     let extracted = {};
     const structuredText = structuredResult?.content?.[0]?.text || '';
     try {
       const clean = structuredText.replace(/```json|```/g, '').trim();
-      extracted = JSON.parse(clean);
+      // Find JSON object in the response
+      const match = clean.match(/\{[\s\S]*\}/);
+      extracted = match ? JSON.parse(match[0]) : {};
     } catch(e) {
       extracted = { confidence: 'low', notes: 'Could not parse invoice' };
     }
 
-    // Get full text
     const fullText = textResult?.content?.[0]?.text || '';
 
     return {

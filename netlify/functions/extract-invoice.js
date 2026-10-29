@@ -29,17 +29,18 @@ exports.handler = async function(event) {
   };
   if(workspaceId) headers['anthropic-workspace-id'] = workspaceId;
 
+  // Use claude-sonnet-4-6 (no extended thinking) instead of haiku-5-5
   const requestBody = JSON.stringify({
-    model: 'claude-haiku-5-5',
+    model: 'claude-sonnet-4-6',
     max_tokens: 400,
     messages: [{
       role: 'user',
       content: [
         { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } },
         { type: 'text', text: `Extract invoice data. Field Source is the CUSTOMER not the vendor. Return ONLY this JSON with no other text:
-{"vendor":"","project":"","amount":0,"invoice_number":"","invoice_date":"","confidence":"","notes":""}
+{"vendor":"","project":"","amount":0,"invoice_number":"","invoice_date":"YYYY-MM-DD","confidence":"high","notes":""}
 
-Try to match the project/job to one of these clients: ${clientList}` }
+Match project to one of: ${clientList}` }
       ]
     }]
   });
@@ -56,17 +57,21 @@ Try to match the project/job to one of these clients: ${clientList}` }
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        console.log('Anthropic status:', res.statusCode, 'response:', data.slice(0, 300));
+        console.log('Anthropic status:', res.statusCode);
         if(res.statusCode !== 200){
+          console.error('Anthropic error:', data.slice(0, 300));
           resolve({ statusCode: 200, body: JSON.stringify({ confidence: 'low', notes: 'Could not read invoice', full_text: '' }) });
           return;
         }
         try {
           const result = JSON.parse(data);
-          const rawText = result?.content?.[0]?.text || '';
-          console.log('Raw text:', rawText.slice(0, 200));
+          // Find the text block (skip thinking blocks)
+          const textBlock = (result?.content || []).find(b => b.type === 'text');
+          const rawText = textBlock?.text || '';
+          console.log('Raw text:', rawText.slice(0, 300));
           const match = rawText.replace(/```json|```/g,'').trim().match(/\{[\s\S]*\}/);
           const extracted = match ? JSON.parse(match[0]) : { confidence: 'low', notes: 'Could not parse invoice' };
+          console.log('Extracted vendor:', extracted.vendor, 'amount:', extracted.amount);
           resolve({
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },

@@ -5885,9 +5885,10 @@ async function extractInvoiceData(file){
 
     if(!response.ok) throw new Error('Extraction service error: ' + response.status);
     const text = await response.text();
+    console.log('extract-invoice response body:', text.slice(0, 500));
     return JSON.parse(text);
   } catch(e){
-    console.warn('Invoice extraction failed:', e);
+    console.error('Invoice extraction failed:', e.message);
     return null;
   }
 }

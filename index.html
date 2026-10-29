@@ -3579,7 +3579,8 @@ async function deleteFleetLoan(id){
 let estimates = [];
 let estimateStatusFilter = 'All';
 let estimateTypeFilter = 'All';
-let estimateSortBy = 'due'; // 'due', 'created', 'name', 'status'
+let estimateSortBy = 'due'; // column key: name,type,amount,created,due,status,days,proposal,tips
+let estimateSortDir = 'asc';
 let estimateCreatedFrom = '';
 let estimateCreatedTo = '';
 
@@ -3608,6 +3609,10 @@ async function loadEstimates(){
       unbilledBalance: r.unbilled_balance!=null ? Number(r.unbilled_balance) : null,
       acceptedDate: r.accepted_date||'',
       source: r.source||'manual',
+      qbLink: r.qb_link||'',
+      lineItems: Array.isArray(r.line_items)?r.line_items:[],
+      priorInvoices: Array.isArray(r.prior_invoices)?r.prior_invoices:[],
+      qbSyncedAt: r.qb_synced_at||'',
     }));
   } catch(e){ estimates = []; }
 }
@@ -3678,28 +3683,30 @@ function renderEstimates(){
   if(estimateCreatedFrom) filtered = filtered.filter(e=>e.createdDate && e.createdDate>=estimateCreatedFrom);
   if(estimateCreatedTo) filtered = filtered.filter(e=>e.createdDate && e.createdDate<=estimateCreatedTo);
 
+  // Column sort. Blank values always sink to the bottom, whichever direction.
+  const sortVal = e=>{
+    switch(estimateSortBy){
+      case 'name': return (e.projectName||'').toLowerCase()||null;
+      case 'type': return e.type||null;
+      case 'amount': return e.amount??null;
+      case 'created': return e.createdDate||null;
+      case 'due': return e.estDueDate||null;
+      case 'status': return STATUS_PRIORITY[e.status]??99;
+      case 'days': { const d=parseFloat(e.days); return isNaN(d)?null:d; }
+      case 'proposal': return e.proposalNeeded?1:0;
+      case 'tips': return e.tips?1:0;
+    }
+    return null;
+  };
+  const dir = estimateSortDir==='desc'?-1:1;
   filtered.sort((a,b)=>{
-    if(estimateSortBy==='name') return (a.projectName||'').localeCompare(b.projectName||'');
-    if(estimateSortBy==='amount'){
-      const av = a.amount??-1, bv = b.amount??-1;
-      if(av!==bv) return bv-av;
-      return (a.projectName||'').localeCompare(b.projectName||'');
+    const av=sortVal(a), bv=sortVal(b);
+    if(av===null && bv!==null) return 1;
+    if(bv===null && av!==null) return -1;
+    if(av!==null && bv!==null && av!==bv){
+      const c = (typeof av==='number'&&typeof bv==='number') ? av-bv : String(av).localeCompare(String(bv));
+      if(c) return c*dir;
     }
-    if(estimateSortBy==='created'){
-      const ac = a.createdDate||'', bc = b.createdDate||'';
-      if(ac!==bc) return bc.localeCompare(ac); // newest first
-      return (a.projectName||'').localeCompare(b.projectName||'');
-    }
-    if(estimateSortBy==='status'){
-      const pa = STATUS_PRIORITY[a.status]??99;
-      const pb = STATUS_PRIORITY[b.status]??99;
-      if(pa!==pb) return pa-pb;
-      return (a.projectName||'').localeCompare(b.projectName||'');
-    }
-    // due date (default)
-    const aDate = a.estDueDate || 'ZZZZ';
-    const bDate = b.estDueDate || 'ZZZZ';
-    if(aDate!==bDate) return aDate.localeCompare(bDate);
     return (a.projectName||'').localeCompare(b.projectName||'');
   });
 
@@ -3708,8 +3715,6 @@ function renderEstimates(){
   let html = `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
     <div style="font-size:18px;font-weight:700;color:var(--text)">Estimate Tracker</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span style="font-size:12px;color:var(--text-3)">Sort:</span>
-      ${[['due','Due Date'],['created','Created'],['amount','Amount'],['name','Name'],['status','Status']].map(([val,label])=>`<button onclick="estimateSortBy='${val}';renderEstimates()" class="site-chip${estimateSortBy===val?' active':''}" style="padding:4px 10px">${label}</button>`).join('')}
       ${canEdit?`<button onclick="openEstimateModal()" class="btn-save" style="font-size:13px;padding:6px 14px;margin-left:8px">+ Add Estimate</button>`:''}
     </div>
   </div>
@@ -3737,21 +3742,21 @@ function renderEstimates(){
 
     // Header
     html += `<div style="display:grid;grid-template-columns:2fr 100px 110px 100px 100px 110px 70px 70px 50px;gap:0;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border)">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Project</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Type</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Amount</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Created</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Due Date</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Status</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Days</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Proposal</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">TIPS</div>
+      <div onclick="sortEstimatesBy('name')" title="Sort by Project" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='name'?'color:var(--text)':''}">Project${estimateSortBy==='name'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('type')" title="Sort by Type" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='type'?'color:var(--text)':''}">Type${estimateSortBy==='type'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('amount')" title="Sort by Amount" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='amount'?'color:var(--text)':''}">Amount${estimateSortBy==='amount'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('created')" title="Sort by Created" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='created'?'color:var(--text)':''}">Created${estimateSortBy==='created'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('due')" title="Sort by Due Date" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='due'?'color:var(--text)':''}">Due Date${estimateSortBy==='due'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('status')" title="Sort by Status" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='status'?'color:var(--text)':''}">Status${estimateSortBy==='status'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('days')" title="Sort by Days" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='days'?'color:var(--text)':''}">Days${estimateSortBy==='days'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('proposal')" title="Sort by Proposal" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='proposal'?'color:var(--text)':''}">Proposal${estimateSortBy==='proposal'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('tips')" title="Sort by TIPS" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='tips'?'color:var(--text)':''}">TIPS${estimateSortBy==='tips'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
     </div>`;
 
     filtered.forEach(e=>{
       const sc = ESTIMATE_STATUS_COLORS[e.status]||{bg:'#f1f5f9',text:'#475569'};
       const overdue = e.estDueDate && e.estDueDate < today && e.status!=='Estimate In Progress';
-      html += `<div onclick="${canEdit?`openEstimateModal('${e.id}')`:''}" style="display:grid;grid-template-columns:2fr 100px 110px 100px 100px 110px 70px 70px 50px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);${canEdit?'cursor:pointer;':''}align-items:start">
+      html += `<div onclick="openEstimateDetail('${e.id}')" style="display:grid;grid-template-columns:2fr 100px 110px 100px 100px 110px 70px 70px 50px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);cursor:pointer;align-items:start">
         <div>
           <div style="font-size:13px;font-weight:600;color:var(--text)">${e.projectName}</div>
           ${(e.qbNumber||e.client)?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.qbNumber?`Est #${e.qbNumber}`:''}${e.qbNumber&&e.client?' · ':''}${e.client}${e.qbStatus?` · QB ${e.qbStatus}`:''}</div>`:''}
@@ -3775,6 +3780,135 @@ function renderEstimates(){
   }
 
   document.getElementById('main-content').innerHTML = html;
+}
+
+// Click a header: same column flips direction; a new column starts in its natural order
+// (A–Z for text, soonest due first, newest/largest first for created and amount).
+function sortEstimatesBy(key){
+  if(estimateSortBy===key) estimateSortDir = estimateSortDir==='asc'?'desc':'asc';
+  else { estimateSortBy = key; estimateSortDir = ['amount','created','proposal','tips'].includes(key)?'desc':'asc'; }
+  renderEstimates();
+}
+
+function escEst(v){
+  return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtEstMoney2(n){
+  return (n<0?'-$':'$')+Math.abs(Number(n||0)).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+// Read-only detail view: opens when you click an estimate row.
+function openEstimateDetail(id){
+  const e = estimates.find(x=>x.id===id);
+  if(!e) return;
+  const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com'].includes(userEmail);
+  const sc = ESTIMATE_STATUS_COLORS[e.status]||{bg:'#f1f5f9',text:'#475569'};
+  const lines = e.lineItems||[];
+  const invs = e.priorInvoices||[];
+  const earned = lines.reduce((t,l)=>t+(Number(l.earned)||0),0);
+  const lineTotal = lines.reduce((t,l)=>t+(Number(l.value)||0),0);
+  const pctAll = lineTotal ? Math.round(earned/lineTotal*100) : null;
+  const invTotal = invs.reduce((t,i)=>t+(Number(i.amount)||0),0);
+  const over = e.amount!=null && e.invoicedToDate!=null && e.invoicedToDate > e.amount;
+
+  const card = (label,val,sub='',warn=false)=>`<div style="flex:1;min-width:120px;background:var(--bg);border:1px solid ${warn?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:10px 12px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">${label}</div>
+      <div style="font-size:16px;font-weight:700;color:${warn?'#dc2626':'var(--text)'};margin-top:2px">${val}</div>
+      ${sub?`<div style="font-size:11px;color:var(--text-3)">${sub}</div>`:''}
+    </div>`;
+  const field = (label,val)=>`<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">${label}</div><div style="font-size:13px;color:var(--text);margin-top:2px">${val||'—'}</div></div>`;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);padding:6px 8px;text-align:left;white-space:nowrap;background:var(--accent)';
+  const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border);vertical-align:top';
+
+  let body = `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+      <div>
+        <div class="sheet-title" style="margin-bottom:2px">${escEst(e.projectName)}</div>
+        <div style="font-size:12px;color:var(--text-3)">${[e.qbNumber?`Est #${escEst(e.qbNumber)}`:'',escEst(e.client),e.qbStatus?`QB ${escEst(e.qbStatus)}`:''].filter(Boolean).join(' · ')||'Entered manually'}</div>
+      </div>
+      <span style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text};white-space:nowrap">${escEst(e.status)}</span>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      ${card('Estimate total', e.amount!=null?fmtEstMoney2(e.amount):'—')}
+      ${e.invoicedToDate!=null?card('Invoiced to date', fmtEstMoney2(e.invoicedToDate), over?'More than the estimate total':'', over):''}
+      ${e.unbilledBalance!=null?card('Unbilled', fmtEstMoney2(e.unbilledBalance), '', e.unbilledBalance<0):''}
+      ${lines.length?card('Earned to date', fmtEstMoney2(earned), pctAll!=null?`${pctAll}% complete`:''):''}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;margin-top:14px">
+      ${field('Type', escEst(e.type))}
+      ${field('Created', escEst(e.createdDate))}
+      ${field('Accepted', escEst(e.acceptedDate))}
+      ${field('Est. due', escEst(e.estDueDate))}
+      ${field('Days', escEst(e.days))}
+      ${field('Proposal / TIPS', `${e.proposalNeeded?'Proposal':''}${e.proposalNeeded&&e.tips?' · ':''}${e.tips?'TIPS':''}`)}
+    </div>
+    ${e.scope?`<div style="margin-top:12px">${field('Scope', escEst(e.scope))}</div>`:''}
+    ${e.notes?`<div style="margin-top:12px">${field('Notes', `<span style="font-style:italic">${escEst(e.notes)}</span>`)}</div>`:''}
+
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Breakdown</div>`;
+
+  if(lines.length){
+    body += `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="${th}">Item</th><th style="${th};text-align:right">Qty</th><th style="${th};text-align:right">Rate</th>
+          <th style="${th};text-align:right">Value</th><th style="${th};text-align:right">% done</th><th style="${th};text-align:right">Earned</th>
+        </tr></thead>
+        <tbody>
+          ${lines.map(l=>`<tr>
+            <td style="${td}"><div style="font-weight:600">${escEst(l.item)}</div>${l.description?`<div style="font-size:11px;color:var(--text-2)">${escEst(l.description)}</div>`:''}${l.notes?`<div style="font-size:11px;color:var(--text-3);font-style:italic">${escEst(l.notes)}</div>`:''}</td>
+            <td style="${td};text-align:right">${l.qty??''}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${l.rate!=null?fmtEstMoney2(l.rate):''}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${l.value!=null?fmtEstMoney2(l.value):''}</td>
+            <td style="${td};text-align:right;${Number(l.pct)>100?'color:#dc2626;font-weight:600':''}">${l.pct!=null&&l.pct!==''?Math.round(Number(l.pct))+'%':'—'}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${fmtEstMoney2(l.earned)}</td>
+          </tr>`).join('')}
+          <tr>
+            <td style="${td};font-weight:700">Total</td><td style="${td}"></td><td style="${td}"></td>
+            <td style="${td};text-align:right;font-weight:700;white-space:nowrap">${fmtEstMoney2(lineTotal)}</td>
+            <td style="${td};text-align:right;font-weight:700">${pctAll!=null?pctAll+'%':''}</td>
+            <td style="${td};text-align:right;font-weight:700;white-space:nowrap">${fmtEstMoney2(earned)}</td>
+          </tr>
+        </tbody>
+      </table></div>`;
+  } else {
+    body += `<div style="font-size:12px;color:var(--text-3);background:var(--bg);border:1px dashed var(--border-2);border-radius:var(--radius-sm);padding:12px">
+      ${e.qbNumber
+        ? `Line items are only on the Billing Tracker for active jobs, and this one doesn't have a job tab yet.${e.qbLink?' Open it in QuickBooks for the full breakdown.':''}`
+        : 'No breakdown for this estimate. It was entered by hand and isn\'t linked to a QuickBooks estimate number.'}
+    </div>`;
+  }
+
+  if(invs.length){
+    body += `<div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Invoices on this estimate</div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th style="${th}">Invoice #</th><th style="${th}">Date</th><th style="${th};text-align:right">Amount</th><th style="${th}">Notes</th></tr></thead>
+        <tbody>
+          ${invs.map(i=>`<tr><td style="${td}">${escEst(i.number)}</td><td style="${td}">${escEst(i.date)}</td><td style="${td};text-align:right;white-space:nowrap">${fmtEstMoney2(i.amount)}</td><td style="${td};color:var(--text-3)">${escEst(i.notes)}</td></tr>`).join('')}
+          <tr><td style="${td};font-weight:700">Total</td><td style="${td}"></td><td style="${td};text-align:right;font-weight:700;white-space:nowrap">${fmtEstMoney2(invTotal)}</td><td style="${td}"></td></tr>
+        </tbody>
+      </table></div>`;
+  }
+
+  body += `
+    ${e.qbSyncedAt?`<div style="font-size:11px;color:var(--text-3);margin-top:12px">Last synced from the Billing Tracker ${new Date(e.qbSyncedAt).toLocaleString()}</div>`:''}
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px">
+      ${e.qbLink?`<a href="${escEst(e.qbLink)}" target="_blank" rel="noopener" class="site-chip" style="text-decoration:none;padding:8px 14px">Open in QuickBooks ↗</a>`:''}
+      ${canEdit?`<button onclick="document.getElementById('est-detail-overlay').remove();openEstimateModal('${e.id}')" class="site-chip" style="padding:8px 14px">✏️ Edit</button>`:''}
+      <button onclick="document.getElementById('est-detail-overlay').remove()" class="btn-save" style="padding:8px 16px">Close</button>
+    </div>`;
+
+  document.getElementById('est-detail-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'est-detail-overlay';
+  overlay.onclick = ev=>{ if(ev.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:760px;max-height:90vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
+  document.body.appendChild(overlay);
 }
 
 function fmtEstMoney(n){

@@ -1,7 +1,6 @@
 const https = require('https');
 
 const DROPBOX_AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
-const DROPBOX_TOKEN_URL = 'https://api.dropboxapi.com/oauth2/token';
 const REDIRECT_URI = 'https://fieldsourcetracker.netlify.app/.netlify/functions/dropbox-connect';
 
 const SUPABASE_URL = 'pldlvtlbgxizbppaliag.supabase.co';
@@ -25,9 +24,12 @@ async function sbSet(key, value) {
     const req = https.request(options, res => {
       let d = '';
       res.on('data', chunk => d += chunk);
-      res.on('end', () => resolve(d));
+      res.on('end', () => {
+        console.log('sbSet response status:', res.statusCode, 'body:', d.slice(0, 200));
+        resolve(d);
+      });
     });
-    req.on('error', reject);
+    req.on('error', (e) => { console.error('sbSet error:', e.message); reject(e); });
     req.write(data);
     req.end();
   });
@@ -38,13 +40,14 @@ exports.handler = async function(event) {
   const APP_KEY = process.env.DROPBOX_APP_KEY;
   const APP_SECRET = process.env.DROPBOX_APP_SECRET;
 
-  // Step 1: No code yet — redirect to Dropbox OAuth
+  console.log('dropbox-connect called, has code:', !!code, 'has error:', !!error);
+
   if (!code && !error) {
     const params = new URLSearchParams({
       client_id: APP_KEY,
       redirect_uri: REDIRECT_URI,
       response_type: 'code',
-      token_access_type: 'offline', // this gets us a refresh token
+      token_access_type: 'offline',
     });
     return {
       statusCode: 302,
@@ -53,13 +56,12 @@ exports.handler = async function(event) {
     };
   }
 
-  // Error from Dropbox
   if (error) {
     return { statusCode: 400, body: `Dropbox auth error: ${error}` };
   }
 
-  // Step 2: Exchange code for tokens
   try {
+    console.log('Exchanging code for tokens...');
     const credentials = Buffer.from(`${APP_KEY}:${APP_SECRET}`).toString('base64');
     const body = new URLSearchParams({
       code,
@@ -88,14 +90,29 @@ exports.handler = async function(event) {
       req.end();
     });
 
+    console.log('Dropbox token response status:', result.status, 'body:', result.body.slice(0, 300));
+
     const tokens = JSON.parse(result.body);
+    
     if (!tokens.refresh_token) {
-      return { statusCode: 500, body: `No refresh token received: ${result.body}` };
+      console.error('No refresh token in response. Keys:', Object.keys(tokens).join(', '));
+      // Try saving access token at minimum
+      if (tokens.access_token) {
+        await sbSet('DROPBOX_ACCESS_TOKEN', tokens.access_token);
+        console.log('Saved access token only (no refresh token)');
+        return {
+          statusCode: 302,
+          headers: { Location: 'https://fieldsourcetracker.netlify.app/?dropbox=connected' },
+          body: '',
+        };
+      }
+      return { statusCode: 500, body: `No tokens received: ${result.body}` };
     }
 
-    // Store both tokens in Supabase
+    console.log('Saving refresh token to Supabase...');
     await sbSet('DROPBOX_REFRESH_TOKEN', tokens.refresh_token);
     await sbSet('DROPBOX_ACCESS_TOKEN', tokens.access_token);
+    console.log('Tokens saved successfully');
 
     return {
       statusCode: 302,
@@ -103,6 +120,7 @@ exports.handler = async function(event) {
       body: '',
     };
   } catch(e) {
+    console.error('dropbox-connect error:', e.message);
     return { statusCode: 500, body: `Error: ${e.message}` };
   }
 };

@@ -7,7 +7,6 @@ exports.handler = async function(event) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if(!apiKey){
-    console.error('ANTHROPIC_API_KEY not set');
     return { statusCode: 500, body: JSON.stringify({ error: 'API key not configured' }) };
   }
 
@@ -19,57 +18,12 @@ exports.handler = async function(event) {
     clientList = body.clientList;
     console.log('Received file type:', fileType, 'data length:', fileData ? fileData.length : 0);
   } catch(e) {
-    console.error('Body parse error:', e.message);
     return { statusCode: 400, body: JSON.stringify({ error: 'Invalid request body' }) };
   }
 
-  if(!fileData || fileData.length === 0){
-    console.error('No file data received');
-    return { statusCode: 400, body: JSON.stringify({ error: 'No file data received' }) };
-  }
-
-  if(fileData.length > 13000000){
-    console.error('File too large:', fileData.length);
-    return { statusCode: 413, body: JSON.stringify({ error: 'File too large for extraction' }) };
-  }
-
-  const isPDF = fileType === 'application/pdf' || (fileType && fileType.includes('pdf'));
-  const contentBlock = isPDF
-    ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } }
-    : { type: 'image', source: { type: 'base64', media_type: fileType, data: fileData } };
-
-  console.log('Calling Anthropic API, isPDF:', isPDF);
-
-  const structuredBody = JSON.stringify({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 600,
-    messages: [{
-      role: 'user',
-      content: [
-        contentBlock,
-        {
-          type: 'text',
-          text: `Extract invoice data. The company receiving the invoice is Field Source — do NOT use them as the vendor. Return ONLY this JSON:
-{"vendor":"company sending the invoice","project":"job site or project name — try to match one of: ${clientList}","amount":0,"invoice_number":"","invoice_date":"YYYY-MM-DD","confidence":"high/medium/low","notes":"brief description of what this invoice is for"}`
-        }
-      ]
-    }]
-  });
-
-  const textBody = JSON.stringify({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 2000,
-    messages: [{
-      role: 'user',
-      content: [
-        contentBlock,
-        { type: 'text', text: 'Extract ALL text from this invoice. Return plain text only.' }
-      ]
-    }]
-  });
-
-  function callAPI(body) {
+  function callAPI(requestBody) {
     return new Promise((resolve, reject) => {
+      const bodyStr = JSON.stringify(requestBody);
       const options = {
         hostname: 'api.anthropic.com',
         path: '/v1/messages',
@@ -78,47 +32,92 @@ exports.handler = async function(event) {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
           'anthropic-version': '2023-06-01',
-          'Content-Length': Buffer.byteLength(body),
+          'anthropic-beta': 'pdfs-2024-09-25',
+          'Content-Length': Buffer.byteLength(bodyStr),
         }
       };
       const req = https.request(options, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
-          console.log('Anthropic response status:', res.statusCode, 'body length:', data.length);
-          try { resolve(JSON.parse(data)); }
-          catch(e) { reject(new Error('Invalid response: ' + data.slice(0, 500))); }
+          console.log('Anthropic response status:', res.statusCode, 'body:', data.slice(0, 300));
+          try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
+          catch(e) { reject(new Error('Invalid JSON: ' + data.slice(0, 200))); }
         });
       });
-      req.on('error', (e) => { console.error('Request error:', e.message); reject(e); });
-      req.write(body);
+      req.on('error', reject);
+      req.write(bodyStr);
       req.end();
     });
   }
 
   try {
-    const [structuredResult, textResult] = await Promise.all([
-      callAPI(structuredBody),
-      callAPI(textBody),
+    // Extract structured fields
+    const structuredReq = {
+      model: 'claude-sonnet-4-6',
+      max_tokens: 600,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: fileData,
+            }
+          },
+          {
+            type: 'text',
+            text: `Extract invoice data. Field Source is the CUSTOMER, not the vendor. Return ONLY valid JSON:
+{"vendor":"company sending this invoice","project":"job site — try to match: ${clientList}","amount":0,"invoice_number":"","invoice_date":"YYYY-MM-DD","confidence":"high","notes":"what this invoice is for"}`
+          }
+        ]
+      }]
+    };
+
+    // Extract full text
+    const textReq = {
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2000,
+      messages: [{
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: fileData,
+            }
+          },
+          { type: 'text', text: 'Extract all text from this invoice. Return plain text only.' }
+        ]
+      }]
+    };
+
+    const [structuredRes, textRes] = await Promise.all([
+      callAPI(structuredReq),
+      callAPI(textReq),
     ]);
 
-    console.log('Structured result type:', structuredResult?.type);
-    console.log('Structured content:', JSON.stringify(structuredResult?.content?.[0]?.text?.slice(0, 200)));
-
-    let extracted = {};
-    const structuredText = structuredResult?.content?.[0]?.text || '';
-    try {
-      const clean = structuredText.replace(/```json|```/g, '').trim();
-      const match = clean.match(/\{[\s\S]*\}/);
-      if(match) extracted = JSON.parse(match[0]);
-      else { console.error('No JSON found in:', clean.slice(0, 200)); extracted = { confidence: 'low', notes: 'Could not parse invoice' }; }
-    } catch(e) {
-      console.error('JSON parse error:', e.message, 'text was:', structuredText.slice(0, 200));
-      extracted = { confidence: 'low', notes: 'Could not parse invoice' };
+    if(structuredRes.status !== 200){
+      console.error('Anthropic error:', JSON.stringify(structuredRes.data));
+      return { statusCode: 200, body: JSON.stringify({ confidence: 'low', notes: 'API error: ' + (structuredRes.data?.error?.message||structuredRes.status), full_text: '' }) };
     }
 
-    const fullText = textResult?.content?.[0]?.text || '';
-    console.log('Extraction complete, vendor:', extracted.vendor, 'amount:', extracted.amount);
+    let extracted = {};
+    const rawText = structuredRes.data?.content?.[0]?.text || '';
+    console.log('Raw structured response:', rawText.slice(0, 300));
+    try {
+      const match = rawText.replace(/```json|```/g,'').trim().match(/\{[\s\S]*\}/);
+      if(match) extracted = JSON.parse(match[0]);
+    } catch(e) {
+      console.error('JSON parse error:', e.message);
+    }
+
+    const fullText = textRes.data?.content?.[0]?.text || '';
+    console.log('Extracted vendor:', extracted.vendor, 'amount:', extracted.amount);
 
     return {
       statusCode: 200,
@@ -126,7 +125,7 @@ exports.handler = async function(event) {
       body: JSON.stringify({ ...extracted, full_text: fullText }),
     };
   } catch(e) {
-    console.error('Extraction failed:', e.message);
+    console.error('Fatal error:', e.message);
     return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
   }
 };

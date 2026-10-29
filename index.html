@@ -381,7 +381,7 @@ main{padding:12px 16px 100px}
     </div>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <div id="approval-bell" style="display:none;position:relative;cursor:pointer" onclick="setPortal('bizops');setView('invoices')" title="Invoices pending approval">
+    <div id="approval-bell" style="display:none;position:relative;cursor:pointer" onclick="openApprovalPanel()" title="Invoices pending approval">
       <span style="font-size:20px">🔔</span>
       <span id="approval-badge" style="position:absolute;top:-4px;right:-6px;background:#dc2626;color:#fff;border-radius:99px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center">0</span>
     </div>
@@ -5831,6 +5831,102 @@ let reportMinAmount = '';
 let reportDateFrom = '';
 let reportDateTo = '';
 const INVOICE_BUCKET = 'invoices';
+
+function openApprovalPanel(){
+  // Remove existing panel if open
+  document.getElementById('approval-panel')?.remove();
+
+  const pending = invoiceFiles.filter(f=>f.approvalStatus==='pending');
+
+  const panel = document.createElement('div');
+  panel.id = 'approval-panel';
+  panel.style.cssText = 'position:fixed;top:0;right:0;width:380px;max-width:100vw;height:100vh;background:var(--surface);border-left:1px solid var(--border);box-shadow:-4px 0 24px rgba(0,0,0,0.12);z-index:1000;display:flex;flex-direction:column;transition:transform 0.2s';
+
+  panel.innerHTML = `
+    <div style="padding:20px 20px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:var(--text)">Pending Approvals</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:2px">${pending.length} invoice${pending.length!==1?'s':''} waiting</div>
+      </div>
+      <button onclick="document.getElementById('approval-panel').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-3);padding:4px">✕</button>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:12px 16px">
+      ${pending.length===0?'<div style="text-align:center;padding:40px;color:var(--text-3)">No pending approvals</div>':
+        pending.map(f=>{
+          const safe = f.id.replace(/'/g,"\\'");
+          const safePath = f.filePath.replace(/'/g,"\\'");
+          const safeFile = f.fileName.replace(/'/g,"\\'");
+          const safeProject = f.projectName.replace(/'/g,"\\'");
+          const date = f.invoiceDate ? new Date(f.invoiceDate+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+          return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div style="font-size:13px;font-weight:600;color:var(--text)">${f.vendorName||f.fileName}</div>
+              <button onclick="openInvoiceFile('${safePath}','${safeFile}','${safeProject}')" style="background:none;border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:12px;cursor:pointer;flex-shrink:0;margin-left:8px">↗</button>
+            </div>
+            <div style="font-size:12px;color:var(--text-2);margin-bottom:2px">${f.projectName}</div>
+            ${f.invoiceNum?`<div style="font-size:11px;color:var(--text-3)">Inv #${f.invoiceNum}</div>`:''}
+            <div style="font-size:12px;font-weight:600;color:var(--green-dark);margin:4px 0">${f.amount?'$'+Number(f.amount).toLocaleString('en-US',{minimumFractionDigits:2}):'—'}</div>
+            ${f.notes?`<div style="font-size:11px;color:var(--text-3);margin-bottom:8px">${f.notes}</div>`:'<div style="margin-bottom:8px"></div>'}
+            <div style="display:flex;gap:8px">
+              <button id="approve-panel-btn-${safe}" onclick="approveInvoiceFromPanel('${safe}')" style="flex:1;padding:7px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">✓ Approve</button>
+              <button onclick="rejectInvoiceFromPanel('${safe}')" style="flex:1;padding:7px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;color:#dc2626">✕ Reject</button>
+            </div>
+          </div>`;
+        }).join('')
+      }
+    </div>
+    ${pending.length>0?`<div style="padding:12px 16px;border-top:1px solid var(--border)">
+      <button onclick="goToInvoices();document.getElementById('approval-panel').remove()" style="width:100%;padding:10px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;cursor:pointer;font-family:inherit">View all in Invoices →</button>
+    </div>`:''}
+  `;
+
+  // Close on outside click
+  const backdrop = document.createElement('div');
+  backdrop.id = 'approval-backdrop';
+  backdrop.style.cssText = 'position:fixed;inset:0;z-index:999';
+  backdrop.onclick = ()=>{ panel.remove(); backdrop.remove(); };
+
+  document.body.appendChild(backdrop);
+  document.body.appendChild(panel);
+}
+
+async function approveInvoiceFromPanel(id){
+  const btn = document.getElementById('approve-panel-btn-'+id);
+  if(btn){ btn.textContent='Approving...'; btn.disabled=true; }
+  await approveInvoice(id);
+  openApprovalPanel(); // Refresh panel
+}
+
+async function rejectInvoiceFromPanel(id){
+  const reason = prompt('Reason for rejection (required):');
+  if(!reason) return;
+  await sbFetch('PATCH', `/rest/v1/invoice_files?id=eq.${id}`, {
+    approval_status: 'rejected',
+    approved_by: currentUser?.email||'',
+    approved_at: new Date().toISOString(),
+    approval_notes: reason,
+  });
+  await loadInvoices();
+  updateApprovalBell();
+  if(view==='invoices') renderInvoiceList();
+  openApprovalPanel(); // Refresh panel
+}
+
+function goToInvoices(){
+  currentPortal = 'bizops';
+  document.querySelectorAll('.portal-tab').forEach(t=>t.classList.remove('active'));
+  const ptab = document.getElementById('ptab-bizops');
+  if(ptab) ptab.classList.add('active');
+  document.getElementById('tracker-bar').style.display = 'none';
+  document.getElementById('bizops-bar').style.display = '';
+  document.getElementById('consulting-bar').style.display = 'none';
+  document.getElementById('fleet-bar').style.display = 'none';
+  const navRow = document.querySelector('.nav-row');
+  const legendBar = document.getElementById('legend-bar');
+  if(navRow) navRow.style.display = 'none';
+  if(legendBar) legendBar.style.display = 'none';
+  loadInvoices().then(()=>setView('invoices'));
+}
 
 function updateApprovalBell(){
   const isDan = (currentUser?.email||'').toLowerCase() === 'haller@fieldsourceohio.com';

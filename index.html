@@ -5948,7 +5948,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       if(statusEl){ statusEl.textContent = ''; }
       return;
     } catch(e){
-      console.warn('AI extraction failed:', e);
+      console.error('AI extraction failed:', e.message, e.stack);
       showInvoiceConfirmModal(file, null, notes);
       if(statusEl){ statusEl.textContent = ''; }
       return;

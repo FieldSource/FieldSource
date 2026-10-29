@@ -5868,15 +5868,18 @@ async function extractInvoiceData(file){
   });
 
   try {
+    const payload = JSON.stringify({
+      fileData: base64,
+      fileType: mimeType,
+      clientList: CLIENTS.join(', '),
+    });
+    console.log('Sending to extract-invoice, payload size:', payload.length, 'fileType:', mimeType);
     const response = await fetch('/.netlify/functions/extract-invoice', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fileData: base64,
-        fileType: mimeType,
-        clientList: CLIENTS.join(', '),
-      }),
+      body: payload,
     });
+    console.log('extract-invoice response status:', response.status);
 
     if(!response.ok) throw new Error('Extraction service error: ' + response.status);
     const text = await response.text();

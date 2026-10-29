@@ -6147,6 +6147,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
     if(!uploadRes.ok){ throw new Error('Storage upload failed: ' + uploadRes.statusText); }
 
     const requiresApproval = ['canal winchester','elgin'].some(p=>(projectName||'').toLowerCase().includes(p));
+    console.log('Filing invoice — projectName:', projectName, 'requiresApproval:', requiresApproval);
     const meta = {
       job_id: null,
       project_name: projectName||'General',
@@ -6375,7 +6376,8 @@ function showInvoiceConfirmModal(file, extracted, notes){
 
   // Fix the onclick to use closure properly
   overlay.querySelector('.btn-save').onclick = function(){
-    const proj = document.getElementById('inv-confirm-project').value;
+    const newProjOverride = (document.getElementById('inv-confirm-new-project')?.value||'').trim();
+    const proj = newProjOverride || document.getElementById('inv-confirm-project').value;
     const vend = document.getElementById('inv-confirm-vendor').value.trim();
     const n = document.getElementById('inv-confirm-notes').value.trim();
     if(!vend){ alert('Please enter a vendor name.'); return; }

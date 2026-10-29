@@ -2581,6 +2581,7 @@ function startPolling(){
       const scrollContainer = document.querySelector('.week-scroll') || document.querySelector('#main-content > div[style*="overflow"]');
       const savedScroll = scrollContainer ? scrollContainer.scrollLeft : 0;
       const savedScrollTop = window.scrollY || 0;
+      loadInvoices().then(()=>updateApprovalBell());
       render();
       requestAnimationFrame(()=>{
         if(savedScroll > 0){
@@ -8521,7 +8522,9 @@ function showApp(){
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
   loadJobs().then(()=>{
-    loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates(); loadInvoices().then(()=>updateApprovalBell()); startPolling();
+    loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates();
+    loadInvoices().then(()=>updateApprovalBell());
+    startPolling();
     // Default portal based on user
     if(userEmail==='brian@fieldsourceohio.com'){
       setPortal('consulting');

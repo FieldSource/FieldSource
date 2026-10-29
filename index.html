@@ -5854,8 +5854,10 @@ async function loadInvoices(){
 
 async function extractInvoiceData(file){
   const isPDF = file.type==='application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-  const isImage = file.type.startsWith('image/');
+  const isImage = file.type.startsWith('image/') || file.name.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/);
   if(!isPDF && !isImage) return null;
+  // Force correct mime type for PDFs regardless of what browser reports
+  const mimeType = isPDF ? 'application/pdf' : file.type;
 
   // Convert to base64
   const base64 = await new Promise((res,rej)=>{
@@ -5871,7 +5873,7 @@ async function extractInvoiceData(file){
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         fileData: base64,
-        fileType: isPDF ? 'application/pdf' : file.type,
+        fileType: mimeType,
         clientList: CLIENTS.join(', '),
       }),
     });

@@ -6207,7 +6207,7 @@ async function approveInvoice(id){
       const base64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
       const dropRes = await fetch('/.netlify/functions/upload-to-dropbox', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
         body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
       });
       const dropData = await dropRes.json();
@@ -6295,7 +6295,7 @@ async function extractInvoiceData(file){
     console.log('Sending to extract-invoice, payload size:', payload.length, 'fileType:', mimeType);
     const response = await fetch('/.netlify/functions/extract-invoice', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
       body: payload,
     });
     console.log('extract-invoice response status:', response.status);
@@ -6447,7 +6447,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
         });
         await fetch('/.netlify/functions/upload-to-dropbox', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
           body: JSON.stringify({ fileData: base64, fileName: file.name, projectName, vendorName: vendor }),
         });
       } catch(e){ console.warn('Dropbox upload failed:', e); }
@@ -6759,7 +6759,7 @@ async function retryDropboxUpload(id, silent=false){
     // Upload to Dropbox
     const dropRes = await fetch('/.netlify/functions/upload-to-dropbox', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
       body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
     });
     const dropData = await dropRes.json();
@@ -6796,7 +6796,7 @@ async function retryAllDropbox(){
       const base64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
       const dropRes = await fetch('/.netlify/functions/upload-to-dropbox', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
         body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
       });
       const dropData = await dropRes.json();

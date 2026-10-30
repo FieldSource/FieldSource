@@ -1,8 +1,30 @@
+// netlify/functions/extract-invoice.js
+// Reads an uploaded invoice PDF with Claude and returns vendor, project, amount, etc.
+//
+// Security: only logged-in tracker users (stops strangers from running up the
+// Anthropic bill). The tracker sends "Authorization: Bearer <login token>".
+
 const https = require('https');
+
+const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
+const SB_KEY = process.env.SUPABASE_SERVICE_KEY;
+
+async function requireUser(event) {
+  const auth = (event.headers || {}).authorization || '';
+  const token = auth.replace(/^Bearer\s+/i, '');
+  if (!token || !SB_KEY) return null;
+  const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${token}` } });
+  if (!r.ok) return null;
+  const u = await r.json().catch(() => null);
+  return u && u.id ? u : null;
+}
 
 exports.handler = async function(event) {
   if(event.httpMethod !== 'POST'){
     return { statusCode: 405, body: 'Method not allowed' };
+  }
+  if(!(await requireUser(event))){
+    return { statusCode: 401, body: JSON.stringify({ error: 'Please log in to the tracker again.' }) };
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -29,7 +51,6 @@ exports.handler = async function(event) {
   };
   if(workspaceId) headers['anthropic-workspace-id'] = workspaceId;
 
-  // Use claude-sonnet-4-6 (no extended thinking) instead of haiku-5-5
   const requestBody = JSON.stringify({
     model: 'claude-sonnet-4-6',
     max_tokens: 400,
@@ -65,13 +86,10 @@ Match project to one of: ${clientList}` }
         }
         try {
           const result = JSON.parse(data);
-          // Find the text block (skip thinking blocks)
           const textBlock = (result?.content || []).find(b => b.type === 'text');
           const rawText = textBlock?.text || '';
-          console.log('Raw text:', rawText.slice(0, 300));
           const match = rawText.replace(/```json|```/g,'').trim().match(/\{[\s\S]*\}/);
           const extracted = match ? JSON.parse(match[0]) : { confidence: 'low', notes: 'Could not parse invoice' };
-          console.log('Extracted vendor:', extracted.vendor, 'amount:', extracted.amount);
           resolve({
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },

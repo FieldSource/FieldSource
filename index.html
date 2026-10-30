@@ -3711,7 +3711,7 @@ function renderEstimates(){
   let html = `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
     <div style="font-size:18px;font-weight:700;color:var(--text)">Estimate Tracker</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      ${canEdit?`<button onclick="openEstimateModal()" class="btn-save" style="font-size:13px;padding:6px 14px;margin-left:8px">+ Add Estimate</button>`:''}
+      ${canEdit?`<button onclick="openQuoteBuilder()" class="btn-save" style="font-size:13px;padding:6px 14px;margin-left:8px">✍️ New quote</button><button onclick="openEstimateModal()" class="site-chip" style="font-size:13px;padding:6px 14px;margin-left:6px">+ Add Estimate</button>`:''}
     </div>
   </div>
 
@@ -4272,6 +4272,402 @@ async function saveHandoff(){
   }
 }
 // =================== END TRACKER HANDOFF ===================
+
+// ===================== QUOTE BUILDER (Option B of Ryan's field-source-client-quote skill) =====================
+// Type the job -> Claude drafts it with QuickBooks prices -> edit / ask for changes -> customer-facing PDF
+// -> on approval, create the QuickBooks estimate (internal only) -> final PDF with "Quote No. <number>".
+let qq = null;            // current quote builder state
+let qqFsLogo = null;      // {data, w, h} Field Source logo, loaded from /fs-logo.png
+const QQ_KEY = 'fs_quote_builder_draft';
+
+function qqSaveLocal(){ try{ localStorage.setItem(QQ_KEY, JSON.stringify(qq)); }catch(e){} }
+
+async function qqLoadScript(src){
+  if(document.querySelector(`script[src="${src}"]`)) return;
+  await new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=()=>rej(new Error('Could not load '+src)); document.head.appendChild(s); });
+}
+
+function qqImgInfo(dataUrl){
+  return new Promise((res,rej)=>{ const im=new Image(); im.onload=()=>res({w:im.naturalWidth,h:im.naturalHeight,im}); im.onerror=rej; im.src=dataUrl; });
+}
+
+// Shrink an uploaded logo to a white-backed JPEG (like Ryan's prep_logo) and pick its dominant colour.
+async function qqPrepLogo(file){
+  const raw = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+  const {im} = await qqImgInfo(raw);
+  const scale = Math.min(1, 360/Math.max(im.naturalWidth, im.naturalHeight));
+  const c = document.createElement('canvas'); c.width=Math.round(im.naturalWidth*scale); c.height=Math.round(im.naturalHeight*scale);
+  const x = c.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(im,0,0,c.width,c.height);
+  const s = document.createElement('canvas'); s.width=s.height=120; s.getContext('2d').drawImage(c,0,0,120,120);
+  const px = s.getContext('2d').getImageData(0,0,120,120).data, counts = {};
+  for(let i=0;i<px.length;i+=4){
+    const r=px[i],g=px[i+1],b=px[i+2], mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+    if(mx-mn>60 && mx>70){ const k=[r,g,b].map(v=>Math.floor(v/16)*16+8).join(','); counts[k]=(counts[k]||0)+1; }
+  }
+  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+  const color = top ? '#'+top[0].split(',').map(v=>(+v).toString(16).padStart(2,'0')).join('').toUpperCase() : null;
+  return { data: c.toDataURL('image/jpeg',0.85), color };
+}
+
+async function qqLoadFsLogo(){
+  if(qqFsLogo !== null) return;
+  try{
+    const r = await fetch('/fs-logo.png'); if(!r.ok) throw 0;
+    const b = await r.blob();
+    const d = await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); });
+    const i = await qqImgInfo(d); qqFsLogo = { data:d, w:i.w, h:i.h };
+  }catch(e){ qqFsLogo = false; }
+}
+
+async function qqLoadClientProfile(client){
+  if(!client) return;
+  try{
+    const rows = await sbFetch('GET', `/rest/v1/client_profiles?client=eq.${encodeURIComponent(client)}&select=*`);
+    const p = rows && rows[0];
+    if(!p) return;
+    qq.logo = p.logo || qq.logo; qq.color = p.primary_color || qq.color; qq.dark = p.dark_color || qq.dark;
+    ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ if(!qq.d[k] && p[k]) qq.d[k]=p[k]; });
+  }catch(e){ console.warn('client profile', e); }
+}
+
+async function qqSaveClientProfile(){
+  const d = qq.d; if(!d.client) return;
+  try{
+    await fetch(`${SUPABASE_URL}/rest/v1/client_profiles?on_conflict=client`, {
+      method:'POST',
+      headers:{ apikey:SUPABASE_KEY, Authorization:'Bearer '+currentToken, 'Content-Type':'application/json', Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ client:d.client, logo:qq.logo||null, primary_color:qq.color||null, dark_color:qq.dark||null,
+        contact_name:d.contact_name||'', contact_title:d.contact_title||'', street:d.street||'', city_line:d.city_line||'',
+        contact_email:d.contact_email||'', updated_at:new Date().toISOString() }),
+    });
+  }catch(e){ console.warn('save profile', e); }
+}
+
+function openQuoteBuilder(){
+  let saved = null;
+  try{ saved = JSON.parse(localStorage.getItem(QQ_KEY)||'null'); }catch(e){}
+  if(saved && saved.d && !saved.docNumber && confirm('You have an unfinished quote. Pick up where you left off?\n\n(Cancel starts a new one.)')) qq = saved;
+  else {
+    const email = (currentUser&&currentUser.email)||'';
+    const guess = email.split('@')[0]; 
+    qq = { request:'', d:null, qbItems:[], logo:null, color:null, dark:null, docNumber:null, qbId:null, busy:false,
+           preparedBy: guess==='ryan'?'Ryan DeMay':guess.charAt(0).toUpperCase()+guess.slice(1), preparedEmail: email,
+           candidates:null, status:'' };
+  }
+  qqLoadFsLogo();
+  renderQuoteBuilder();
+}
+
+function qqSet(k,v){ qq.d[k]=v; qqSaveLocal(); }
+function qqSetItem(i,k,v){ qq.d.items[i][k]=v; qqSaveLocal(); qqRefreshTotal(); }
+function qqTotal(){ return (qq.d&&qq.d.items||[]).reduce((t,i)=>t+(Number(i.qty)||0)*(Number(i.unit_price)||0),0); }
+function qqRefreshTotal(){ const el=document.getElementById('qq-total'); if(el) el.textContent=fmtEstMoney2(qqTotal()); }
+
+async function qqDraft(change){
+  if(qq.busy) return;
+  const req = change ? null : (document.getElementById('qq-request')||{}).value || qq.request;
+  if(!change && !req.trim()){ alert('Describe the work first.'); return; }
+  if(!change) qq.request = req;
+  qq.busy = true; qq.status = change ? 'Applying your change…' : 'Drafting the quote and looking up QuickBooks prices…'; renderQuoteBuilder();
+  try{
+    const r = await fetch('/.netlify/functions/quote-draft', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(currentToken||'') },
+      body: JSON.stringify({ request: qq.request, draft: change ? qq.d : null, change: change||null, clients: (typeof CLIENTS!=='undefined'?CLIENTS:[]) }),
+    });
+    const data = await r.json().catch(()=>({error:`Error ${r.status}`}));
+    if(!r.ok) throw new Error(data.error || `Error ${r.status}`);
+    const keep = qq.d || {};
+    qq.d = Object.assign({ contact_name:'', contact_title:'', street:'', city_line:'', contact_email:'' }, data.draft);
+    ['street','city_line','contact_email'].forEach(k=>{ if(!qq.d[k] && keep[k]) qq.d[k]=keep[k]; });
+    qq.d.items = (qq.d.items||[]).map(it=>({ ...it, bullets: Array.isArray(it.bullets)?it.bullets.filter(Boolean):[] }));
+    qq.d.notes = (qq.d.notes||[]).filter(Boolean); qq.d.flags = (qq.d.flags||[]).filter(Boolean);
+    qq.qbItems = data.items || qq.qbItems;
+    if(!change || keep.client !== qq.d.client) await qqLoadClientProfile(qq.d.client);
+    qq.status = '';
+  }catch(err){ qq.status = '⚠️ ' + err.message; }
+  qq.busy = false; qqSaveLocal(); renderQuoteBuilder();
+}
+
+function renderQuoteBuilder(){
+  const d = qq.d;
+  const lbl = t=>`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:3px">${t}</div>`;
+  const box = 'width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);box-sizing:border-box';
+  const f = (t,k,ph='')=>`<div>${lbl(t)}<input value="${escEst(d[k]||'')}" placeholder="${escEst(ph)}" oninput="qqSet('${k}',this.value)" style="${box}"></div>`;
+  const locked = !!qq.docNumber;
+
+  let body = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">New quote${qq.docNumber?` · Quote No. ${escEst(qq.docNumber)}`:''}</div>
+      <div style="font-size:12px;color:var(--text-3)">Prices come from you or from QuickBooks, never made up. Nothing goes to QuickBooks until you click Create.</div></div>
+      <button onclick="document.getElementById('quote-overlay').remove()" class="site-chip" style="padding:6px 12px">✕</button>
+    </div>
+    <div style="margin-top:14px">${lbl('Describe the work')}
+      <textarea id="qq-request" rows="3" ${locked?'disabled':''} placeholder="e.g. Logan Elm stadium field: topdress 50 tons of sand and deep tine on tight spacing, 2 acres, week of Nov 10. Make it out to Steve McAfee, Treasurer." style="${box}">${escEst(qq.request)}</textarea>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+        <button onclick="qqDraft()" class="btn-save" style="padding:7px 14px" ${qq.busy||locked?'disabled':''}>${d?'Redraft from scratch':'Draft quote'}</button>
+        <span style="font-size:12px;color:var(--text-3)">${escEst(qq.status)}</span>
+      </div>
+    </div>`;
+
+  if(d){
+    const flags = (d.flags||[]);
+    body += `
+    ${flags.length?`<div style="margin-top:14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius-sm);padding:10px 12px;font-size:12px;color:#713f12">
+      <b>Check these:</b><ul style="margin:4px 0 0 18px;padding:0">${flags.map(x=>`<li>${escEst(x)}</li>`).join('')}</ul></div>`:''}
+
+    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">Client</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+      ${f('Client (QuickBooks name)','client')}${f('Contact name','contact_name')}${f('Contact title','contact_title','Treasurer')}
+      ${f('Street','street')}${f('City, ST ZIP','city_line')}${f('Contact email','contact_email')}
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:10px">
+      <div>${lbl('Client logo')}
+        ${qq.logo?`<img src="${qq.logo}" style="height:46px;border:1px solid var(--border);border-radius:4px;padding:2px;background:#fff;vertical-align:middle">`:'<span style="font-size:12px;color:#b91c1c">Required before the PDF. </span>'}
+        <label class="site-chip" style="padding:5px 10px;cursor:pointer;margin-left:6px">${qq.logo?'Replace':'Upload'} logo<input type="file" accept="image/*" style="display:none" onchange="qqUploadLogo(this.files[0])"></label>
+      </div>
+      <div>${lbl('Accent color')}<input type="color" value="${qq.color||'#1B5E20'}" onchange="qq.color=this.value;qqSaveLocal()"></div>
+      <div>${lbl('Dark color')}<input type="color" value="${qq.dark||'#111111'}" onchange="qq.dark=this.value;qqSaveLocal()"></div>
+      <div style="font-size:11px;color:var(--text-3);max-width:260px">Logo, colors, contact and address are saved for this client and filled in automatically next time.</div>
+    </div>
+
+    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">Quote</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+      ${f('Title','title')}${f('Subtitle','subtitle','Client  |  Field')}${f('Service period','service_period','Nov. 10-14, 2026')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">${f('Intro (one sentence)','intro')}${f('Program goal (optional)','goal')}</div>
+
+    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">Line items</div>
+    <datalist id="qq-items">${(qq.qbItems||[]).map(i=>`<option value="${escEst(i.name)}">${i.price!=null?'$'+i.price:''}</option>`).join('')}</datalist>
+    ${d.items.map((it,i)=>`
+      <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;background:${i%2?'var(--bg)':'transparent'}">
+        <div style="display:grid;grid-template-columns:2fr 2fr 80px 110px auto;gap:8px;align-items:end">
+          <div>${lbl(`Line ${i+1} title`)}<input value="${escEst(it.title)}" oninput="qqSetItem(${i},'title',this.value)" style="${box}"></div>
+          <div>${lbl('QuickBooks item')}<input list="qq-items" value="${escEst(it.qb_item_name||'')}" onchange="qqPickItem(${i},this.value)" placeholder="Pick a product/service" style="${box};${it.qb_item_id?'':'border-color:#dc2626'}"></div>
+          <div>${lbl('Qty')}<input type="number" step="any" value="${it.qty??''}" oninput="qqSetItem(${i},'qty',this.value===''?'':+this.value)" style="${box};text-align:right"></div>
+          <div>${lbl('Unit price')}<input type="number" step="any" value="${it.unit_price??''}" oninput="qqSetItem(${i},'unit_price',this.value===''?null:+this.value);qq.d.items[${i}].price_source='staff'" style="${box};text-align:right;${it.unit_price==null?'border-color:#dc2626':''}"></div>
+          <button onclick="if(confirm('Remove this line?')){qq.d.items.splice(${i},1);qqSaveLocal();renderQuoteBuilder()}" title="Remove line" style="border:none;background:none;cursor:pointer;color:var(--text-3);padding-bottom:8px">✕</button>
+        </div>
+        <div style="font-size:11px;color:${it.price_source==='none'?'#b91c1c':'var(--text-3)'};margin:4px 0">Price from: ${escEst(it.price_source||'—')} · Amount ${fmtEstMoney2((Number(it.qty)||0)*(Number(it.unit_price)||0))}</div>
+        ${lbl('Scope bullets (one per line)')}<textarea rows="${Math.max(2,(it.bullets||[]).length)}" oninput="qqSetItem(${i},'bullets',this.value.split('\\n'))" style="${box};font-size:12px">${escEst((it.bullets||[]).join('\n'))}</textarea>
+      </div>`).join('')}
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <button onclick="qq.d.items.push({title:'',qb_item_id:'',qb_item_name:'',qty:1,unit_price:null,price_source:'staff',bullets:[]});qqSaveLocal();renderQuoteBuilder()" class="site-chip" style="padding:5px 12px">+ Add line</button>
+      <div style="font-size:14px">Total <b id="qq-total">${fmtEstMoney2(qqTotal())}</b></div>
+    </div>
+    <div style="margin-top:10px">${lbl('Notes: exclusions and assumptions (one per line)')}<textarea rows="3" oninput="qqSet('notes',this.value.split('\\n'))" style="${box};font-size:12px">${escEst((d.notes||[]).join('\n'))}</textarea></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div>${lbl('Prepared by')}<input value="${escEst(qq.preparedBy)}" oninput="qq.preparedBy=this.value;qqSaveLocal()" style="${box}"></div>
+      <div>${lbl('Prepared by email')}<input value="${escEst(qq.preparedEmail)}" oninput="qq.preparedEmail=this.value;qqSaveLocal()" style="${box}"></div>
+    </div>
+
+    ${locked?'':`<div style="margin-top:16px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      ${lbl('Ask for a change')}
+      <div style="display:flex;gap:8px"><input id="qq-change" placeholder="e.g. make it 60 tons, add a line for 2 hours of laser grading at $175/hr, drop the goal" style="${box}" onkeydown="if(event.key==='Enter'&&this.value.trim())qqDraft(this.value)">
+      <button onclick="const v=document.getElementById('qq-change').value;if(v.trim())qqDraft(v)" class="site-chip" style="padding:6px 12px;white-space:nowrap" ${qq.busy?'disabled':''}>Apply</button></div>
+    </div>`}
+
+    ${qq.candidates?`<div style="margin-top:14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius-sm);padding:10px 12px;font-size:12px">
+      <b>Which QuickBooks customer is this?</b><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+      ${qq.candidates.length?qq.candidates.map(c=>`<button onclick="qqCreateEstimate('${escEst(c.id)}')" class="site-chip" style="padding:5px 10px">${escEst(c.name)}</button>`).join(''):'None close. Add the customer in QuickBooks first, or fix the client name.'}</div></div>`:''}
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
+      <button onclick="qqPdf(false)" class="site-chip" style="padding:8px 14px">📄 Preview PDF</button>
+      ${locked
+        ? `<button onclick="qqPdf(true)" class="btn-save" style="padding:8px 16px">⬇ Download final PDF</button>
+           <button onclick="if(confirm('Start a new quote?')){localStorage.removeItem(QQ_KEY);openQuoteBuilder()}" class="site-chip" style="padding:8px 14px">New quote</button>`
+        : `<button onclick="qqCreateEstimate()" class="btn-save" style="padding:8px 16px" ${qq.busy?'disabled':''}>Approve and create QuickBooks estimate</button>`}
+    </div>`;
+  }
+
+  let overlay = document.getElementById('quote-overlay');
+  if(!overlay){ overlay=document.createElement('div'); overlay.className='modal-overlay'; overlay.id='quote-overlay'; document.body.appendChild(overlay); }
+  const prev = overlay.firstElementChild ? overlay.firstElementChild.scrollTop : 0;
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:920px;max-height:92vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
+  overlay.firstElementChild.scrollTop = prev;
+}
+
+function qqPickItem(i, name){
+  const it = (qq.qbItems||[]).find(x=>x.name===name);
+  const row = qq.d.items[i];
+  if(!it){ row.qb_item_id=''; row.qb_item_name=name; qqSaveLocal(); renderQuoteBuilder(); return; }
+  row.qb_item_id = it.id; row.qb_item_name = it.name;
+  if(it.price!=null && (row.unit_price==null || row.price_source!=='staff' || confirm(`Use the QuickBooks price for ${it.name} ($${it.price}) instead of $${row.unit_price}?`))){
+    row.unit_price = it.price; row.price_source = 'QuickBooks: '+it.name;
+  }
+  qqSaveLocal(); renderQuoteBuilder();
+}
+
+async function qqUploadLogo(file){
+  if(!file) return;
+  try{ const r = await qqPrepLogo(file); qq.logo = r.data; if(r.color) qq.color = r.color;
+       else alert('The logo is only black, white or grey. Set the school colors with the color pickers.');
+       qqSaveLocal(); renderQuoteBuilder(); }
+  catch(e){ alert('Could not read that image.'); }
+}
+
+async function qqCreateEstimate(customerId){
+  const d = qq.d;
+  const bad = d.items.filter(i=>!i.qb_item_id || i.unit_price==null || i.unit_price==='');
+  if(bad.length){ alert('Every line needs a QuickBooks item and a price before it can go to QuickBooks:\n- '+bad.map(i=>i.title||'(untitled line)').join('\n- ')); return; }
+  if(!customerId && !confirm(`Create the QuickBooks estimate for ${d.client}, ${fmtEstMoney2(qqTotal())}?\n\nIt stays internal: nothing is sent to the client from QuickBooks.`)) return;
+  qq.busy = true; qq.status = 'Creating the QuickBooks estimate…'; qq.candidates = null; renderQuoteBuilder();
+  try{
+    const r = await fetch('/.netlify/functions/quote-to-qb', {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(currentToken||'') },
+      body: JSON.stringify({ draft: d, customerId: customerId||null }),
+    });
+    const data = await r.json().catch(()=>({error:`Error ${r.status}`}));
+    if(r.status===409){ qq.candidates = data.candidates||[]; qq.status = data.error; qq.busy=false; renderQuoteBuilder(); return; }
+    if(!r.ok) throw new Error(data.error||`Error ${r.status}`);
+    if(data.warning) alert(data.warning);
+    qq.docNumber = data.docNumber; qq.qbId = data.id; qq.status = '';
+    // Add it to the Estimates tab right away (the hourly syncs fill in the rest).
+    if(qq.docNumber){
+      try{
+        await sbFetch('POST', '/rest/v1/estimates', {
+          project_name: d.title || d.client, type: 'Construction', status: 'Estimate In Progress', notes: '',
+          qb_estimate_number: String(qq.docNumber), amount: Math.round(qqTotal()*100)/100, client: d.client,
+          qb_status: 'Pending', est_created_date: new Date().toLocaleDateString('en-CA'), source: 'quickbooks',
+          updated_at: new Date().toISOString(),
+        });
+        if(typeof loadEstimates==='function') loadEstimates();
+      }catch(e){ console.warn('estimates row', e); }
+    }
+    await qqSaveClientProfile();
+    qqSaveLocal();
+    alert(`QuickBooks estimate ${qq.docNumber?'#'+qq.docNumber+' ':''}created (${fmtEstMoney2(data.total)}).\n\nDownload the final PDF, then email it to the client yourself.`);
+  }catch(err){ qq.status = '⚠️ ' + err.message; }
+  qq.busy = false; renderQuoteBuilder();
+}
+
+// Customer-facing PDF, laid out like Ryan's build_quote.py.
+async function qqPdf(final){
+  const d = qq.d;
+  if(!qq.logo){ alert("Upload the client's logo first. The quote isn't built without it."); return; }
+  await qqLoadFsLogo();
+  await qqLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'letter' });
+  const W = 612, H = 792, M = 46, FOOT = 40;
+  const hex = h=>{ h=(h||'').replace('#',''); return [0,2,4].map(i=>parseInt(h.substr(i,2),16)||0); };
+  const P = hex(qq.color||'#1B5E20'), DK = hex(qq.dark||'#111111'), INK=[17,17,17], GREY=[90,90,90], TINT=[246,246,246];
+  const money = v=>(v<0?'-':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const email = qq.preparedEmail || '';
+  const fill = c=>doc.setFillColor(c[0],c[1],c[2]), ink = c=>doc.setTextColor(c[0],c[1],c[2]);
+  const font = (b,s)=>{ doc.setFont('helvetica', b?'bold':'normal'); doc.setFontSize(s); };
+
+  function chrome(){
+    fill(DK); doc.rect(0,0,W,10,'F'); fill(P); doc.rect(0,10,W,4,'F');
+    fill(DK); doc.rect(0,H-24,W,24,'F'); fill(P); doc.rect(0,H-27,W,3,'F');
+    ink([255,255,255]); font(false,8);
+    doc.text('Field Source  |  Sports Field Design-Build, Construction and Consulting', M, H-9);
+    doc.text(email, W-M, H-9, {align:'right'});
+  }
+  let y;
+  function newPage(){ doc.addPage(); chrome(); y = 40; }
+  function need(h){ if(y + h > H - FOOT){ newPage(); return true; } return false; }
+
+  chrome();
+  const top = 34;
+  const ci = await qqImgInfo(qq.logo);
+  let lh = 84, lw = Math.min(lh*ci.w/ci.h, 150); lh = lw*ci.h/ci.w;
+  doc.addImage(qq.logo, 'JPEG', M, top+42-lh/2, lw, lh);
+  if(qqFsLogo){ const fw=106, fh=fw*qqFsLogo.h/qqFsLogo.w; doc.addImage(qqFsLogo.data, 'PNG', W-M-fw, top+42-fh/2, fw, fh); }
+  else { ink(GREY); font(true,11); doc.text('FIELD SOURCE', W-M, top+46, {align:'right'}); }
+  const tx = M + lw + 17;
+  ink(INK); font(true,25); doc.text('QUOTE', tx-1, top+38);
+  ink(P); font(true,10.5);
+  const tl = doc.splitTextToSize(String(d.title||'').toUpperCase(), W-M-tx-120);
+  doc.text(tl, tx, top+55);
+  const subY = top + 55 + tl.length*13 + 1;
+  ink(GREY); font(false,9.5);
+  const sl = doc.splitTextToSize(String(d.subtitle||''), W-M-tx-120);
+  doc.text(sl, tx, subY);
+  y = Math.max(top + 96, subY + (sl.length-1)*12 + 14);
+  doc.setDrawColor(P[0],P[1],P[2]); doc.setLineWidth(1.6); doc.line(M, y, W-M, y);
+
+  // parties
+  y += 18;
+  const today = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+  const details = [ ...(qq.docNumber?[`Quote No. ${qq.docNumber}`]:[]), today, ...(d.service_period?['Service period:', d.service_period]:[]) ];
+  const blocks = [
+    ['PREPARED FOR', [d.contact_name, d.contact_title, d.client, d.street, d.city_line].filter(Boolean)],
+    ['PREPARED BY', [qq.preparedBy, 'Field Source', 'Dublin, Ohio', email].filter(Boolean)],
+    ['QUOTE DETAILS', details],
+  ];
+  [M, M+200, M+385].forEach((x,bi)=>{
+    const [lab, lines] = blocks[bi];
+    ink(P); font(true,7.5); doc.text(lab, x, y);
+    lines.forEach((t,i)=>{ font(i===0,9.5); ink(i===0?INK:GREY); doc.text(String(t), x, y+14+i*12.5, {maxWidth: bi===2?W-M-x:180}); });
+  });
+  y += 14 + Math.max(...blocks.map(b=>b[1].length)) * 12.5 + 8;
+
+  if(d.intro){ font(false,9.6); ink(INK); const t=doc.splitTextToSize(d.intro, W-2*M); doc.text(t, M, y+8); y += t.length*13 + 10; }
+  if(d.goal){
+    font(true,10); const t = doc.splitTextToSize(d.goal, W-2*M-104); const gh = t.length*13.8 + 14;
+    fill(TINT); doc.rect(M, y, W-2*M, gh, 'F'); fill(P); doc.rect(M, y, 4, gh, 'F');
+    ink(P); font(true,7.5); doc.text('PROGRAM GOAL', M+14, y+16);
+    ink(INK); font(true,10); doc.text(t, M+92, y+16);
+    y += gh + 10;
+  }
+
+  // line items
+  const X0 = M, X4 = W-M, cQ = X4-190, cR = X4-85, dw = cQ-30-(X0+34);
+  function thead(){
+    fill(DK); doc.rect(X0, y, X4-X0, 20, 'F');
+    ink([255,255,255]); font(true,8);
+    doc.text('DESCRIPTION', X0+10, y+13.5); doc.text('QTY', cQ, y+13.5, {align:'center'});
+    doc.text('UNIT PRICE', cR, y+13.5, {align:'right'}); doc.text('AMOUNT', X4-10, y+13.5, {align:'right'});
+    y += 20;
+  }
+  thead();
+  let total = 0;
+  d.items.forEach((it,n)=>{
+    font(false,8.9);
+    const bl = (it.bullets||[]).filter(Boolean).map(b=>doc.splitTextToSize(b, dw-10));
+    const hh = 26 + bl.reduce((t,l)=>t+l.length*12.3,0) + 6;
+    if(need(hh)) thead();
+    if(n%2){ fill(TINT); doc.rect(X0, y, X4-X0, hh, 'F'); }
+    const qty = Number(it.qty)||0, up = Number(it.unit_price)||0, amt = qty*up; total += amt;
+    ink(P); font(true,11); doc.text(String(n+1), X0+10, y+19);
+    ink(INK); font(true,10.5); doc.text(String(it.title||''), X0+34, y+19, {maxWidth: dw});
+    font(false,9.8); doc.text(String(qty), cQ, y+19, {align:'center'}); doc.text(money(up), cR, y+19, {align:'right'});
+    font(true,10); doc.text(money(amt), X4-10, y+19, {align:'right'});
+    let by = y + 33; ink(GREY); font(false,8.9);
+    bl.forEach(lines=>{ doc.text('•', X0+34, by); doc.text(lines, X0+43, by); by += lines.length*12.3; });
+    y += hh;
+  });
+  need(34);
+  doc.setDrawColor(P[0],P[1],P[2]); doc.setLineWidth(1.2); doc.line(cR-60, y+6, X4, y+6);
+  ink(INK); font(true,11); doc.text('TOTAL', cR, y+22, {align:'right'}); doc.text(money(total), X4-10, y+22, {align:'right'});
+  y += 36;
+
+  const notes = (d.notes||[]).filter(Boolean);
+  if(notes.length){
+    need(30); ink(P); font(true,7.5); doc.text('NOTES', M, y+8); y += 18;
+    notes.forEach(nt=>{ font(false,8.9); const t=doc.splitTextToSize(nt, W-2*M-12); need(t.length*12.3+2); ink(GREY); doc.text('•', M, y); doc.text(t, M+9, y); y += t.length*12.3 + 2; });
+    y += 6;
+  }
+
+  // acceptance
+  need(90);
+  ink(P); font(true,7.5); doc.text('ACCEPTANCE', M, y+10); y += 44;
+  doc.setDrawColor(150,150,150); doc.setLineWidth(0.6);
+  [[M, [d.contact_name&&d.contact_title?`${d.contact_name}, ${d.contact_title}`:(d.contact_name||'Authorized signature'), d.client]],
+   [W/2+10, [qq.preparedBy, 'Field Source']]].forEach(([x,lines])=>{
+    doc.line(x, y, x+220, y);
+    ink(INK); font(true,9); doc.text(String(lines[0]||''), x, y+13);
+    ink(GREY); font(false,8.5); doc.text(String(lines[1]||''), x, y+25); doc.text('Date: ____________', x+130, y+25);
+  });
+
+  doc.setProperties({ title: 'Quote - '+(d.title||''), author: 'Field Source' });
+  const name = `${new Date().toLocaleDateString('en-CA')} ${d.client||''} Quote${qq.docNumber?' '+qq.docNumber:''} - ${d.title||''}`.replace(/[\\/:*?"<>|]/g,'').trim()+'.pdf';
+  if(final) doc.save(name);
+  else window.open(URL.createObjectURL(doc.output('blob')), '_blank');
+}
+// =================== END QUOTE BUILDER ===================
 
 function fmtEstMoney(n){
   return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});

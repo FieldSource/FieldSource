@@ -129,6 +129,7 @@ main{padding:12px 16px 100px}
 .modal-sheet{background:var(--surface);border-radius:18px 18px 0 0;padding:20px 20px 40px;width:100%;max-width:540px;max-height:92vh;overflow-y:auto;animation:slideUp .25s ease}
 @keyframes slideUp{from{transform:translateY(40px);opacity:0}to{transform:translateY(0);opacity:1}}
 .sheet-handle{width:36px;height:4px;background:var(--border-2);border-radius:2px;margin:0 auto 18px}
+@media (min-width:700px){.modal-overlay.centered{align-items:center;padding:24px}.modal-overlay.centered .modal-sheet{border-radius:18px;padding-bottom:24px}.modal-overlay.centered .sheet-handle{display:none}}
 .sheet-title{font-size:17px;font-weight:600;color:var(--text);margin-bottom:4px}
 .sheet-subtitle{font-size:12px;color:var(--text-3);margin-bottom:18px}
 .form-group{margin-bottom:14px}
@@ -3900,7 +3901,7 @@ function openEstimateDetail(id){
 
   document.getElementById('est-detail-overlay')?.remove();
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
+  overlay.className = 'modal-overlay centered';
   overlay.id = 'est-detail-overlay';
   overlay.onclick = ev=>{ if(ev.target===overlay) overlay.remove(); };
   overlay.innerHTML = `<div class="modal-sheet" style="max-width:760px;max-height:90vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
@@ -4196,7 +4197,7 @@ function renderHandoff(){
   let overlay = document.getElementById('handoff-overlay');
   if(!overlay){
     overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
+    overlay.className = 'modal-overlay centered';
     overlay.id = 'handoff-overlay';
     document.body.appendChild(overlay);
   }
@@ -4351,11 +4352,48 @@ function openQuoteBuilder(){
     const email = (currentUser&&currentUser.email)||'';
     const guess = email.split('@')[0]; 
     qq = { request:'', d:null, qbItems:[], logo:null, color:null, dark:null, docNumber:null, qbId:null, busy:false,
+           client:null, prefill:{},
            preparedBy: guess==='ryan'?'Ryan DeMay':guess.charAt(0).toUpperCase()+guess.slice(1), preparedEmail: email,
            candidates:null, status:'' };
   }
   qqLoadFsLogo();
   renderQuoteBuilder();
+  qqLoadCustomers();
+}
+
+let qqCustomers = null;
+async function qqLoadCustomers(){
+  if(qqCustomers) return;
+  try{
+    const r = await fetch('/.netlify/functions/qb-customers', { headers:{ 'Authorization':'Bearer '+(currentToken||'') } });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error||r.status);
+    qqCustomers = d.customers || [];
+  }catch(e){ console.warn('customers', e); qqCustomers = []; }
+  if(document.getElementById('quote-overlay')) renderQuoteBuilder();
+}
+
+// Pick the client: fills logo/colors/contact from the client library, then address/email from QuickBooks.
+async function qqPickClient(name){
+  name = (name||'').trim();
+  const c = (qqCustomers||[]).find(x=>x.name.toLowerCase()===name.toLowerCase());
+  qq.client = name ? { id: c?c.id:null, name: c?c.name:name } : null;
+  qq.logo = null; qq.color = null; qq.dark = null; qq.prefill = {};
+  if(qq.client){
+    try{
+      const rows = await sbFetch('GET', `/rest/v1/client_profiles?client=eq.${encodeURIComponent(qq.client.name)}&select=*`);
+      const p = rows && rows[0];
+      if(p){ qq.logo=p.logo||null; qq.color=p.primary_color||null; qq.dark=p.dark_color||null;
+             ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ if(p[k]) qq.prefill[k]=p[k]; }); }
+    }catch(e){ console.warn(e); }
+    if(c){ if(!qq.prefill.street && c.street) qq.prefill.street=c.street; if(!qq.prefill.city_line && c.city_line) qq.prefill.city_line=c.city_line;
+           if(!qq.prefill.contact_email && c.email) qq.prefill.contact_email=c.email; }
+  }
+  if(qq.d){
+    qq.d.client = qq.client ? qq.client.name : '';
+    ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ qq.d[k] = qq.prefill[k] || ''; });
+  }
+  qqSaveLocal(); renderQuoteBuilder();
 }
 
 function qqSet(k,v){ qq.d[k]=v; qqSaveLocal(); }
@@ -4373,17 +4411,17 @@ async function qqDraft(change){
     const r = await fetch('/.netlify/functions/quote-draft', {
       method:'POST',
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(currentToken||'') },
-      body: JSON.stringify({ request: qq.request, draft: change ? qq.d : null, change: change||null, clients: (typeof CLIENTS!=='undefined'?CLIENTS:[]) }),
+      body: JSON.stringify({ request: qq.request, draft: change ? qq.d : null, change: change||null, client: qq.client ? qq.client.name : null, clients: (typeof CLIENTS!=='undefined'?CLIENTS:[]) }),
     });
     const data = await r.json().catch(()=>({error:`Error ${r.status}`}));
     if(!r.ok) throw new Error(data.error || `Error ${r.status}`);
     const keep = qq.d || {};
     qq.d = Object.assign({ contact_name:'', contact_title:'', street:'', city_line:'', contact_email:'' }, data.draft);
-    ['street','city_line','contact_email'].forEach(k=>{ if(!qq.d[k] && keep[k]) qq.d[k]=keep[k]; });
+    ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ if(keep[k]) qq.d[k]=keep[k]; else if(!qq.d[k] && qq.prefill && qq.prefill[k]) qq.d[k]=qq.prefill[k]; });
     qq.d.items = (qq.d.items||[]).map(it=>({ ...it, bullets: Array.isArray(it.bullets)?it.bullets.filter(Boolean):[] }));
     qq.d.notes = (qq.d.notes||[]).filter(Boolean); qq.d.flags = (qq.d.flags||[]).filter(Boolean);
     qq.qbItems = data.items || qq.qbItems;
-    if(!change || keep.client !== qq.d.client) await qqLoadClientProfile(qq.d.client);
+    if(!qq.client && qq.d.client){ await qqPickClient(qq.d.client); }
     qq.status = '';
   }catch(err){ qq.status = '⚠️ ' + err.message; }
   qq.busy = false; qqSaveLocal(); renderQuoteBuilder();
@@ -4402,7 +4440,17 @@ function renderQuoteBuilder(){
       <div style="font-size:12px;color:var(--text-3)">Prices come from you or from QuickBooks, never made up. Nothing goes to QuickBooks until you click Create.</div></div>
       <button onclick="document.getElementById('quote-overlay').remove()" class="site-chip" style="padding:6px 12px">✕</button>
     </div>
-    <div style="margin-top:14px">${lbl('Describe the work')}
+    <datalist id="qq-customers">${(qqCustomers||[]).map(c=>`<option value="${escEst(c.name)}">`).join('')}</datalist>
+    <div style="margin-top:14px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">${lbl('Client')}
+        <input list="qq-customers" value="${escEst(qq.client?qq.client.name:'')}" ${locked?'disabled':''} placeholder="${qqCustomers===null?'Loading QuickBooks customers…':'Start typing a client name'}" onchange="qqPickClient(this.value)" style="${box}">
+      </div>
+      ${qq.client?`<div style="display:flex;align-items:center;gap:8px;padding-bottom:4px">
+        ${qq.logo?`<img src="${qq.logo}" style="height:40px;border:1px solid var(--border);border-radius:4px;padding:2px;background:#fff">`:`<span style="font-size:12px;color:#b91c1c">No logo saved</span>`}
+        <span style="font-size:11px;color:${qq.client.id?'#15803d':'#b45309'}">${qq.client.id?'✓ In QuickBooks':'Not a QuickBooks customer yet'}</span>
+      </div>`:''}
+    </div>
+    <div style="margin-top:12px">${lbl('Describe the work')}
       <textarea id="qq-request" rows="3" ${locked?'disabled':''} placeholder="e.g. Logan Elm stadium field: topdress 50 tons of sand and deep tine on tight spacing, 2 acres, week of Nov 10. Make it out to Steve McAfee, Treasurer." style="${box}">${escEst(qq.request)}</textarea>
       <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
         <button onclick="qqDraft()" class="btn-save" style="padding:7px 14px" ${qq.busy||locked?'disabled':''}>${d?'Redraft from scratch':'Draft quote'}</button>
@@ -4418,7 +4466,7 @@ function renderQuoteBuilder(){
 
     <div style="font-size:13px;font-weight:700;margin:16px 0 8px">Client</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
-      ${f('Client (QuickBooks name)','client')}${f('Contact name','contact_name')}${f('Contact title','contact_title','Treasurer')}
+      ${f('Contact name','contact_name')}${f('Contact title','contact_title','Treasurer')}
       ${f('Street','street')}${f('City, ST ZIP','city_line')}${f('Contact email','contact_email')}
     </div>
     <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:10px">
@@ -4482,7 +4530,7 @@ function renderQuoteBuilder(){
   }
 
   let overlay = document.getElementById('quote-overlay');
-  if(!overlay){ overlay=document.createElement('div'); overlay.className='modal-overlay'; overlay.id='quote-overlay'; document.body.appendChild(overlay); }
+  if(!overlay){ overlay=document.createElement('div'); overlay.className='modal-overlay centered'; overlay.id='quote-overlay'; document.body.appendChild(overlay); }
   const prev = overlay.firstElementChild ? overlay.firstElementChild.scrollTop : 0;
   overlay.innerHTML = `<div class="modal-sheet" style="max-width:920px;max-height:92vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
   overlay.firstElementChild.scrollTop = prev;
@@ -4516,7 +4564,7 @@ async function qqCreateEstimate(customerId){
   try{
     const r = await fetch('/.netlify/functions/quote-to-qb', {
       method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(currentToken||'') },
-      body: JSON.stringify({ draft: d, customerId: customerId||null }),
+      body: JSON.stringify({ draft: d, customerId: customerId || (qq.client && qq.client.id) || null }),
     });
     const data = await r.json().catch(()=>({error:`Error ${r.status}`}));
     if(r.status===409){ qq.candidates = data.candidates||[]; qq.status = data.error; qq.busy=false; renderQuoteBuilder(); return; }

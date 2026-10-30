@@ -112,14 +112,14 @@ exports.handler = async function (event) {
   if (!SB_KEY || !process.env.ANTHROPIC_API_KEY) return json(500, { error: 'Missing SUPABASE_SERVICE_KEY or ANTHROPIC_API_KEY in Netlify' });
   try {
     if (!(await requireUser(event))) return json(401, { error: 'Please log in to the tracker again.' });
-    const { request, draft, change, clients } = JSON.parse(event.body || '{}');
+    const { request, draft, change, clients, client } = JSON.parse(event.body || '{}');
     if (!request && !change) return json(400, { error: 'Describe the quote first.' });
 
     const items = await qbItems();
     const itemList = items.map(i => `${i.id} | ${i.name} | ${i.price == null ? 'no price' : '$' + i.price} | ${i.desc}`).join('\n');
     const user = [
       `ITEM LIST (id | name | price | description):\n${itemList}`,
-      `KNOWN CLIENTS: ${(clients || []).slice(0, 200).join(', ')}`,
+      client ? `CLIENT (chosen by staff, use this exact name): ${client}` : `KNOWN CLIENTS: ${(clients || []).slice(0, 200).join(', ')}`,
       `TODAY: ${new Date().toISOString().slice(0, 10)}`,
       draft ? `CURRENT DRAFT:\n${JSON.stringify(draft)}` : '',
       change ? `CHANGE REQUEST:\n${change}` : `STAFF REQUEST:\n${request}`,
@@ -137,6 +137,7 @@ exports.handler = async function (event) {
     const m = text.replace(/```json|```/g, '').match(/\{[\s\S]*\}/);
     if (!m) return json(502, { error: 'Claude did not return a draft. Try rewording the request.' });
     const out = JSON.parse(m[0]);
+    if (client) out.client = client;
 
     // Guardrail: a QuickBooks-sourced price must equal that item's actual price.
     const byId = new Map(items.map(i => [i.id, i]));

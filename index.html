@@ -2743,13 +2743,9 @@ function setPortal(portal){
   // Navigate to default view for portal
   if(portal==='tracker') setView('week');
   else if(portal==='bizops'){
-    loadPipelines().then(()=>{ loadPO(); loadCosts(); }).then(()=>{
-      view='pipeline';
-      document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-      const bar = document.getElementById('bizops-bar');
-      if(bar){ const tabs = bar.querySelectorAll('.vtab'); if(tabs[0]) tabs[0].classList.add('active'); }
-      renderPipeline();
-    });
+    // Default to Approvals. PO and costs still load in the background for the other tabs.
+    loadPipelines().then(()=>{ loadPO(); loadCosts(); }).catch(e=>console.error(e));
+    Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'));
   }
   else if(portal==='consulting'){
     loadConsulting().then(()=>{
@@ -4451,8 +4447,11 @@ function setView(v){
   const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
-  const localIdx = allIdx[v];
-  if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
+  // Business Ops tabs are highlighted by id (button order no longer matches index)
+  const BIZOPS_TAB_IDS={po:'po-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab'};
+  const byId = BIZOPS_TAB_IDS[v] && document.getElementById(BIZOPS_TAB_IDS[v]);
+  if(byId) byId.classList.add('active');
+  else { const localIdx = allIdx[v]; if(barTabs[localIdx]) barTabs[localIdx].classList.add('active'); }
   const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');

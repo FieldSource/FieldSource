@@ -1,176 +1,90 @@
-const https = require('https');
+// netlify/functions/upload-to-dropbox.js
+// Uploads an invoice file to Dropbox (/Field Source Ohio/Accounts Payable/).
+//
+// Security: only logged-in tracker users. The tracker sends the user's login token
+// as "Authorization: Bearer <token>", which is checked with Supabase Auth.
+// Reads/writes Dropbox tokens in app_settings with the service key (works with RLS on).
 
-const SUPABASE_URL = 'pldlvtlbgxizbppaliag.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsZGx2dGxiZ3hpemJwcGFsaWFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NzI5NDEsImV4cCI6MjA5MzE0ODk0MX0.uihnFIhsnPWiCg-O9Et7vJOHw_G8OacdDkQ7JNtw8Bg';
+const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
+const SB_KEY = process.env.SUPABASE_SERVICE_KEY;
 
-async function sbGet(key) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: SUPABASE_URL,
-      path: `/rest/v1/app_settings?key=eq.${key}&select=value`,
-      method: 'GET',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-      }
-    };
-    const req = https.request(options, res => {
-      let d = '';
-      res.on('data', chunk => d += chunk);
-      res.on('end', () => {
-        try {
-          const rows = JSON.parse(d);
-          resolve(rows?.[0]?.value || null);
-        } catch(e) { resolve(null); }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
+const json = (code, obj) => ({ statusCode: code, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
+
+async function requireUser(event) {
+  const auth = (event.headers || {}).authorization || '';
+  const token = auth.replace(/^Bearer\s+/i, '');
+  if (!token) return null;
+  const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${token}` } });
+  if (!r.ok) return null;
+  const u = await r.json().catch(() => null);
+  return u && u.id ? u : null;
 }
 
-async function sbSet(key, value) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({ key, value, updated_at: new Date().toISOString() });
-    const options = {
-      hostname: SUPABASE_URL,
-      path: '/rest/v1/app_settings',
-      method: 'POST',
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data),
-        'Prefer': 'resolution=merge-duplicates',
-      }
-    };
-    const req = https.request(options, res => {
-      let d = '';
-      res.on('data', chunk => d += chunk);
-      res.on('end', () => resolve(d));
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
+async function getSetting(key) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?key=eq.${key}&select=value`, {
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` },
   });
+  if (!r.ok) throw new Error(`Reading ${key} failed (${r.status})`);
+  const rows = await r.json();
+  return rows && rows[0] ? rows[0].value : null;
+}
+
+async function setSetting(key, value) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
+    method: 'POST',
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
+  });
+  if (!r.ok) console.error(`Saving ${key} failed (${r.status}): ${await r.text()}`);
 }
 
 async function getAccessToken() {
-  const APP_KEY = process.env.DROPBOX_APP_KEY;
-  const APP_SECRET = process.env.DROPBOX_APP_SECRET;
-
-  // Try refresh token from Supabase first, fall back to env var
-  const refreshToken = await sbGet('DROPBOX_REFRESH_TOKEN');
-
+  const refreshToken = await getSetting('DROPBOX_REFRESH_TOKEN');
   if (refreshToken) {
-    // Use refresh token to get a fresh access token
-    const credentials = Buffer.from(`${APP_KEY}:${APP_SECRET}`).toString('base64');
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-    }).toString();
-
-    return new Promise((resolve, reject) => {
-      const options = {
-        hostname: 'api.dropboxapi.com',
-        path: '/oauth2/token',
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${credentials}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': Buffer.byteLength(body),
-        }
-      };
-      const req = https.request(options, res => {
-        let d = '';
-        res.on('data', chunk => d += chunk);
-        res.on('end', () => {
-          try {
-            const tokens = JSON.parse(d);
-            if (tokens.access_token) {
-              // Cache the new access token
-              sbSet('DROPBOX_ACCESS_TOKEN', tokens.access_token);
-              resolve(tokens.access_token);
-            } else {
-              reject(new Error('Failed to refresh token: ' + d));
-            }
-          } catch(e) { reject(e); }
-        });
-      });
-      req.on('error', reject);
-      req.write(body);
-      req.end();
+    const creds = Buffer.from(`${process.env.DROPBOX_APP_KEY}:${process.env.DROPBOX_APP_SECRET}`).toString('base64');
+    const r = await fetch('https://api.dropboxapi.com/oauth2/token', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${creds}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }).toString(),
     });
+    const tokens = await r.json().catch(() => ({}));
+    if (!tokens.access_token) throw new Error('Dropbox refused the saved token. Reconnect Dropbox.');
+    await setSetting('DROPBOX_ACCESS_TOKEN', tokens.access_token);
+    return tokens.access_token;
   }
-
-  // Fall back to static token from env (legacy)
-  const staticToken = await sbGet('DROPBOX_ACCESS_TOKEN') || process.env.DROPBOX_ACCESS_TOKEN;
-  if (!staticToken) throw new Error('No Dropbox token available. Please connect Dropbox at /dropbox-connect');
+  const staticToken = (await getSetting('DROPBOX_ACCESS_TOKEN')) || process.env.DROPBOX_ACCESS_TOKEN;
+  if (!staticToken) throw new Error('No Dropbox token available. Reconnect Dropbox.');
   return staticToken;
 }
 
-async function uploadToDropbox(accessToken, fileData, fileName) {
-  const dropboxPath = `/Field Source Ohio/Accounts Payable/${fileName}`;
-  const fileBuffer = Buffer.from(fileData, 'base64');
-
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'content.dropboxapi.com',
-      path: '/2/files/upload',
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/octet-stream',
-        'Content-Length': fileBuffer.length,
-        'Dropbox-API-Arg': JSON.stringify({
-          path: dropboxPath,
-          mode: 'overwrite',
-          autorename: false,
-          mute: false,
-        }),
-      }
-    };
-    const req = https.request(options, res => {
-      let d = '';
-      res.on('data', chunk => d += chunk);
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(d);
-          if (result.error_summary) reject(new Error(result.error_summary));
-          else resolve(result);
-        } catch(e) { reject(new Error('Dropbox response: ' + d)); }
-      });
-    });
-    req.on('error', reject);
-    req.write(fileBuffer);
-    req.end();
-  });
-}
-
-exports.handler = async function(event) {
-  if (event.httpMethod !== 'POST') {
-    return { statusCode: 405, body: 'Method not allowed' };
-  }
+exports.handler = async function (event) {
+  if (event.httpMethod !== 'POST') return json(405, { error: 'Method not allowed' });
+  if (!SB_KEY) return json(500, { error: 'Missing SUPABASE_SERVICE_KEY in Netlify' });
 
   try {
-    const { fileData, fileName, projectName, vendorName } = JSON.parse(event.body);
-    if (!fileData || !fileName) {
-      return { statusCode: 400, body: JSON.stringify({ error: 'fileData and fileName are required' }) };
-    }
+    if (!(await requireUser(event))) return json(401, { error: 'Please log in to the tracker again.' });
+
+    const { fileData, fileName } = JSON.parse(event.body || '{}');
+    if (!fileData || !fileName) return json(400, { error: 'fileData and fileName are required' });
+    const safeName = String(fileName).replace(/[\\/]/g, '-').slice(0, 200);
 
     const accessToken = await getAccessToken();
-    const result = await uploadToDropbox(accessToken, fileData, fileName);
+    const r = await fetch('https://content.dropboxapi.com/2/files/upload', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/octet-stream',
+        'Dropbox-API-Arg': JSON.stringify({ path: `/Field Source Ohio/Accounts Payable/${safeName}`, mode: 'overwrite', autorename: false, mute: false })
+          .replace(/[\u007f-\uffff]/g, c => '\\u' + ('000' + c.charCodeAt(0).toString(16)).slice(-4)),
+      },
+      body: Buffer.from(fileData, 'base64'),
+    });
+    const result = await r.json().catch(async () => ({ error_summary: await r.text() }));
+    if (!r.ok || result.error_summary) throw new Error(result.error_summary || `Dropbox ${r.status}`);
 
-    return {
-      statusCode: 200,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ success: true, path: result.path_display }),
-    };
-  } catch(e) {
+    return json(200, { success: true, path: result.path_display });
+  } catch (e) {
     console.error('Dropbox upload error:', e.message);
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: e.message }),
-    };
+    return json(500, { error: e.message });
   }
 };

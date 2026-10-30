@@ -9,8 +9,24 @@
 //
 // Register this exact Redirect URI in developer.intuit.com (Production keys):
 //   https://fieldsourcetracker.netlify.app/.netlify/functions/qb-connect
+//
+// Security: the connect link must include the shared secret:
+//   https://fieldsourcetracker.netlify.app/.netlify/functions/qb-connect?key=<ESTIMATE_SYNC_SECRET>
+// The return trip from Intuit is verified with a signed, 15-minute "state" value.
 
 const https = require('https');
+const crypto = require('crypto');
+const SECRET = process.env.ESTIMATE_SYNC_SECRET;
+const sign = v => crypto.createHmac('sha256', SECRET).update(v).digest('hex').slice(0, 32);
+function makeState() { const v = `${crypto.randomBytes(8).toString('hex')}.${Date.now()}`; return `${v}.${sign(v)}`; }
+function stateOk(s) {
+  const parts = String(s || '').split('.');
+  if (parts.length !== 3) return false;
+  const v = `${parts[0]}.${parts[1]}`;
+  const good = sign(v);
+  if (parts[2].length !== good.length || !crypto.timingSafeEqual(Buffer.from(parts[2]), Buffer.from(good))) return false;
+  return Date.now() - Number(parts[1]) < 15 * 60 * 1000;
+}
 
 const QB_AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2';
 const REDIRECT_URI = 'https://fieldsourcetracker.netlify.app/.netlify/functions/qb-connect';
@@ -61,10 +77,10 @@ exports.handler = async function (event) {
   const q = event.queryStringParameters || {};
   const CLIENT_ID = process.env.QB_CLIENT_ID;
   const CLIENT_SECRET = process.env.QB_CLIENT_SECRET;
-  const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+  const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
   if (!CLIENT_ID || !CLIENT_SECRET) return page('QuickBooks not configured', 'QB_CLIENT_ID or QB_CLIENT_SECRET is missing in Netlify.', false);
-  if (!SUPABASE_KEY) return page('Supabase not configured', 'SUPABASE_SERVICE_KEY is missing in Netlify.', false);
+  if (!SUPABASE_KEY || !SECRET) return page('Not configured', 'SUPABASE_SERVICE_KEY or ESTIMATE_SYNC_SECRET is missing in Netlify.', false);
 
   // Intuit sent back an error (e.g. Ryan clicked Cancel)
   if (q.error) {
@@ -74,7 +90,7 @@ exports.handler = async function (event) {
   // Step 2: callback from Intuit. Must be checked BEFORE the redirect below,
   // otherwise the callback (which has no ?action) would bounce back to Intuit forever.
   if (q.code) {
-    if (q.state !== 'tracker_oauth') return page('Connection rejected', 'The response did not come from this tracker\'s connect link.', false);
+    if (!stateOk(q.state)) return page('Connection rejected', 'This did not start from the tracker\'s connect link, or it took longer than 15 minutes. Start again.', false);
     try {
       const credentials = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
       const body = new URLSearchParams({ grant_type: 'authorization_code', code: q.code, redirect_uri: REDIRECT_URI }).toString();
@@ -113,13 +129,14 @@ exports.handler = async function (event) {
     }
   }
 
-  // Step 1: send the person to Intuit to sign in and approve
+  // Step 1: send the person to Intuit to sign in and approve (only with the shared secret)
+  if (!q.key || q.key !== SECRET) return page('Link not valid', 'Use the full QuickBooks connect link, including its ?key= part.', false);
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     redirect_uri: REDIRECT_URI,
     response_type: 'code',
     scope: 'com.intuit.quickbooks.accounting',
-    state: 'tracker_oauth',
+    state: makeState(),
   });
   return { statusCode: 302, headers: { Location: `${QB_AUTH_URL}?${params.toString()}` }, body: '' };
 };

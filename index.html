@@ -3891,6 +3891,7 @@ function openEstimateDetail(id){
   body += `
     ${e.qbSyncedAt?`<div style="font-size:11px;color:var(--text-3);margin-top:12px">Last synced from the Billing Tracker ${new Date(e.qbSyncedAt).toLocaleString()}</div>`:''}
     <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px">
+      ${e.qbNumber&&canEdit?`<button id="handoff-btn" onclick="openHandoff('${e.id}')" class="site-chip" style="padding:8px 14px">🚀 Push to tracker</button>`:''}
       ${e.qbNumber?`<button id="qb-pdf-btn" onclick="previewQbEstimatePdf('${escEst(e.qbNumber)}')" class="site-chip" style="padding:8px 14px">📄 Preview estimate PDF</button>`:''}
       ${e.qbLink?`<a href="${escEst(e.qbLink)}" target="_blank" rel="noopener" class="site-chip" style="text-decoration:none;padding:8px 14px">Open in QuickBooks ↗</a>`:''}
       ${canEdit?`<button onclick="document.getElementById('est-detail-overlay').remove();openEstimateModal('${e.id}')" class="site-chip" style="padding:8px 14px">✏️ Edit</button>`:''}
@@ -3905,6 +3906,7 @@ function openEstimateDetail(id){
   overlay.innerHTML = `<div class="modal-sheet" style="max-width:760px;max-height:90vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
   document.body.appendChild(overlay);
   if(e.qbNumber && !lines.length) loadQbLines(e.qbNumber);
+  if(e.qbNumber && canEdit) checkTrackerJob(e.qbNumber);
 }
 
 // QuickBooks line items, from the qb_estimates / qb_estimate_lines tables kept fresh by qb-sync.
@@ -3967,6 +3969,309 @@ async function previewQbEstimatePdf(docNumber){
     if(btn){ btn.disabled = false; btn.textContent = '📄 Preview estimate PDF'; }
   }
 }
+
+// ===================== TRACKER HANDOFF (Ryan's tracker-handoff spec, steps 2-6) =====================
+// Accepted QB estimate -> tracker_jobs + tracker_work_items (one per QB line) + tracker_visits.
+// Nothing is written until the PM clicks Confirm. Allocation gaps are flagged, never silently fixed.
+let handoff = null;
+const HANDOFF_UNITS = ['LS','EA','SF','AC','TON','CY','LF','HR','DAY','VISIT','APP'];
+const HANDOFF_EDITORS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com'];
+
+async function checkTrackerJob(qbNumber){
+  const slot = document.getElementById('handoff-btn');
+  if(!slot) return;
+  try{
+    const j = await sbFetch('GET', `/rest/v1/tracker_jobs?estimate_number=eq.${encodeURIComponent(qbNumber)}&select=estimate_number,status`);
+    if(j && j.length){
+      const v = await sbFetch('GET', `/rest/v1/tracker_visits?estimate_number=eq.${encodeURIComponent(qbNumber)}&select=visit_id`);
+      slot.outerHTML = `<span class="site-chip" style="padding:8px 14px;cursor:default;background:#dcfce7;color:#166534">✓ In tracker · ${(v||[]).length} visit${(v||[]).length===1?'':'s'}</span>`;
+    }
+  }catch(err){ console.error(err); }
+}
+
+async function openHandoff(estId){
+  const e = estimates.find(x=>x.id===estId);
+  if(!e || !e.qbNumber) return;
+  const num = e.qbNumber;
+  try{
+    const ex = await sbFetch('GET', `/rest/v1/tracker_jobs?estimate_number=eq.${encodeURIComponent(num)}&select=estimate_number`);
+    if(ex && ex.length){ alert(`Estimate #${num} is already in the tracker. One estimate, one job.`); return; }
+    const qe = await sbFetch('GET', `/rest/v1/qb_estimates?estimate_number=eq.${encodeURIComponent(num)}&select=id,total,customer_name,qb_status&limit=1`);
+    if(!qe || !qe.length){ alert(`Estimate #${num} isn't in the QuickBooks sync yet. Run the sync, then try again.`); return; }
+    if(qe[0].qb_status!=='Accepted' && !confirm(`QuickBooks shows estimate #${num} as "${qe[0].qb_status}", not Accepted. Ryan's flow pushes only accepted estimates. Push it anyway?`)) return;
+    const ql = await sbFetch('GET', `/rest/v1/qb_estimate_lines?estimate_id=eq.${qe[0].id}&item_type=eq.SalesItemLineDetail&select=line_number,description,quantity,unit_price,amount&order=line_number`);
+    if(!ql || !ql.length){ alert(`QuickBooks has no priced lines on estimate #${num}.`); return; }
+
+    const items = ql.map((l,i)=>{
+      const qty = Number(l.quantity)||1, lump = qty===1;
+      return { line:i+1, description:l.description||'', qty, unit: lump?'LS':'EA', rate:Number(l.unit_price)||0,
+               value:Math.round((Number(l.amount)||0)*100)/100, method: lump?'lump_sum':'unit', milestone:'' };
+    });
+    handoff = {
+      num, estId, qbTotal: Math.round((Number(qe[0].total)||0)*100)/100,
+      job: { job_name: e.projectName||'', client: qe[0].customer_name||e.client||'', site:'', po_number:'',
+             accepted_date: e.acceptedDate||'', job_type: e.type==='Maintenance'?'Maintenance':'Project',
+             billing_mode:'billed', closeout_mode:'turnkey', pm:'', pm_email:'', billing_contact:'', billing_email:'', notes:'' },
+      items, pattern:'single_day',
+      sched:{ date:'', start:'', end:'', weekdaysOnly:true, days:[2], every:1, dates:'', window:'', count:1 },
+      visits: [],
+    };
+    document.getElementById('est-detail-overlay')?.remove();
+    renderHandoff();
+  }catch(err){ alert('Could not start the handoff: '+err.message); }
+}
+
+function handoffGenDates(){
+  const s = handoff.sched, p = handoff.pattern, out = [];
+  const D = x=>new Date(x+'T12:00:00'), F = x=>x.toLocaleDateString('en-CA');
+  if(p==='single_day'){ if(s.date) out.push(s.date); }
+  else if(p==='contiguous' || p==='recurring'){
+    if(!s.start || !s.end || D(s.end) < D(s.start)) return null;
+    const start = D(s.start);
+    for(let t=D(s.start); t<=D(s.end) && out.length<400; t.setDate(t.getDate()+1)){
+      const w = t.getDay();
+      if(p==='contiguous'){ if(s.weekdaysOnly && (w===0||w===6)) continue; out.push(F(t)); }
+      else {
+        const wk = Math.floor((t - start)/(7*864e5));
+        if(wk % (Number(s.every)||1)===0 && s.days.includes(w)) out.push(F(t));
+      }
+    }
+  }
+  else if(p==='specific_dates'){
+    s.dates.split(/[\n,;]+/).map(x=>x.trim()).filter(Boolean).forEach(x=>{
+      let m = x.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/), y, mo, d;
+      if(m){ y=+m[1]; mo=+m[2]; d=+m[3]; }
+      else if((m = x.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/))){ mo=+m[1]; d=+m[2]; y=+m[3]; if(y<100) y+=2000; }
+      if(y) out.push(`${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+    });
+    out.sort();
+  }
+  else if(p==='window_tbd'){ for(let i=0;i<Math.max(1,Math.min(60,Number(s.count)||1));i++) out.push(null); }
+  return out;
+}
+
+function handoffGenerate(){
+  const dates = handoffGenDates();
+  if(!dates || !dates.length){ alert('Fill in the schedule so at least one visit can be created.'); return; }
+  const n = dates.length;
+  handoff.visits = dates.map((d,i)=>({
+    planned_date: d, target_window: handoff.pattern==='window_tbd' ? (handoff.sched.window||'') : '',
+    alloc: handoff.items.map(it=>{
+      if(it.method==='milestone') return i===n-1;
+      const total = it.method==='unit' ? it.qty : 100;
+      const step = it.method==='unit' ? Math.round(total/n*100)/100 : Math.round(total/n*10)/10;
+      return i<n-1 ? step : Math.round((total - step*(n-1))*100)/100;
+    }),
+  }));
+  renderHandoff();
+}
+
+function handoffChecks(){
+  const res = handoff.items.map((it,li)=>{
+    if(it.method==='milestone'){
+      const c = handoff.visits.filter(v=>v.alloc[li]===true).length;
+      return { ok: c===1, text: c===1?'milestone on 1 visit':`milestone on ${c} visits (needs exactly 1)` };
+    }
+    const sum = Math.round(handoff.visits.reduce((t,v)=>t+(Number(v.alloc[li])||0),0)*100)/100;
+    const target = it.method==='unit' ? it.qty : 100;
+    const lab = it.method==='unit' ? `${sum} of ${target} ${it.unit}` : `${sum}% of 100%`;
+    return { ok: Math.abs(sum-target)<0.005, text: Math.abs(sum-target)<0.005 ? lab : `${lab} (${sum<target?'under':'over'})` };
+  });
+  const lineTotal = Math.round(handoff.items.reduce((t,i)=>t+i.value,0)*100)/100;
+  const empty = handoff.visits.filter(v=>!v.alloc.some(a=>a===true || Number(a)>0)).length;
+  return { lines: res, lineTotal, totalOk: Math.abs(lineTotal-handoff.qbTotal)<0.005, empty };
+}
+
+function handoffRefreshChecks(){
+  const c = handoffChecks();
+  c.lines.forEach((r,i)=>{ const el=document.getElementById('ho-chk-'+i); if(el){ el.textContent=r.text; el.style.color=r.ok?'#15803d':'#b91c1c'; } });
+  const tot = document.getElementById('ho-total');
+  if(tot){ tot.textContent = `Lines ${fmtEstMoney2(c.lineTotal)} vs QuickBooks ${fmtEstMoney2(handoff.qbTotal)}${c.totalOk?' ✓':' ✗ does not match'}`; tot.style.color = c.totalOk?'#15803d':'#b91c1c'; }
+  const em = document.getElementById('ho-empty');
+  if(em) em.textContent = c.empty ? `${c.empty} visit${c.empty===1?'':'s'} cover no work items.` : '';
+}
+
+function hoSet(path, val){
+  const [a,b] = path.split('.');
+  if(b===undefined) handoff[a]=val; else handoff[a][b]=val;
+}
+
+function renderHandoff(){
+  const h = handoff, j = h.job, s = h.sched;
+  const lbl = t=>`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:3px">${t}</div>`;
+  const inp = (path,val,type='text',ph='')=>`<input type="${type}" value="${escEst(val)}" placeholder="${escEst(ph)}" oninput="hoSet('${path}',this.value)" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);box-sizing:border-box">`;
+  const sel = (path,val,opts,rerender=false)=>`<select onchange="hoSet('${path}',this.value)${rerender?';renderHandoff()':''}" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">${opts.map(([v,l])=>`<option value="${v}"${v===val?' selected':''}>${l}</option>`).join('')}</select>`;
+  const field = (t,html)=>`<div>${lbl(t)}${html}</div>`;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);padding:6px;text-align:left;white-space:nowrap;background:var(--accent)';
+  const td = 'font-size:12px;color:var(--text);padding:5px 6px;border-top:1px solid var(--border);vertical-align:top';
+  const cell = 'width:70px;font-size:12px;padding:4px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text);text-align:right';
+  const checks = handoffChecks();
+  const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  let schedHtml = '';
+  if(h.pattern==='single_day') schedHtml = field('Date', inp('sched.date',s.date,'date'));
+  else if(h.pattern==='contiguous') schedHtml = field('Start',inp('sched.start',s.start,'date'))+field('End',inp('sched.end',s.end,'date'))+
+      `<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin-top:16px"><input type="checkbox" ${s.weekdaysOnly?'checked':''} onchange="handoff.sched.weekdaysOnly=this.checked"> Weekdays only</label>`;
+  else if(h.pattern==='recurring') schedHtml = field('Start',inp('sched.start',s.start,'date'))+field('End',inp('sched.end',s.end,'date'))+
+      field('Every', `<select onchange="handoff.sched.every=+this.value" style="font-size:13px;padding:6px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">${[1,2,3,4].map(n=>`<option value="${n}"${s.every===n?' selected':''}>${n===1?'week':n+' weeks'}</option>`).join('')}</select>`)+
+      field('On', DOW.map((d,i)=>`<label style="font-size:12px;margin-right:6px;white-space:nowrap"><input type="checkbox" ${s.days.includes(i)?'checked':''} onchange="handoff.sched.days=this.checked?[...handoff.sched.days,${i}]:handoff.sched.days.filter(x=>x!==${i})"> ${d}</label>`).join(''));
+  else if(h.pattern==='specific_dates') schedHtml = `<div style="grid-column:1/-1">${lbl('Dates (one per line, or comma-separated)')}<textarea oninput="hoSet('sched.dates',this.value)" rows="3" placeholder="3/10/2027, 4/14/2027, 5/19/2027" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);box-sizing:border-box">${escEst(s.dates)}</textarea></div>`;
+  else if(h.pattern==='window_tbd') schedHtml = `<div style="grid-column:span 2">${lbl('Target window')}${inp('sched.window',s.window,'text','Early April, when soil temps reach 55F')}</div>`+field('Number of visits',inp('sched.count',s.count,'number'));
+
+  const body = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">Push estimate #${escEst(h.num)} to the tracker</div>
+      <div style="font-size:12px;color:var(--text-3)">Nothing is saved until you click Confirm at the bottom.</div></div>
+      <button onclick="if(confirm('Close without saving?')){document.getElementById('handoff-overlay').remove();handoff=null;}" class="site-chip" style="padding:6px 12px">✕</button>
+    </div>
+
+    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">1. Job</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+      ${field('Job name *', inp('job.job_name',j.job_name))}
+      ${field('Client *', inp('job.client',j.client))}
+      ${field('Site / field', inp('job.site',j.site,'text','Varsity soccer field'))}
+      ${field('PO #', inp('job.po_number',j.po_number,'text','blank = email approval'))}
+      ${field('Accepted date', inp('job.accepted_date',j.accepted_date,'date'))}
+      ${field('Job type', sel('job.job_type',j.job_type,[['Project','Project (one-time scope)'],['Maintenance','Maintenance (recurring program)']]))}
+      ${field('Billed or tracked', sel('job.billing_mode',j.billing_mode,[['billed','Billed (one-off, invoice on closeout)'],['tracked','Tracked (contract program, count progress)']]))}
+      ${field('Closeout', sel('job.closeout_mode',j.closeout_mode,[['turnkey','Turnkey (bill when done)'],['qc','QC / owner approved (sign-off first)']]))}
+      ${field('PM / lead', inp('job.pm',j.pm))}
+      ${field('PM email', inp('job.pm_email',j.pm_email,'email'))}
+      ${field('Billing contact', inp('job.billing_contact',j.billing_contact))}
+      ${field('Billing email', inp('job.billing_email',j.billing_email,'email'))}
+    </div>
+    <div style="margin-top:10px">${field('Notes', inp('job.notes',j.notes))}</div>
+
+    <div style="font-size:13px;font-weight:700;margin:18px 0 8px">2. Work items <span style="font-weight:400;color:var(--text-3);font-size:12px">one per QuickBooks line; confirm how each one is measured</span></div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="${th}">#</th><th style="${th}">Description</th><th style="${th};text-align:right">Qty</th><th style="${th}">Unit</th><th style="${th};text-align:right">Value</th><th style="${th}">Completion</th></tr></thead>
+      <tbody>${h.items.map((it,i)=>`<tr>
+        <td style="${td}">${it.line}</td>
+        <td style="${td};min-width:200px">${escEst(it.description)}</td>
+        <td style="${td};text-align:right">${it.qty}</td>
+        <td style="${td}"><select onchange="handoff.items[${i}].unit=this.value;handoffRefreshChecks()" style="font-size:12px;padding:3px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text)">${HANDOFF_UNITS.map(u=>`<option${u===it.unit?' selected':''}>${u}</option>`).join('')}</select></td>
+        <td style="${td};text-align:right;white-space:nowrap">${fmtEstMoney2(it.value)}</td>
+        <td style="${td};white-space:nowrap">
+          <select onchange="handoff.items[${i}].method=this.value;handoff.visits=[];renderHandoff()" style="font-size:12px;padding:3px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text)">
+            ${[['unit','Unit (qty done)'],['lump_sum','Lump sum (% done)'],['milestone','Milestone']].map(([v,l])=>`<option value="${v}"${v===it.method?' selected':''}>${l}</option>`).join('')}
+          </select>
+          ${it.method==='milestone'?`<input value="${escEst(it.milestone)}" placeholder="Milestone, e.g. laser grade complete" oninput="handoff.items[${i}].milestone=this.value" style="margin-top:4px;width:100%;font-size:12px;padding:3px 5px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text);box-sizing:border-box">`:''}
+        </td></tr>`).join('')}</tbody>
+    </table></div>
+    <div id="ho-total" style="font-size:12px;margin-top:6px"></div>
+
+    <div style="font-size:13px;font-weight:700;margin:18px 0 8px">3. Schedule</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:start">
+      ${field('Pattern', sel('pattern',h.pattern,[['single_day','Single day'],['contiguous','Block of days'],['recurring','Recurring'],['specific_dates','Specific dates'],['window_tbd','Window / TBD']],true))}
+      ${schedHtml}
+    </div>
+    <button onclick="if(!handoff.visits.length||confirm('Replace the current visits and their allocations?')) handoffGenerate()" class="site-chip" style="padding:7px 14px;margin-top:10px">Create visits</button>
+
+    ${h.visits.length?`
+    <div style="font-size:13px;font-weight:700;margin:18px 0 4px">4. Visits and allocation <span style="font-weight:400;color:var(--text-3);font-size:12px">how much of each line is planned on each visit; edit any cell</span></div>
+    <div style="overflow:auto;max-height:340px;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="border-collapse:collapse;width:100%">
+      <thead><tr><th style="${th};position:sticky;top:0">Visit</th><th style="${th};position:sticky;top:0">Date</th>
+        ${h.items.map(it=>`<th style="${th};position:sticky;top:0;text-align:right" title="${escEst(it.description)}">L${it.line} <span style="font-weight:400">${it.method==='unit'?escEst(it.unit):it.method==='lump_sum'?'%':'✓'}</span></th>`).join('')}
+        <th style="${th};position:sticky;top:0"></th></tr></thead>
+      <tbody>${h.visits.map((v,vi)=>`<tr>
+        <td style="${td};white-space:nowrap">${escEst(h.num)}-V${String(vi+1).padStart(2,'0')}</td>
+        <td style="${td}"><input type="date" value="${v.planned_date||''}" onchange="handoff.visits[${vi}].planned_date=this.value||null" style="font-size:12px;padding:3px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text)">${!v.planned_date&&v.target_window?`<div style="font-size:10px;color:var(--text-3)">${escEst(v.target_window)}</div>`:''}</td>
+        ${h.items.map((it,li)=>`<td style="${td};text-align:right">${it.method==='milestone'
+          ? `<input type="checkbox" ${v.alloc[li]===true?'checked':''} onchange="handoff.visits[${vi}].alloc[${li}]=this.checked;handoffRefreshChecks()">`
+          : `<input type="number" step="any" value="${v.alloc[li]||''}" oninput="handoff.visits[${vi}].alloc[${li}]=this.value===''?0:+this.value;handoffRefreshChecks()" style="${cell}">`}</td>`).join('')}
+        <td style="${td}"><button onclick="handoff.visits.splice(${vi},1);renderHandoff()" title="Remove visit" style="border:none;background:none;cursor:pointer;color:var(--text-3)">✕</button></td>
+      </tr>`).join('')}
+      <tr><td style="${td};font-weight:700" colspan="2">Check</td>${checks.lines.map((r,i)=>`<td id="ho-chk-${i}" style="${td};font-size:11px;text-align:right;color:${r.ok?'#15803d':'#b91c1c'}">${r.text}</td>`).join('')}<td style="${td}"></td></tr>
+      </tbody></table></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:10px;flex-wrap:wrap">
+      <button onclick="handoff.visits.push({planned_date:null,target_window:'',alloc:handoff.items.map(it=>it.method==='milestone'?false:0)});renderHandoff()" class="site-chip" style="padding:5px 12px">+ Add visit</button>
+      <span id="ho-empty" style="font-size:12px;color:#b91c1c"></span>
+    </div>`:''}
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;border-top:1px solid var(--border);padding-top:14px">
+      <button onclick="if(confirm('Close without saving?')){document.getElementById('handoff-overlay').remove();handoff=null;}" class="site-chip" style="padding:8px 14px">Cancel</button>
+      <button id="ho-save" onclick="saveHandoff()" class="btn-save" style="padding:8px 16px" ${h.visits.length?'':'disabled title="Create visits first"'}>Confirm and push to tracker</button>
+    </div>`;
+
+  let overlay = document.getElementById('handoff-overlay');
+  if(!overlay){
+    overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'handoff-overlay';
+    document.body.appendChild(overlay);
+  }
+  const prevScroll = overlay.firstElementChild ? overlay.firstElementChild.scrollTop : 0;
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:1000px;max-height:92vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
+  overlay.firstElementChild.scrollTop = prevScroll;
+  handoffRefreshChecks();
+}
+
+async function saveHandoff(){
+  const h = handoff, j = h.job;
+  if(!j.job_name.trim() || !j.client.trim()){ alert('Job name and client are required.'); return; }
+  if(!h.visits.length){ alert('Create at least one visit.'); return; }
+  const c = handoffChecks();
+  const problems = [];
+  c.lines.forEach((r,i)=>{ if(!r.ok) problems.push(`Line ${h.items[i].line}: ${r.text}`); });
+  if(!c.totalOk) problems.push(`Line total ${fmtEstMoney2(c.lineTotal)} doesn't match QuickBooks ${fmtEstMoney2(h.qbTotal)}`);
+  if(c.empty) problems.push(`${c.empty} visit(s) cover no work items`);
+  h.items.forEach(it=>{ if(it.method==='milestone' && !it.milestone.trim()) problems.push(`Line ${it.line}: milestone needs a name`); });
+  const summary = `Push estimate #${h.num} to the tracker?\n\n${j.job_name} · ${j.client}\n${j.job_type} · ${j.billing_mode==='tracked'?'Tracked':'Billed'} · ${j.closeout_mode==='qc'?'QC / owner approved':'Turnkey'}\n${h.items.length} work items · ${h.visits.length} visits · ${fmtEstMoney2(h.qbTotal)}`
+    + (problems.length ? `\n\nFLAGGED:\n- ${problems.join('\n- ')}\n\nSave anyway?` : '');
+  if(!confirm(summary)) return;
+
+  const btn = document.getElementById('ho-save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const num = h.num, wid = it=>`${num}-L${String(it.line).padStart(2,'0')}`;
+  let jobCreated = false;
+  try{
+    const dup = await sbFetch('GET', `/rest/v1/tracker_jobs?estimate_number=eq.${encodeURIComponent(num)}&select=estimate_number`);
+    if(dup && dup.length) throw new Error(`Estimate #${num} was pushed by someone else in the meantime.`);
+    await sbFetch('POST', '/rest/v1/tracker_jobs', {
+      estimate_number: num, job_name: j.job_name.trim(), client: j.client.trim(), site: j.site, po_number: j.po_number,
+      accepted_date: j.accepted_date || null, contract_total: h.qbTotal, job_type: j.job_type, status: 'Scheduled',
+      pm: j.pm, pm_email: j.pm_email, foreman: '', billing_contact: j.billing_contact, billing_email: j.billing_email,
+      qb_link: '', billing_tab: '', notes: j.notes, billing_mode: j.billing_mode, closeout_mode: j.closeout_mode,
+      created_by: (currentUser&&currentUser.email)||'',
+    });
+    jobCreated = true;
+    await sbFetch('POST', '/rest/v1/tracker_work_items', h.items.map(it=>({
+      work_item_id: wid(it), estimate_number: num, line: it.line, qb_item: '', description: it.description,
+      contract_qty: it.qty, unit: it.unit, rate: it.rate, contract_value: it.value,
+      completion_method: it.method, milestone: it.method==='milestone' ? it.milestone.trim() : '',
+    })));
+    await sbFetch('POST', '/rest/v1/tracker_visits', h.visits.map((v,vi)=>({
+      visit_id: `${num}-V${String(vi+1).padStart(2,'0')}`, estimate_number: num,
+      planned_date: v.planned_date || null, target_window: v.target_window || '',
+      status: v.planned_date ? 'Planned' : 'Unscheduled', crew: '',
+      planned: h.items.map((it,li)=>{
+        const a = v.alloc[li];
+        if(it.method==='milestone') return a===true ? { work_item_id: wid(it), planned_qty:null, planned_pct:null, milestone:true } : null;
+        if(!(Number(a)>0)) return null;
+        return it.method==='unit'
+          ? { work_item_id: wid(it), planned_qty: Number(a), planned_pct: null, milestone: null }
+          : { work_item_id: wid(it), planned_qty: null, planned_pct: Number(a), milestone: null };
+      }).filter(Boolean),
+      actuals: {},
+    })));
+    document.getElementById('handoff-overlay')?.remove();
+    const first = h.visits.map(v=>v.planned_date).filter(Boolean).sort()[0];
+    handoff = null;
+    alert(`Estimate #${num} is in the tracker.\n${h.items.length} work items, ${h.visits.length} visits${first?`, first visit ${first}`:''}.`);
+    openEstimateDetail(h.estId);
+  }catch(err){
+    if(jobCreated){
+      try{
+        await sbFetch('DELETE', `/rest/v1/tracker_visits?estimate_number=eq.${encodeURIComponent(num)}`);
+        await sbFetch('DELETE', `/rest/v1/tracker_work_items?estimate_number=eq.${encodeURIComponent(num)}`);
+        await sbFetch('DELETE', `/rest/v1/tracker_jobs?estimate_number=eq.${encodeURIComponent(num)}`);
+      }catch(e2){ console.error('Rollback failed', e2); }
+    }
+    alert('Nothing was saved: ' + err.message);
+    btn.disabled = false; btn.textContent = 'Confirm and push to tracker';
+  }
+}
+// =================== END TRACKER HANDOFF ===================
 
 function fmtEstMoney(n){
   return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});

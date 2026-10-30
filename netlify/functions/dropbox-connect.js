@@ -1,122 +1,80 @@
-const https = require('https');
+// netlify/functions/dropbox-connect.js
+// Connects the company Dropbox to the tracker and stores its tokens in app_settings.
+//
+// Security: the connect link must include the shared secret:
+//   https://fieldsourcetracker.netlify.app/.netlify/functions/dropbox-connect?key=<ESTIMATE_SYNC_SECRET>
+// Without it, a stranger could connect THEIR Dropbox and receive the company's invoices.
+// The return trip from Dropbox is verified with a signed, 15-minute "state" value.
+
+const crypto = require('crypto');
 
 const DROPBOX_AUTH_URL = 'https://www.dropbox.com/oauth2/authorize';
 const REDIRECT_URI = 'https://fieldsourcetracker.netlify.app/.netlify/functions/dropbox-connect';
-const SUPABASE_URL = 'pldlvtlbgxizbppaliag.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsZGx2dGxiZ3hpemJwcGFsaWFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NzI5NDEsImV4cCI6MjA5MzE0ODk0MX0.uihnFIhsnPWiCg-O9Et7vJOHw_G8OacdDkQ7JNtw8Bg';
+const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
+const SB_KEY = process.env.SUPABASE_SERVICE_KEY;
+const SECRET = process.env.ESTIMATE_SYNC_SECRET;
 
-function httpsPost(hostname, path, headers, body) {
-  return new Promise((resolve, reject) => {
-    const req = https.request({ hostname, path, method: 'POST', headers }, res => {
-      let d = '';
-      res.on('data', chunk => d += chunk);
-      res.on('end', () => resolve({ status: res.statusCode, body: d }));
-    });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
+const page = (ok, title, msg) => ({
+  statusCode: ok ? 200 : 400,
+  headers: { 'Content-Type': 'text/html; charset=utf-8' },
+  body: `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<body style="font-family:system-ui,sans-serif;max-width:520px;margin:60px auto;padding:0 20px;line-height:1.5">
+<h2 style="color:${ok ? '#15803d' : '#b91c1c'}">${title}</h2><p>${msg}</p></body>`,
+});
+
+const sign = v => crypto.createHmac('sha256', SECRET).update(v).digest('hex').slice(0, 32);
+function makeState() { const v = `${crypto.randomBytes(8).toString('hex')}.${Date.now()}`; return `${v}.${sign(v)}`; }
+function stateOk(s) {
+  const parts = String(s || '').split('.');
+  if (parts.length !== 3) return false;
+  const v = `${parts[0]}.${parts[1]}`;
+  const good = sign(v);
+  if (parts[2].length !== good.length || !crypto.timingSafeEqual(Buffer.from(parts[2]), Buffer.from(good))) return false;
+  return Date.now() - Number(parts[1]) < 15 * 60 * 1000;
+}
+
+async function setSetting(key, value) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/app_settings?on_conflict=key`, {
+    method: 'POST',
+    headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
   });
+  if (!r.ok) throw new Error(`Saving ${key} failed (${r.status}): ${await r.text()}`);
 }
 
-async function sbSet(key, value) {
-  const data = JSON.stringify({ key, value, updated_at: new Date().toISOString() });
-  const res = await httpsPost(
-    SUPABASE_URL,
-    '/rest/v1/app_settings',
-    {
-      'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(data),
-      'Prefer': 'resolution=merge-duplicates',
-    },
-    data
-  );
-  console.log('sbSet key:', key, 'status:', res.status, 'response:', res.body.slice(0,100));
-  return res;
-}
-
-exports.handler = async function(event) {
-  const params = event.queryStringParameters || {};
+exports.handler = async function (event) {
+  const q = event.queryStringParameters || {};
   const APP_KEY = process.env.DROPBOX_APP_KEY;
   const APP_SECRET = process.env.DROPBOX_APP_SECRET;
+  if (!SB_KEY || !SECRET) return page(false, 'Not configured', 'SUPABASE_SERVICE_KEY or ESTIMATE_SYNC_SECRET is missing in Netlify.');
 
-  console.log('Handler called. Params:', JSON.stringify(params));
-  console.log('APP_KEY present:', !!APP_KEY, 'APP_SECRET present:', !!APP_SECRET);
+  if (q.error) return page(false, 'Dropbox was not connected', `Dropbox returned: ${q.error}. Nothing was changed.`);
 
-  // No code — redirect to Dropbox
-  if (!params.code && !params.error) {
-    const authParams = new URLSearchParams({
-      client_id: APP_KEY,
-      redirect_uri: REDIRECT_URI,
-      response_type: 'code',
-      token_access_type: 'offline',
+  // Return trip from Dropbox
+  if (q.code) {
+    if (!stateOk(q.state)) return page(false, 'Connection rejected', 'This did not start from the tracker\'s connect link, or it took longer than 15 minutes. Start again.');
+    const creds = Buffer.from(`${APP_KEY}:${APP_SECRET}`).toString('base64');
+    const r = await fetch('https://api.dropboxapi.com/oauth2/token', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${creds}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code: q.code, grant_type: 'authorization_code', redirect_uri: REDIRECT_URI }).toString(),
     });
-    console.log('Redirecting to Dropbox auth...');
-    return {
-      statusCode: 302,
-      headers: { Location: `${DROPBOX_AUTH_URL}?${authParams.toString()}` },
-      body: '',
-    };
-  }
-
-  if (params.error) {
-    console.error('Dropbox auth error:', params.error);
-    return { statusCode: 400, body: `Dropbox auth error: ${params.error}` };
-  }
-
-  // Exchange code for tokens
-  console.log('Got code, exchanging for tokens...');
-  const credentials = Buffer.from(`${APP_KEY}:${APP_SECRET}`).toString('base64');
-  const body = new URLSearchParams({
-    code: params.code,
-    grant_type: 'authorization_code',
-    redirect_uri: REDIRECT_URI,
-  }).toString();
-
-  try {
-    const result = await httpsPost(
-      'api.dropboxapi.com',
-      '/oauth2/token',
-      {
-        'Authorization': `Basic ${credentials}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': Buffer.byteLength(body),
-      },
-      body
-    );
-
-    console.log('Dropbox token status:', result.status);
-    console.log('Dropbox token body:', result.body.slice(0, 500));
-
-    const tokens = JSON.parse(result.body);
-
-    if (result.status !== 200 || !tokens.access_token) {
-      return { 
-        statusCode: 200, 
-        headers: { 'Content-Type': 'text/html' },
-        body: `<h2>Error getting token</h2><pre>${result.body}</pre>` 
-      };
+    const tokens = await r.json().catch(() => ({}));
+    if (!tokens.access_token) return page(false, 'Dropbox did not return a token', `${r.status} ${tokens.error || ''} ${tokens.error_description || ''}`);
+    try {
+      await setSetting('DROPBOX_ACCESS_TOKEN', tokens.access_token);
+      if (tokens.refresh_token) await setSetting('DROPBOX_REFRESH_TOKEN', tokens.refresh_token);
+    } catch (e) {
+      return page(false, 'Could not save the Dropbox connection', e.message);
     }
-
-    // Save access token
-    await sbSet('DROPBOX_ACCESS_TOKEN', tokens.access_token);
-
-    // Save refresh token if present
-    if (tokens.refresh_token) {
-      await sbSet('DROPBOX_REFRESH_TOKEN', tokens.refresh_token);
-      console.log('Refresh token saved!');
-    } else {
-      console.log('No refresh token in response. Token type:', tokens.token_type);
-    }
-
-    return {
-      statusCode: 302,
-      headers: { Location: 'https://fieldsourcetracker.netlify.app/?dropbox=connected' },
-      body: '',
-    };
-  } catch(e) {
-    console.error('Exchange error:', e.message);
-    return { statusCode: 500, body: `Error: ${e.message}` };
+    return { statusCode: 302, headers: { Location: 'https://fieldsourcetracker.netlify.app/?dropbox=connected' }, body: '' };
   }
+
+  // Start: only with the shared secret
+  if (!q.key || q.key !== SECRET) return page(false, 'Link not valid', 'Use the full Dropbox connect link, including its ?key= part.');
+  const params = new URLSearchParams({
+    client_id: APP_KEY, redirect_uri: REDIRECT_URI, response_type: 'code',
+    token_access_type: 'offline', state: makeState(),
+  });
+  return { statusCode: 302, headers: { Location: `${DROPBOX_AUTH_URL}?${params.toString()}` }, body: '' };
 };

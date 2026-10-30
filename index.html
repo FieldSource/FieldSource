@@ -3871,11 +3871,9 @@ function openEstimateDetail(id){
         </tbody>
       </table></div>`;
   } else {
-    body += `<div style="font-size:12px;color:var(--text-3);background:var(--bg);border:1px dashed var(--border-2);border-radius:var(--radius-sm);padding:12px">
-      ${e.qbNumber
-        ? `Line items are only on the Billing Tracker for active jobs, and this one doesn't have a job tab yet.${e.qbLink?' Open it in QuickBooks for the full breakdown.':''}`
-        : 'No breakdown for this estimate. It was entered by hand and isn\'t linked to a QuickBooks estimate number.'}
-    </div>`;
+    body += e.qbNumber
+      ? `<div id="qb-lines-slot" style="font-size:12px;color:var(--text-3);padding:12px;border:1px dashed var(--border-2);border-radius:var(--radius-sm)">Loading line items from QuickBooks…</div>`
+      : `<div style="font-size:12px;color:var(--text-3);background:var(--bg);border:1px dashed var(--border-2);border-radius:var(--radius-sm);padding:12px">No breakdown for this estimate. It was entered by hand and isn't linked to a QuickBooks estimate number.</div>`;
   }
 
   if(invs.length){
@@ -3893,6 +3891,7 @@ function openEstimateDetail(id){
   body += `
     ${e.qbSyncedAt?`<div style="font-size:11px;color:var(--text-3);margin-top:12px">Last synced from the Billing Tracker ${new Date(e.qbSyncedAt).toLocaleString()}</div>`:''}
     <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px">
+      ${e.qbNumber?`<button id="qb-pdf-btn" onclick="previewQbEstimatePdf('${escEst(e.qbNumber)}')" class="site-chip" style="padding:8px 14px">📄 Preview estimate PDF</button>`:''}
       ${e.qbLink?`<a href="${escEst(e.qbLink)}" target="_blank" rel="noopener" class="site-chip" style="text-decoration:none;padding:8px 14px">Open in QuickBooks ↗</a>`:''}
       ${canEdit?`<button onclick="document.getElementById('est-detail-overlay').remove();openEstimateModal('${e.id}')" class="site-chip" style="padding:8px 14px">✏️ Edit</button>`:''}
       <button onclick="document.getElementById('est-detail-overlay').remove()" class="btn-save" style="padding:8px 16px">Close</button>
@@ -3905,6 +3904,68 @@ function openEstimateDetail(id){
   overlay.onclick = ev=>{ if(ev.target===overlay) overlay.remove(); };
   overlay.innerHTML = `<div class="modal-sheet" style="max-width:760px;max-height:90vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
   document.body.appendChild(overlay);
+  if(e.qbNumber && !lines.length) loadQbLines(e.qbNumber);
+}
+
+// QuickBooks line items, from the qb_estimates / qb_estimate_lines tables kept fresh by qb-sync.
+async function loadQbLines(docNumber){
+  const slot = document.getElementById('qb-lines-slot');
+  if(!slot) return;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);padding:6px 8px;text-align:left;white-space:nowrap;background:var(--accent)';
+  const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border);vertical-align:top';
+  try{
+    const est = await sbFetch('GET', `/rest/v1/qb_estimates?estimate_number=eq.${encodeURIComponent(docNumber)}&select=id,total,qb_status,synced_at&limit=1`);
+    if(!est || !est.length){
+      slot.textContent = 'This estimate number isn\'t in the QuickBooks sync yet. It should appear after the next sync.';
+      return;
+    }
+    const qlines = await sbFetch('GET', `/rest/v1/qb_estimate_lines?estimate_id=eq.${est[0].id}&select=line_number,description,quantity,unit_price,amount,item_type&order=line_number`);
+    if(!qlines || !qlines.length){ slot.textContent = 'QuickBooks has no line items on this estimate.'; return; }
+    const total = qlines.reduce((t,l)=>t+(Number(l.amount)||0),0);
+    slot.removeAttribute('style');
+    slot.innerHTML = `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th style="${th}">Description</th><th style="${th};text-align:right">Qty</th><th style="${th};text-align:right">Rate</th><th style="${th};text-align:right">Amount</th></tr></thead>
+        <tbody>
+          ${qlines.map(l=>`<tr>
+            <td style="${td}">${escEst(l.description)}</td>
+            <td style="${td};text-align:right">${l.item_type==='DescriptionOnly'?'':(Number(l.quantity)||0).toLocaleString('en-US')}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${l.item_type==='DescriptionOnly'?'':fmtEstMoney2(l.unit_price)}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${l.item_type==='DescriptionOnly'?'':fmtEstMoney2(l.amount)}</td>
+          </tr>`).join('')}
+          <tr><td style="${td};font-weight:700">Total</td><td style="${td}"></td><td style="${td}"></td><td style="${td};text-align:right;font-weight:700;white-space:nowrap">${fmtEstMoney2(total)}</td></tr>
+        </tbody>
+      </table></div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:6px">From QuickBooks · synced ${new Date(est[0].synced_at).toLocaleString()}</div>`;
+  } catch(err){
+    console.error(err);
+    slot.textContent = 'Couldn\'t load line items from QuickBooks.';
+  }
+}
+
+// Opens the real QuickBooks estimate PDF in a new tab.
+async function previewQbEstimatePdf(docNumber){
+  const btn = document.getElementById('qb-pdf-btn');
+  const win = window.open('', '_blank');
+  if(win) win.document.write('<p style="font-family:system-ui;padding:20px">Loading estimate from QuickBooks…</p>');
+  if(btn){ btn.disabled = true; btn.textContent = 'Loading PDF…'; }
+  try{
+    const r = await fetch(`/.netlify/functions/qb-estimate-pdf?doc=${encodeURIComponent(docNumber)}`, {
+      headers: { 'Authorization': 'Bearer '+(currentToken||'') },
+    });
+    if(!r.ok){
+      const err = await r.json().catch(()=>({}));
+      throw new Error(err.error || `Error ${r.status}`);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    if(win) win.location.href = url; else window.open(url, '_blank');
+  } catch(err){
+    if(win) win.close();
+    alert('Could not load the estimate PDF: ' + err.message);
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '📄 Preview estimate PDF'; }
+  }
 }
 
 function fmtEstMoney(n){

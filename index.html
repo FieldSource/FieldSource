@@ -446,7 +446,6 @@ main{padding:12px 16px 100px}
     <button class="vtab" data-pm="calendar" onclick="pmShow('calendar')">Calendar</button>
     <button class="vtab" data-pm="timeline" onclick="pmShow('timeline')">Timeline</button>
     <button class="vtab" data-pm="settings" onclick="pmShow('settings')">Templates &amp; Closures</button>
-    <button class="vtab" onclick="view='consulting-home';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderConsulting()">Classic</button>
   </div>
 </div>
 
@@ -3062,7 +3061,7 @@ function pmProjectsHtml(){
       </div>`;
     }).join('');
   };
-  const legacy = (typeof consultingProjects!=='undefined'?consultingProjects:[]).filter(c=>!pm.projects.some(p=>p.legacy_id===c.id));
+  const legacy = pmLegacyPending();
   const side = `<div class="pm-card" style="position:sticky;top:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
       <div style="font-size:15px;font-weight:700">Projects</div>
@@ -3359,26 +3358,53 @@ async function pmDoAddFromTemplate(projectId){
 }
 
 // Bring projects over from the old Consulting view (stages become phases).
+// Every row gets the same full set of fields (the database rejects a batch whose rows differ).
+// A project that was created but whose phases/tasks failed to copy is filled in on the next try.
+function pmFullRow(r){
+  const base = { id:null, project_id:null, parent_id:null, type:'task', title:'', description:'', owner:'', priority:'Medium', status:'todo',
+    start_date:null, due_date:null, duration_days:null, est_hours:null, budget:null, depends_on:null, auto_schedule:true, done_at:null, sort:0 };
+  const o = { ...base, ...r };
+  ['start_date','due_date','done_at'].forEach(k=>{ if(!o[k] || !/^\d{4}-\d{2}-\d{2}/.test(o[k])) o[k] = null; else o[k] = String(o[k]).slice(0,10); });
+  if(!['High','Medium','Low'].includes(o.priority)) o.priority = 'Medium';
+  return o;
+}
+function pmLegacyPending(){
+  return (typeof consultingProjects!=='undefined'?consultingProjects:[]).filter(c=>{
+    const p = pm.projects.find(x=>x.legacy_id===c.id);
+    return !p || !pm.items.some(i=>i.project_id===p.id);
+  });
+}
 async function pmImportLegacy(){
-  const legacy = consultingProjects.filter(c=>!pm.projects.some(p=>p.legacy_id===c.id));
-  if(!confirm(`Copy ${legacy.length} project(s) from the old Consulting view into the planner? The old ones stay where they are.`)) return;
+  const legacy = pmLegacyPending();
+  if(!legacy.length) return;
+  if(!confirm(`Copy ${legacy.length} project(s) from the Classic view into Projects? The Classic ones stay where they are.`)) return;
+  let done = 0;
   try{
     for(const [n,c] of legacy.entries()){
-      const res = await sbFetch('POST','/rest/v1/pm_projects', { name: c.projectName||c.client, client:c.client, kind:'client', color:PM_COLORS[(pm.projects.length+n)%PM_COLORS.length],
-        status:'Active', notes:c.notes||'', legacy_id:c.id, created_by:(currentUser&&currentUser.email)||'' });
-      const p = res[0]; pm.projects.push(p);
+      let p = pm.projects.find(x=>x.legacy_id===c.id);
+      if(!p){
+        const res = await sbFetch('POST','/rest/v1/pm_projects', { name: c.projectName||c.client||'Imported project', client:c.client||'', kind:'client',
+          color:PM_COLORS[(pm.projects.length+n)%PM_COLORS.length], status:'Active', notes:c.notes||'', legacy_id:c.id, created_by:(currentUser&&currentUser.email)||'' });
+        p = res[0]; pm.projects.push(p);
+      }
       const rows = [];
-      CONSULTING_STAGES.forEach((stage,si)=>{
+      const stages = [...CONSULTING_STAGES, ...new Set((c.tasks||[]).map(t=>t.stage).filter(st=>st && !CONSULTING_STAGES.includes(st)))];
+      stages.forEach((stage,si)=>{
         const phId = crypto.randomUUID();
-        rows.push({ id:phId, project_id:p.id, parent_id:null, type:'phase', title:stage, due_date:(c.stageDueDates||{})[stage]||null, sort:si, status:'todo', priority:'Medium', auto_schedule:true });
-        (c.tasks||[]).filter(t=>t.stage===stage).forEach((t,ti)=>rows.push({ id:crypto.randomUUID(), project_id:p.id, parent_id:phId, type:'task', title:t.title||'Task',
-          description:t.notes||'', priority:t.priority||'Medium', status:t.done?'done':'todo', due_date:t.dueDate||null, done_at:t.done?pmToday():null, sort:ti, auto_schedule:true }));
+        rows.push(pmFullRow({ id:phId, project_id:p.id, type:'phase', title:stage, due_date:(c.stageDueDates||{})[stage]||null, sort:si }));
+        (c.tasks||[]).filter(t=>t.stage===stage).forEach((t,ti)=>rows.push(pmFullRow({ id:crypto.randomUUID(), project_id:p.id, parent_id:phId, type:'task',
+          title:t.title||'Task', description:t.notes||'', priority:t.priority, status:t.done?'done':'todo', due_date:t.dueDate||null, done_at:t.done?pmToday():null, sort:ti })));
       });
-      const ins = await sbFetch('POST','/rest/v1/pm_items', rows.map(r=>({ ...pmClean(r), id:r.id })));
-      pm.items.push(...ins);
+      // tasks with no stage go into the first phase
+      (c.tasks||[]).filter(t=>!t.stage).forEach((t,ti)=>rows.push(pmFullRow({ id:crypto.randomUUID(), project_id:p.id, parent_id:rows[0].id, type:'task',
+        title:t.title||'Task', description:t.notes||'', priority:t.priority, status:t.done?'done':'todo', due_date:t.dueDate||null, done_at:t.done?pmToday():null, sort:100+ti })));
+      const ins = await sbFetch('POST','/rest/v1/pm_items', rows);
+      pm.items.push(...(ins||[]));
+      done++;
     }
-    pmRender(); pmToast('Imported');
-  }catch(e){ alert('Import stopped: '+e.message); }
+    pm.sel = (pm.projects.find(x=>x.legacy_id===legacy[0].id)||{}).id || pm.sel;
+    pmRender(); pmToast(`Imported ${done} project${done===1?'':'s'}`);
+  }catch(e){ pmRender(); alert(`Import stopped after ${done} of ${legacy.length}: ${e.message}`); }
 }
 // ── shared: project filter + color helpers ──
 function pmProjectFilterSel(cur, onchange){

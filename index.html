@@ -2815,6 +2815,12 @@ const PM_TYPES = {
 };
 const PM_COLORS = ['#2563eb','#16a34a','#dc2626','#9333ea','#ea580c','#0891b2','#ca8a04','#db2777','#4f46e5','#65a30d','#0f766e','#7c2d12'];
 const PM_PEOPLE_EXTRA = ['Brian','Wes','Robert','Ryan','Jake','Matt'];
+const PM_DAY_HOURS = 8; // an hours-based task takes ceil(hours / 8) work days on the calendar
+// Each task's length is either in days or in hours. Hours-based tasks still get calendar days for scheduling.
+function pmLenUnit(it){ return it.length_unit==='hours' ? 'hours' : 'days'; }
+function pmLenValue(it){ return pmLenUnit(it)==='hours' ? (it.est_hours ?? null) : (it.duration_days ?? null); }
+function pmDaysFor(unit, value){ const v = Number(value)||0; if(!v) return null; return unit==='hours' ? Math.max(1, Math.ceil(v / PM_DAY_HOURS)) : Math.max(1, Math.round(v)); }
+function pmLenLabel(it){ const v = pmLenValue(it); if(!v) return ''; return pmLenUnit(it)==='hours' ? `${+Number(v).toFixed(1)}h` : `${v}d`; }
 
 // Pick a color for a new project that no active project is using.
 // First the 12 presets; after those, new distinct colors spaced around the color wheel
@@ -2906,7 +2912,7 @@ async function pmLoad(force){
 }
 
 // ── saving ──
-const PM_ITEM_FIELDS = ['project_id','parent_id','type','title','description','owner','priority','status','start_date','due_date','duration_days','est_hours','budget','depends_on','auto_schedule','done_at','sort'];
+const PM_ITEM_FIELDS = ['project_id','parent_id','type','title','description','owner','priority','status','start_date','due_date','duration_days','length_unit','est_hours','budget','depends_on','auto_schedule','done_at','sort'];
 function pmClean(it){ const o={}; PM_ITEM_FIELDS.forEach(k=>{ if(k in it) o[k] = (it[k]==='' && !['title','description','owner'].includes(k)) ? null : it[k]; }); return o; }
 async function pmPatchItem(it){ await sbFetch('PATCH', `/rest/v1/pm_items?id=eq.${it.id}`, { ...pmClean(it), updated_at:new Date().toISOString() }); }
 
@@ -2986,7 +2992,7 @@ function pmTemplateRows(tree, projectId, opts){
     const id = crypto.randomUUID();
     rows.push({ id, project_id:projectId, parent_id:parentId, type: depth===0 ? 'phase' : (n.type==='phase'?'task':(n.type||'task')),
       title:n.title||'Untitled', description:n.description||'', owner:n.owner||'', priority:n.priority||'Medium', status:'todo',
-      start_date:null, due_date:null, duration_days:n.duration||null, est_hours:n.est_hours??null, budget:n.budget??null,
+      start_date:null, due_date:null, length_unit: n.unit==='hours'?'hours':'days', duration_days: n.unit==='hours' ? pmDaysFor('hours', n.est_hours) : (n.duration||null), est_hours:n.est_hours??null, budget:n.budget??null,
       depends_on:null, auto_schedule:true, done_at:null, sort:(opts.sortBase||0)+i });
     if(n.children && n.children.length) walk(n.children, id, depth+1);
   });
@@ -3009,7 +3015,8 @@ function pmTreeFromProject(projectId){
   const build = pid=>pmKids(projectId, pid).map(it=>{
     const n = { title:it.title, type:it.type };
     if(it.description) n.description = it.description;
-    if(it.duration_days) n.duration = it.duration_days;
+    if(pmLenUnit(it)==='hours'){ n.unit = 'hours'; }
+    else if(it.duration_days) n.duration = it.duration_days;
     else if(it.start_date && it.due_date) n.duration = pmWorkdaysBetween(it.start_date, it.due_date);
     if(it.est_hours!=null) n.est_hours = Number(it.est_hours);
     const kids = build(it.id); if(kids.length) n.children = kids;
@@ -3189,8 +3196,9 @@ function pmRowHtml(it, depth){
       ${pr}
       ${it.owner?`<span class="pm-chip">${pmEsc(it.owner)}</span>`:''}
       ${r&&r.total?`<span class="pm-chip">${r.done}/${r.total}</span>`:''}
-      ${(r?r.hours:Number(it.est_hours))?`<span class="pm-chip">${Math.round(r?r.hours:Number(it.est_hours))}h</span>`:''}
-      <span style="font-size:12px;white-space:nowrap;min-width:90px;text-align:right;color:${late?'#dc2626':'var(--text-2)'};font-weight:${late?600:400}">${dates}</span>
+      ${r ? (r.hours?`<span class="pm-chip" title="Total estimated hours">${Math.round(r.hours)}h</span>`:'')
+          : (!pmIsMilestone(it.type) ? `<span class="pm-chip" style="cursor:pointer;${pmLenValue(it)?'':'opacity:.5'}" title="Length: click to change" onclick="pmQuickLength('${it.id}',this)">${pmLenLabel(it)||'+ length'}</span>` : '')}
+      <span onclick="pmEditItem('${it.id}')" title="Click to change dates" style="cursor:pointer;font-size:12px;white-space:nowrap;min-width:90px;text-align:right;color:${late?'#dc2626':'var(--text-2)'};font-weight:${late?600:400}">${dates}</span>
       <span class="pm-acts">
         <button class="pm-ic" title="Add ${isPhase?'task':'subtask'}" onclick="pmEditItem(null,{project_id:'${it.project_id}',parent_id:'${it.id}',type:'task'})">＋</button>
         <button class="pm-ic" title="Move up" onclick="pmMove('${it.id}',-1)">↑</button>
@@ -3200,6 +3208,35 @@ function pmRowHtml(it, depth){
     </div>` + (open ? kids.map(k=>pmRowHtml(k, depth+1)).join('') : '');
 }
 
+// Click a length chip in the project tree to change it on the spot.
+function pmQuickLength(id, el){
+  const it = pmItem(id); if(!it) return;
+  document.getElementById('pm-quick')?.remove();
+  const r = el.getBoundingClientRect();
+  const box = document.createElement('div'); box.id = 'pm-quick';
+  box.style.cssText = `position:fixed;left:${Math.min(r.left, window.innerWidth-250)}px;top:${r.bottom+6}px;z-index:9998;background:var(--card);border:1px solid var(--border-2);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:10px;width:230px`;
+  box.innerHTML = `<div class="pm-lbl">Length</div>
+    <div style="display:flex;gap:4px"><input id="pmq-v" type="number" min="0" step="0.5" class="pm-in" value="${pmEsc(pmLenValue(it)??'')}">
+    <select id="pmq-u" class="pm-in" style="width:auto"><option value="days"${pmLenUnit(it)==='days'?' selected':''}>days</option><option value="hours"${pmLenUnit(it)==='hours'?' selected':''}>hours</option></select></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:4px">${it.start_date?'The due date moves to match.':'Set a start date (click the dates) to schedule it.'}</div>
+    <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:8px"><button class="pm-btn" onclick="document.getElementById('pm-quick').remove()">Cancel</button><button class="pm-btn primary" onclick="pmQuickLengthSave('${id}')">Save</button></div>`;
+  document.body.appendChild(box);
+  const inp = document.getElementById('pmq-v'); inp.focus(); inp.select();
+  inp.onkeydown = e=>{ if(e.key==='Enter') pmQuickLengthSave(id); if(e.key==='Escape') box.remove(); };
+  setTimeout(()=>document.addEventListener('mousedown', function off(ev){ if(!box.contains(ev.target)){ box.remove(); document.removeEventListener('mousedown', off); } }), 0);
+}
+async function pmQuickLengthSave(id){
+  const it = pmItem(id), unit = document.getElementById('pmq-u').value, raw = document.getElementById('pmq-v').value;
+  const val = raw==='' ? null : Number(raw);
+  if(unit==='hours'){ it.est_hours = val; }        // hours-based: the hours are the length
+  else if(it.length_unit==='hours'){ it.est_hours = null; } // switching hours -> days: drop the old hours length
+  it.length_unit = unit;
+  it.duration_days = pmDaysFor(unit, val);
+  if(it.start_date && it.duration_days) it.due_date = pmAddWorkdays(it.start_date, it.duration_days);
+  document.getElementById('pm-quick')?.remove();
+  try{ await pmPatchItem(it); const n = await pmReschedule(it.project_id); pmRender(); if(n) pmToast(`${n} dependent item${n===1?'':'s'} rescheduled`); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
 function pmCollapseAll(projectId, collapse){
   pm.items.filter(i=>i.project_id===projectId && pm.items.some(c=>c.parent_id===i.id)).forEach(i=>{ if(collapse) pm.collapsed[i.id]=true; else delete pm.collapsed[i.id]; });
   pmSaveCollapsed(); pmRender();
@@ -3248,12 +3285,14 @@ function pmEditItem(id, defaults){
     </div>
     <div id="pmi-dates" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">
       <div class="pmi-span"><div class="pm-lbl">Start</div><input id="pmi-start" type="date" class="pm-in" value="${v('start_date')}" onchange="pmItemDatesChanged('start')"></div>
-      <div class="pmi-span"><div class="pm-lbl">Work days</div><input id="pmi-dur" type="number" min="1" class="pm-in" value="${v('duration_days')}" oninput="pmItemDatesChanged('dur')"></div>
+      <div class="pmi-span"><div class="pm-lbl">Length</div><div style="display:flex;gap:4px">
+        <input id="pmi-dur" type="number" min="0" step="0.5" class="pm-in" value="${pmEsc(pmLenValue(it)??'')}" oninput="pmItemDatesChanged('dur')">
+        <select id="pmi-unit" class="pm-in" style="width:auto" onchange="pmItemUnitChanged()"><option value="days"${pmLenUnit(it)==='days'?' selected':''}>days</option><option value="hours"${pmLenUnit(it)==='hours'?' selected':''}>hours</option></select></div></div>
       <div><div class="pm-lbl" id="pmi-due-lbl">Due</div><input id="pmi-due" type="date" class="pm-in" value="${v('due_date')}" onchange="pmItemDatesChanged('due')"></div>
     </div>
     <div id="pmi-dates-note" style="font-size:11px;color:var(--text-3);margin-top:4px"></div>
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:10px">
-      <div><div class="pm-lbl">Estimated hours</div><input id="pmi-hours" type="number" step="0.5" class="pm-in" value="${v('est_hours')}"></div>
+      <div id="pmi-hours-wrap"><div class="pm-lbl">Hours of work (optional)</div><input id="pmi-hours" type="number" step="0.5" class="pm-in" value="${pmLenUnit(it)==='days'?v('est_hours'):''}" placeholder="for budgeting"></div>
       <div><div class="pm-lbl">Budget ($)</div><input id="pmi-budget" type="number" step="1" class="pm-in" value="${v('budget')}"></div>
     </div>
     <div style="margin-top:10px"><div class="pm-lbl">Can't start until this is done</div>
@@ -3268,6 +3307,7 @@ function pmEditItem(id, defaults){
       <button class="pm-btn primary" onclick="pmSaveItem(${id?`'${id}'`:'null'}, ${pmEsc(JSON.stringify({project_id:it.project_id,parent_id:it.parent_id||null}))})">Save</button></div>
     </div>`);
   pmItemTypeChanged();
+  pmItemUnitChanged();
 }
 function pmItemTypeChanged(){
   const t = document.getElementById('pmi-type').value;
@@ -3277,13 +3317,21 @@ function pmItemTypeChanged(){
   document.getElementById('pmi-dates').style.gridTemplateColumns = ms ? '1fr' : 'repeat(3,1fr)';
   pmItemDatesChanged();
 }
+function pmItemUnitChanged(){
+  const unit = document.getElementById('pmi-unit').value;
+  document.getElementById('pmi-hours-wrap').style.visibility = unit==='hours' ? 'hidden' : '';
+  pmItemDatesChanged('dur');
+}
 function pmItemDatesChanged(src){
   const s = document.getElementById('pmi-start'), d = document.getElementById('pmi-dur'), e = document.getElementById('pmi-due'), note = document.getElementById('pmi-dates-note');
+  const unit = (document.getElementById('pmi-unit')||{}).value || 'days';
   if(pmIsMilestone(document.getElementById('pmi-type').value)){ note.textContent=''; return; }
-  if((src==='start'||src==='dur') && s.value && Number(d.value)>0) e.value = pmAddWorkdays(s.value, Number(d.value));
-  else if(src==='due' && s.value && e.value && e.value>=s.value) d.value = pmWorkdaysBetween(s.value, e.value);
-  else if(src==='start' && s.value && e.value && e.value>=s.value) d.value = pmWorkdaysBetween(s.value, e.value);
-  note.textContent = s.value && e.value ? `${pmWorkdaysBetween(s.value, e.value)} work day(s), weekends and closures skipped.` : 'Leave dates blank if you don\'t know them yet.';
+  const days = pmDaysFor(unit, d.value);
+  if((src==='start'||src==='dur') && s.value && days) e.value = pmAddWorkdays(s.value, days);
+  else if(unit==='days' && (src==='due'||src==='start') && s.value && e.value && e.value>=s.value) d.value = pmWorkdaysBetween(s.value, e.value);
+  const span = s.value && e.value ? pmWorkdaysBetween(s.value, e.value) : 0;
+  if(unit==='hours' && Number(d.value)>0) note.textContent = `${d.value} hours of work = ${pmDaysFor('hours', d.value)} work day(s) on the calendar (${PM_DAY_HOURS} hrs/day).` + (span ? ` Scheduled across ${span} work day(s).` : '');
+  else note.textContent = span ? `${span} work day(s), weekends and closures skipped.` : 'Leave dates blank if you don\'t know them yet.';
 }
 async function pmSaveItem(id, base){
   const g = k=>document.getElementById(k).value;
@@ -3291,8 +3339,11 @@ async function pmSaveItem(id, base){
   if(!title){ document.getElementById('pmi-err').textContent='Give it a title.'; return; }
   const type = g('pmi-type'), ms = pmIsMilestone(type);
   const row = { ...base, title, type, description:g('pmi-desc'), owner:g('pmi-owner').trim(), priority:g('pmi-priority'), status:g('pmi-status'),
-    start_date: ms ? null : (g('pmi-start')||null), due_date: g('pmi-due')||null, duration_days: ms ? null : (Number(g('pmi-dur'))||null),
-    est_hours: g('pmi-hours')===''?null:Number(g('pmi-hours')), budget: g('pmi-budget')===''?null:Number(g('pmi-budget')),
+    start_date: ms ? null : (g('pmi-start')||null), due_date: g('pmi-due')||null,
+    length_unit: ms ? 'days' : g('pmi-unit'),
+    duration_days: ms ? null : pmDaysFor(g('pmi-unit'), g('pmi-dur')),
+    est_hours: (!ms && g('pmi-unit')==='hours') ? (g('pmi-dur')===''?null:Number(g('pmi-dur'))) : (g('pmi-hours')===''?null:Number(g('pmi-hours'))),
+    budget: g('pmi-budget')===''?null:Number(g('pmi-budget')),
     depends_on: g('pmi-dep')||null, auto_schedule: document.getElementById('pmi-auto').checked };
   if(row.start_date && row.due_date && row.due_date < row.start_date){ document.getElementById('pmi-err').textContent='Due date is before the start date.'; return; }
   const old = id ? pmItem(id) : null;
@@ -3409,7 +3460,7 @@ async function pmDoAddFromTemplate(projectId){
 // A project that was created but whose phases/tasks failed to copy is filled in on the next try.
 function pmFullRow(r){
   const base = { id:null, project_id:null, parent_id:null, type:'task', title:'', description:'', owner:'', priority:'Medium', status:'todo',
-    start_date:null, due_date:null, duration_days:null, est_hours:null, budget:null, depends_on:null, auto_schedule:true, done_at:null, sort:0 };
+    start_date:null, due_date:null, duration_days:null, length_unit:'days', est_hours:null, budget:null, depends_on:null, auto_schedule:true, done_at:null, sort:0 };
   const o = { ...base, ...r };
   ['start_date','due_date','done_at'].forEach(k=>{ if(!o[k] || !/^\d{4}-\d{2}-\d{2}/.test(o[k])) o[k] = null; else o[k] = String(o[k]).slice(0,10); });
   if(!['High','Medium','Low'].includes(o.priority)) o.priority = 'Medium';
@@ -3681,8 +3732,9 @@ function pmTplRender(fresh){
     return `<div style="display:flex;align-items:center;gap:6px;padding:5px 6px 5px ${6+depth*24}px;border-bottom:1px solid var(--border);${isPhase?'background:var(--surface)':''}">
       <input value="${pmEsc(n.title)}" oninput="pmTplSet('${n._k}','title',this.value)" class="pm-in" style="flex:1;min-width:140px;padding:4px 6px;${isPhase?'font-weight:600':''}" placeholder="${isPhase?'Phase name':'Task name'}">
       ${isPhase?'':`<select onchange="pmTplSet('${n._k}','type',this.value);pmTplRender()" class="pm-in" style="width:150px;padding:4px;font-size:12px">${types.map(([v,l])=>`<option value="${v}"${n.type===v?' selected':''}>${l}</option>`).join('')}</select>`}
-      ${isPhase||ms||hasKids?'<span style="width:62px"></span>':`<input type="number" min="1" value="${n.duration??''}" oninput="pmTplSet('${n._k}','duration',this.value===''?null:+this.value)" class="pm-in" style="width:62px;padding:4px;font-size:12px" placeholder="days" title="Length in work days">`}
-      ${isPhase||hasKids?'<span style="width:58px"></span>':`<input type="number" min="0" step="0.5" value="${n.est_hours??''}" oninput="pmTplSet('${n._k}','est_hours',this.value===''?null:+this.value)" class="pm-in" style="width:58px;padding:4px;font-size:12px" placeholder="hrs" title="Estimated hours">`}
+      ${isPhase||ms||hasKids?'<span style="width:136px"></span>':`<span style="display:flex;gap:3px;width:136px">
+        <input type="number" min="0" step="0.5" value="${(n.unit==='hours'?n.est_hours:n.duration)??''}" oninput="pmTplSetLen('${n._k}',this.value)" class="pm-in" style="width:56px;padding:4px;font-size:12px" placeholder="length" title="Length">
+        <select onchange="pmTplSetUnit('${n._k}',this.value)" class="pm-in" style="width:76px;padding:4px;font-size:12px"><option value="days"${n.unit!=='hours'?' selected':''}>days</option><option value="hours"${n.unit==='hours'?' selected':''}>hours</option></select></span>`}
       <span style="display:flex;gap:1px;flex-shrink:0">
         ${ms?'<span style="width:26px"></span>':`<button class="pm-ic" title="Add ${isPhase?'a task':'a subtask'} under this" onclick="pmTplAdd('${n._k}')">＋</button>`}
         <button class="pm-ic" title="Move up" onclick="pmTplMove('${n._k}',-1)">↑</button>
@@ -3697,7 +3749,7 @@ function pmTplRender(fresh){
       <div style="flex:1"><div class="pm-lbl">Template name</div><input id="pmt-name" class="pm-in" value="${pmEsc(pmTpl.name)}" oninput="pmTpl.name=this.value;pmTpl.dirty=true" style="font-weight:600;font-size:15px"></div>
       <button class="pm-btn" style="margin-top:16px" onclick="pmTplClose()">✕</button>
     </div>
-    <div style="font-size:12px;color:var(--text-3);margin:8px 0">${pmTpl.items.length} phases · ${total-pmTpl.items.length} tasks${hrs(pmTpl.items)?` · ${Math.round(hrs(pmTpl.items))} est. hours`:''}. <b>＋</b> adds a task under a phase or a subtask under a task. <b>days</b> = length in work days, <b>hrs</b> = estimated hours (both optional).</div>
+    <div style="font-size:12px;color:var(--text-3);margin:8px 0">${pmTpl.items.length} phases · ${total-pmTpl.items.length} tasks. <b>＋</b> adds a task under a phase or a subtask under a task. <b>Length</b> is optional: pick <b>days</b> for multi-day work or <b>hours</b> for short items (${PM_DAY_HOURS} hours = 1 work day on the calendar).</div>
     <div style="border:1px solid var(--border);border-radius:var(--radius-sm);max-height:58vh;overflow-y:auto">${pmTpl.items.map(n=>row(n,0)).join('') || '<div style="padding:12px;color:var(--text-3);font-size:13px">No phases yet.</div>'}</div>
     <button class="pm-btn" style="margin-top:8px" onclick="pmTplAddPhase()">+ Add phase</button>
     <div style="font-size:11px;color:var(--text-3);margin-top:8px">Changes apply to new projects made from this template. Projects already created from it don't change.</div>
@@ -3711,6 +3763,18 @@ function pmTplRender(fresh){
   else { const sheet = o.firstElementChild, st = sheet.querySelector('div[style*="max-height:58vh"]'), top = st?st.scrollTop:0; sheet.innerHTML = '<div class="sheet-handle"></div>'+html; const st2 = sheet.querySelector('div[style*="max-height:58vh"]'); if(st2) st2.scrollTop = top; }
 }
 function pmTplSet(k, field, val){ const e = pmTpl.keys.get(k); if(!e) return; e.node[field] = val; pmTpl.dirty = true; if(field==='type' && pmIsMilestone(val)){ delete e.node.duration; e.node.children = []; } }
+function pmTplSetLen(k, val){
+  const e = pmTpl.keys.get(k); if(!e) return; const v = val===''?null:+val;
+  if(e.node.unit==='hours') e.node.est_hours = v; else { e.node.duration = v; }
+  pmTpl.dirty = true;
+}
+function pmTplSetUnit(k, unit){
+  const e = pmTpl.keys.get(k); if(!e) return; const n = e.node;
+  const cur = n.unit==='hours' ? n.est_hours : n.duration;
+  if(unit==='hours'){ n.unit='hours'; n.est_hours = cur ?? null; delete n.duration; }
+  else { delete n.unit; n.duration = cur ?? null; delete n.est_hours; }
+  pmTpl.dirty = true; pmTplRender();
+}
 function pmTplAdd(k){ const e = pmTpl.keys.get(k); e.node.children = e.node.children||[]; e.node.children.push({ title:'', type:'task', children:[] }); pmTpl.dirty = true; pmTplRender(); pmTplFocusLast(e.node.children[e.node.children.length-1]); }
 function pmTplAddPhase(){ pmTpl.items.push({ title:'', type:'phase', children:[] }); pmTpl.dirty = true; pmTplRender(); pmTplFocusLast(pmTpl.items[pmTpl.items.length-1]); }
 function pmTplFocusLast(node){ setTimeout(()=>{ const inp = document.querySelector(`#pm-overlay input[oninput*="'${node._k}','title'"]`); if(inp){ inp.focus(); inp.scrollIntoView({block:'nearest'}); } }, 0); }
@@ -3732,8 +3796,8 @@ function pmTplClose(){ if(pmTpl && pmTpl.dirty && !confirm('Close without saving
 function pmTplStrip(nodes, depth){
   return nodes.filter(n=>(n.title||'').trim()).map(n=>{
     const o = { title:n.title.trim(), type: depth===0 ? 'phase' : (n.type||'task') };
-    if(n.duration && !pmIsMilestone(o.type)) o.duration = n.duration;
-    if(n.est_hours!=null && n.est_hours!=='') o.est_hours = n.est_hours;
+    if(n.unit==='hours' && !pmIsMilestone(o.type)){ o.unit = 'hours'; if(n.est_hours!=null && n.est_hours!=='') o.est_hours = n.est_hours; }
+    else { if(n.duration && !pmIsMilestone(o.type)) o.duration = n.duration; if(n.est_hours!=null && n.est_hours!=='') o.est_hours = n.est_hours; }
     if(n.description) o.description = n.description;
     const kids = pmTplStrip(n.children||[], depth+1); if(kids.length) o.children = kids;
     return o;

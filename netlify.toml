@@ -1,2 +1,2 @@
-[functions."qb-sync"]
+[functions."qb-sync-hourly"]
   schedule = "@hourly"

@@ -2965,7 +2965,7 @@ function pmComputeSchedule(projectId){
       if(pmIsMilestone(it.type)) due = start;
       else if(it.duration_days) due = pmAddWorkdays(start, it.duration_days);
       else if(it.start_date && it.due_date) due = pmAddWorkdays(start, Math.max(1, pmWorkdaysBetween(it.start_date, it.due_date)));
-      else due = it.due_date && it.due_date >= start ? it.due_date : null;
+      else due = it.due_date && it.due_date >= start ? it.due_date : start; // no length set: treat as a one-day item
       const newStart = pmIsMilestone(it.type) ? null : start;
       if((it.start_date||null)!==newStart || (it.due_date||null)!==due){ it.start_date = newStart; it.due_date = due; changed.set(it.id, it); moved = true; }
     });
@@ -3372,7 +3372,8 @@ function pmRowHtml(it, depth){
       <span style="${tw};flex-shrink:0;width:12px;text-align:center" title="${PM_TYPES[it.type]?.label||''}">${isPhase?'':PM_TYPES[it.type]?.icon||'•'}</span>
       <span onclick="pmEditItem('${it.id}')" style="cursor:pointer;flex:1;min-width:120px;${it.status==='done'&&!isPhase?'text-decoration:line-through':''}">${pmEsc(it.title)}
         ${it.status==='in_progress'?'<span class="pm-chip" style="background:#dbeafe;color:#1d4ed8;margin-left:4px">In progress</span>':''}
-        ${dep?`<span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:4px">↳ ${pmEsc(pmTriggerLabel(it, dep))}</span>`:''}</span>
+        ${dep?`<span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:4px">⚡ ${pmEsc(pmTriggerLabel(it, dep))}</span>`:''}
+        ${(()=>{ const nx = pm.items.filter(x=>x.depends_on===it.id); return nx.length ? `<span style="font-size:11px;color:#a16207;font-weight:400;margin-left:4px" title="Sets off: ${pmEsc(nx.map(x=>x.title).join(', '))}">⚡ sets off ${nx.length===1?pmEsc(nx[0].title):nx.length+' tasks'}</span>` : ''; })()}</span>
       ${pr}
       ${pmPartyChip(it)}
       ${it.owner?`<span class="pm-chip" title="${pmIsExternal(it)?'Field Source follow-up':'Owner'}">${pmIsExternal(it)?'↻ ':''}${pmEsc(it.owner)}</span>`:''}
@@ -3593,19 +3594,26 @@ function pmEditItem(id, defaults){
       <div id="pmi-hours-wrap"><div class="pm-lbl">Hours of work (optional)</div><input id="pmi-hours" type="number" step="0.5" class="pm-in" value="${pmLenUnit(it)==='days'?v('est_hours'):''}" placeholder="for budgeting"></div>
 
     </div>
-    <div style="margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm)"><div class="pm-lbl">Trigger: starts based on another item</div>
-      <select id="pmi-dep" class="pm-in" onchange="document.getElementById('pmi-auto-wrap').style.display=this.value?'':'none'"><option value="">(none, I'll schedule it myself)</option>
-        ${depOpts.map(d=>`<option value="${d.id}"${it.depends_on===d.id?' selected':''}>${pmEsc(path(d))}</option>`).join('')}</select>
-      <div id="pmi-auto-wrap" style="display:${it.depends_on?'':'none'};margin-top:8px">
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:13px">
-          Starts
-          <select id="pmi-deptype" class="pm-in" style="width:auto"><option value="finish"${it.dep_type!=='start'?' selected':''}>after it finishes</option><option value="start"${it.dep_type==='start'?' selected':''}>when it starts</option></select>
-          plus <input id="pmi-deplag" type="number" min="0" class="pm-in" style="width:60px" value="${parseInt(it.dep_lag)||0}"> work days
-        </div>
-        <label style="font-size:12px;color:var(--text-2);display:flex;gap:6px;align-items:center;margin-top:8px"><input id="pmi-depwait" type="checkbox" ${it.dep_wait?'checked':''}> Don't put it on the calendar until that actually happens (shows as "waiting")</label>
-        <label style="font-size:12px;color:var(--text-2);display:flex;gap:6px;align-items:center;margin-top:4px"><input id="pmi-auto" type="checkbox" ${it.auto_schedule!==false?'checked':''}> Move it automatically when that item moves or finishes early/late</label>
+    ${(()=>{ const pred = it.depends_on && pmItem(it.depends_on); return pred ? `<div id="pmi-setoff" style="margin-top:10px;font-size:13px;padding:8px 10px;background:#fef9c3;border-radius:var(--radius-sm);display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span>⚡ Set off by <b>${pmEsc(pred.title)}</b> (${it.dep_type==='start'?'when it starts':'when it finishes'}${parseInt(it.dep_lag)?`, +${parseInt(it.dep_lag)} work days`:''})</span>
+      <button class="pm-btn" onclick="document.getElementById('pmi-dep').value='';document.getElementById('pmi-setoff').style.display='none'">Remove</button></div>` : ''; })()}
+    <input type="hidden" id="pmi-dep" value="${pmEsc(it.depends_on||'')}">
+    <input type="hidden" id="pmi-deptype" value="${it.dep_type==='start'?'start':'finish'}">
+    <input type="hidden" id="pmi-deplag" value="${parseInt(it.dep_lag)||0}">
+    <input type="checkbox" id="pmi-depwait" style="display:none" ${it.dep_wait?'checked':''}>
+    <input type="checkbox" id="pmi-auto" style="display:none" ${it.auto_schedule!==false?'checked':''}>
+    ${it.type==='phase' ? '' : `<div style="margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <div class="pm-lbl">⚡ Triggers: when this is done, start…</div>
+      <div id="pmi-trig-list"></div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+        <select id="pmi-trig-add" class="pm-in" style="flex:1;min-width:180px" onchange="pmTrigAddExisting(this.value);this.value=''"><option value="">+ Add an existing task…</option></select>
       </div>
-    </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input id="pmi-trig-new" class="pm-in" placeholder="…or type a new task to create (added right below this one)" onkeydown="if(event.key==='Enter'){event.preventDefault();pmTrigAddNew()}">
+        <button class="pm-btn" onclick="pmTrigAddNew()">＋ Create</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:6px">Checking this off (or ▶ starting it) puts these on the calendar. Leave "pencil in dates" off to keep them unscheduled until then.</div>
+    </div>`}
     <div id="pmi-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
     <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
       <div>${id?`<button class="pm-btn" style="color:#b91c1c" onclick="document.getElementById('pm-overlay').remove();pmDeleteItem('${id}')">Delete</button>`:''}</div>
@@ -3615,6 +3623,7 @@ function pmEditItem(id, defaults){
   pmItemTypeChanged();
   pmItemUnitChanged();
   pmItemPartyChanged(true);
+  pmTrigInit(it);
 }
 function pmItemPartyChanged(init){
   const pt = (document.querySelector('input[name="pmi-party"]:checked')||{}).value || 'fs';
@@ -3623,6 +3632,81 @@ function pmItemPartyChanged(init){
   const proj = pmProject((pm._editingProject)||'');
   nm.placeholder = pt==='client' ? `Who at the client? (optional${proj&&proj.client?', e.g. '+proj.client:''})` : 'Company or person, e.g. Smith Surveying';
   lbl.textContent = pt==='fs' ? 'Owner' : 'Field Source follow-up';
+}
+// Forward triggers: the items this one sets off (stored on each of those items as depends_on = this item).
+function pmTrigInit(it){
+  pm._trig = { selfId: it.id||null, projectId: it.project_id, parentId: it.parent_id||null,
+    rows: it.id ? pm.items.filter(x=>x.depends_on===it.id).map(x=>({ id:x.id, title:x.title, dep_type:x.dep_type==='start'?'start':'finish', dep_lag:parseInt(x.dep_lag)||0, plan:!x.dep_wait })) : [] };
+  pmTrigRender();
+}
+// Items that can't be set off by this one: itself, its ancestors and descendants, phases, and anything upstream of it (would loop).
+function pmTrigBlocked(){
+  const t = pm._trig, out = new Set();
+  if(t.selfId){
+    out.add(t.selfId); pmDesc(t.selfId).forEach(d=>out.add(d.id));
+    let c = pmItem(t.selfId); while(c && c.parent_id){ out.add(c.parent_id); c = pmItem(c.parent_id); }
+    let up = pmItem(t.selfId); const seen = new Set(); while(up && up.depends_on && !seen.has(up.depends_on)){ seen.add(up.depends_on); out.add(up.depends_on); up = pmItem(up.depends_on); }
+  }
+  return out;
+}
+function pmTrigRender(){
+  const t = pm._trig, list = document.getElementById('pmi-trig-list'), add = document.getElementById('pmi-trig-add');
+  if(!list) return;
+  list.innerHTML = t.rows.filter(r=>!r.removed).map((r,i)=>{
+    const other = !r.isNew && pmItem(r.id), already = other && other.depends_on && other.depends_on!==t.selfId ? pmItem(other.depends_on) : null;
+    const idx = t.rows.indexOf(r);
+    return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border)">
+      <b style="flex:1;min-width:140px">${r.isNew?'＋ ':''}${pmEsc(r.title)}${r.isNew?' <span style="font-weight:400;color:var(--text-3);font-size:11px">(new)</span>':''}</b>
+      <select class="pm-in" style="width:auto;font-size:12px;padding:3px" onchange="pm._trig.rows[${idx}].dep_type=this.value"><option value="finish"${r.dep_type==='finish'?' selected':''}>when this is done</option><option value="start"${r.dep_type==='start'?' selected':''}>when this starts</option></select>
+      + <input type="number" min="0" class="pm-in" style="width:52px;font-size:12px;padding:3px" value="${r.dep_lag}" oninput="pm._trig.rows[${idx}].dep_lag=Math.max(0,parseInt(this.value)||0)"> days
+      <label style="font-size:11px;color:var(--text-2);display:flex;gap:3px;align-items:center" title="Put estimated dates on the calendar now; they move if this item moves"><input type="checkbox" ${r.plan?'checked':''} onchange="pm._trig.rows[${idx}].plan=this.checked"> pencil in dates</label>
+      <button class="pm-ic" title="Don't set this off" onclick="pm._trig.rows[${idx}].removed=true;pmTrigRender()">✕</button>
+      ${already?`<div style="width:100%;font-size:11px;color:#b45309">Currently set off by "${pmEsc(already.title)}". Saving moves it to this one.</div>`:''}
+    </div>`;
+  }).join('') || '<div style="font-size:12px;color:var(--text-3);padding:4px 0">Nothing yet.</div>';
+  if(add){
+    const blocked = pmTrigBlocked(), chosen = new Set(t.rows.filter(r=>!r.removed && !r.isNew).map(r=>r.id));
+    const path = x=>{ const n=[]; let c=x; while(c){ n.unshift(c.title); c = c.parent_id && pmItem(c.parent_id); } return n.join(' › '); };
+    const opts = pm.items.filter(x=>x.project_id===t.projectId && x.type!=='phase' && x.status!=='done' && !blocked.has(x.id) && !chosen.has(x.id))
+      .sort((a,b)=>path(a).localeCompare(path(b)));
+    add.innerHTML = `<option value="">+ Add an existing task…</option>` + opts.map(x=>`<option value="${x.id}">${pmEsc(path(x))}</option>`).join('');
+  }
+}
+function pmTrigAddExisting(id){
+  if(!id) return; const x = pmItem(id); if(!x) return;
+  const prev = pm._trig.rows.find(r=>r.id===id); if(prev){ prev.removed=false; pmTrigRender(); return; }
+  pm._trig.rows.push({ id, title:x.title, dep_type:'finish', dep_lag:0, plan:false });
+  pmTrigRender();
+}
+function pmTrigAddNew(){
+  const inp = document.getElementById('pmi-trig-new'); const title = (inp.value||'').trim(); if(!title) return;
+  pm._trig.rows.push({ id:crypto.randomUUID(), isNew:true, title, dep_type:'finish', dep_lag:0, plan:false });
+  inp.value=''; pmTrigRender();
+}
+// After the item is saved: link, unlink and create the items it sets off.
+async function pmTrigSave(selfId){
+  const t = pm._trig; if(!t) return;
+  const self = pmItem(selfId);
+  const toPatch = [];
+  for(const r of t.rows){
+    if(r.isNew){
+      if(r.removed) continue;
+      const sibs = pmKids(self.project_id, self.parent_id).filter(x=>(x.sort||0) > (self.sort||0));
+      sibs.forEach(x=>{ x.sort = (x.sort||0)+1; toPatch.push(x); });
+      const row = pmFullRow ? pmFullRow({ id:r.id, project_id:self.project_id, parent_id:self.parent_id||null, type:'task', title:r.title, sort:(self.sort||0)+1,
+        depends_on:selfId, dep_type:r.dep_type, dep_lag:r.dep_lag, dep_wait:!r.plan, auto_schedule:true, owner:self.owner||'', party:'fs', party_name:'' }) : null;
+      const ins = await sbFetch('POST','/rest/v1/pm_items', row);
+      pm.items.push(...(ins||[]));
+      continue;
+    }
+    const x = pmItem(r.id); if(!x) continue;
+    if(r.removed){ if(x.depends_on===selfId){ x.depends_on = null; toPatch.push(x); } continue; }
+    Object.assign(x, { depends_on:selfId, dep_type:r.dep_type, dep_lag:r.dep_lag, dep_wait:!r.plan, auto_schedule:true });
+    if(x.dep_wait && x.status==='todo' && !(self.status==='done' || (x.dep_type==='start' && self.status==='in_progress'))){ x.start_date = null; if(!pmIsMilestone(x.type)) x.due_date = null; }
+    toPatch.push(x);
+  }
+  await Promise.all([...new Set(toPatch)].map(pmPatchItem));
+  pm._trig = null;
 }
 function pmItemTypeChanged(){
   const t = document.getElementById('pmi-type').value;
@@ -3659,7 +3743,7 @@ async function pmSaveItem(id, base){
     duration_days: ms ? null : pmDaysFor(g('pmi-unit'), g('pmi-dur')),
     est_hours: (!ms && g('pmi-unit')==='hours') ? (g('pmi-dur')===''?null:Number(g('pmi-dur'))) : (g('pmi-hours')===''?null:Number(g('pmi-hours'))),
 
-    depends_on: g('pmi-dep')||null, auto_schedule: document.getElementById('pmi-auto').checked,
+    depends_on: g('pmi-dep')||null, auto_schedule: document.getElementById('pmi-auto').checked || !g('pmi-dep'),
     dep_type: g('pmi-deptype'), dep_lag: Math.max(0, parseInt(g('pmi-deplag'))||0), dep_wait: document.getElementById('pmi-depwait').checked,
     party: (document.querySelector('input[name="pmi-party"]:checked')||{}).value || 'fs' };
   row.party_name = row.party==='fs' ? '' : g('pmi-partyname').trim();
@@ -3678,7 +3762,9 @@ async function pmSaveItem(id, base){
       pm.items.push(res[0]);
       if(row.parent_id) delete pm.collapsed[row.parent_id];
     }
+    const savedId = id || pm.items[pm.items.length-1].id;
     if(row.owner && row.owner!==prevOwner) pmNotify(row.owner, id ? old : pm.items[pm.items.length-1], 'assigned');
+    await pmTrigSave(savedId);
     document.getElementById('pm-overlay').remove();
     const n = await pmReschedule(row.project_id);
     pmRender();

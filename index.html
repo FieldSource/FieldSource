@@ -9273,7 +9273,7 @@ function updateApprovalBell(){
     if(f.approvalStatus !== 'pending') return false;
     if(isJake) return true;
     // Dan only sees his assigned projects
-    return ['canal winchester','elgin'].some(p=>f.projectName.toLowerCase().includes(p));
+    return ['canal winchester'].some(p=>f.projectName.toLowerCase().includes(p));
   }).length;
   const bell = document.getElementById('approval-bell');
   const badge = document.getElementById('approval-badge');
@@ -9495,7 +9495,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
     });
     if(!uploadRes.ok){ throw new Error('Storage upload failed: ' + uploadRes.statusText); }
 
-    const requiresApproval = ['canal winchester','elgin'].some(p=>(projectName||'').toLowerCase().includes(p));
+    const requiresApproval = ['canal winchester'].some(p=>(projectName||'').toLowerCase().includes(p));
     console.log('Filing invoice — projectName:', projectName, 'requiresApproval:', requiresApproval);
     const meta = {
       job_id: null,

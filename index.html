@@ -7634,6 +7634,58 @@ async function retryAllDropbox(){
   if(btn){ btn.textContent=`Done — ${success} sent${failed?' ('+failed+' failed)':''}`; }
 }
 
+// Invoice viewer: shows the invoice right in the tracker, with its details alongside.
+function previewReportInvoice(i){
+  const f = (window._rptInvoices||[])[i];
+  if(!f || !f.filePath) return;
+  openInvoicePreview(f);
+}
+async function openInvoicePreview(f){
+  document.getElementById('inv-preview-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay centered';
+  overlay.id = 'inv-preview-overlay';
+  overlay.onclick = ev=>{ if(ev.target===overlay) overlay.remove(); };
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const detail = (l,v)=>v?`<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">${l}</div><div style="font-size:13px;color:var(--text)">${esc(v)}</div></div>`:'';
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:1100px;width:100%;max-height:94vh;display:flex;flex-direction:column">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px">
+      <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-end">
+        <div class="sheet-title" style="margin:0">${esc(f.vendorName||f.fileName)}</div>
+        ${detail('Project', f.projectName)}${detail('Amount', typeof poFmt==='function'?poFmt(f.amount||0):f.amount)}
+        ${detail('Invoice date', f.invoiceDate)}${detail('Invoice #', f.invoiceNumber)}
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <a id="inv-preview-newtab" target="_blank" rel="noopener" class="site-chip" style="padding:6px 12px;text-decoration:none;display:none">Open in new tab ↗</a>
+        <button onclick="document.getElementById('inv-preview-overlay').remove()" class="site-chip" style="padding:6px 12px">✕</button>
+      </div>
+    </div>
+    <div id="inv-preview-body" style="flex:1;min-height:70vh;border:1px solid var(--border);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;color:var(--text-3);font-size:13px;background:var(--bg)">Loading invoice…</div>
+  </div>`;
+  document.body.appendChild(overlay);
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/invoices/${f.filePath}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${sbToken()}`, 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresIn: 600 }),
+    });
+    const data = await res.json();
+    if(!data.signedURL) throw new Error('Could not load the file');
+    const url = `https://pldlvtlbgxizbppaliag.supabase.co/storage/v1${data.signedURL}`;
+    const body = document.getElementById('inv-preview-body');
+    if(!body) return;
+    const isImg = /\.(png|jpe?g|gif|webp|heic)$/i.test(f.fileName||f.filePath);
+    body.innerHTML = isImg
+      ? `<img src="${url}" style="max-width:100%;max-height:78vh;object-fit:contain">`
+      : `<iframe src="${url}" style="width:100%;height:78vh;border:0;border-radius:var(--radius-sm)"></iframe>`;
+    const nt = document.getElementById('inv-preview-newtab'); if(nt){ nt.href = url; nt.style.display=''; }
+  }catch(e){
+    const body = document.getElementById('inv-preview-body');
+    if(body) body.textContent = 'Could not load the invoice: ' + e.message;
+  }
+}
+
 async function openInvoiceFile(filePath, fileName, projectName){
   try {
     const res = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/sign/invoices/${filePath}`, {
@@ -7949,11 +8001,13 @@ function renderInvoiceReports(){
   <!-- Large Invoices -->
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px">
     <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px">All Invoices${reportMinAmount?' over '+poFmt(parseFloat(reportMinAmount)):''} — Largest First</div>
-    ${largeInvoices.slice(0,20).map(f=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);gap:10px">
+    ${(window._rptInvoices = largeInvoices.slice(0,100), '')}
+    ${largeInvoices.slice(0,100).map((f,ri)=>`<div onclick="previewReportInvoice(${ri})" title="${f.filePath?'Click to view the invoice':'No file attached'}" style="display:flex;justify-content:space-between;align-items:center;padding:8px 6px;margin:0 -6px;border-bottom:1px solid var(--border);gap:10px;cursor:${f.filePath?'pointer':'default'};border-radius:6px" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:500;color:var(--text)">${f.vendorName||f.fileName}</div>
         <div style="font-size:11px;color:var(--text-3)">${f.projectName}${f.invoiceDate?' · '+f.invoiceDate:''}</div>
       </div>
+      ${f.filePath?'<span style="font-size:12px;color:var(--text-3);flex-shrink:0">📄 View</span>':''}
       <div style="font-size:14px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green-dark);flex-shrink:0">${poFmt(f.amount||0)}</div>
     </div>`).join('')}
     ${!largeInvoices.length?'<div style="color:var(--text-3);font-size:13px">No invoices match the current filters</div>':''}

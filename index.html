@@ -1415,11 +1415,14 @@ function renderLabor(){
         <div style="background:var(--border);border-radius:99px;height:6px;overflow:hidden;margin-bottom:10px">
           <div style="background:#dc2626;height:100%;width:${pct}%;border-radius:99px"></div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px">
-          ${Object.entries(data.breakdown).sort((a,b)=>b[1].cost-a[1].cost).map(([person,d])=>`
-            <div style="font-size:12px;display:flex;justify-content:space-between;padding:4px 8px;background:var(--surface);border-radius:6px">
-              <span style="color:var(--text-2)">${person}</span>
-              <span style="font-family:'DM Mono',monospace;color:#dc2626;font-weight:600">${poFmt(d.cost)} <span style="color:var(--text-3);font-weight:400">${d.hours.toFixed(1)}h</span></span>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px">
+          ${Object.entries(data.breakdown).sort((a,b)=>b[1].cost-a[1].cost||b[1].hours-a[1].hours).map(([person,d])=>`
+            <div style="font-size:12px;padding:6px 10px;background:var(--surface);border-radius:6px">
+              <div style="color:var(--text);font-weight:500;margin-bottom:2px">${person}</div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+                <span style="font-family:'DM Mono',monospace;color:${d.cost?'#dc2626':'var(--text-3)'};font-weight:600">${d.cost?poFmt(d.cost):'no rate'}</span>
+                <span style="font-family:'DM Mono',monospace;color:var(--text-3)">${d.hours.toFixed(1)}h</span>
+              </div>
             </div>`).join('')}
         </div>
       </div>`;

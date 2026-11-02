@@ -1336,17 +1336,23 @@ function renderLabor(){
 
   // Aggregate labor cost by site
   const bySite = {};
+  // Everyone on the report counts: the person who filed it plus the crew they listed (same as the Hours tab).
+  const noRate = {};
   filtered.forEach(r=>{
     const hrs = parseHoursFromReport(r);
     if(!hrs) return;
-    const rate = laborRates[r.filedBy]||0;
-    const cost = hrs * rate;
+    const people = [r.filedBy, ...(r.additionalCrew||[])].filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i);
     if(!bySite[r.client]) bySite[r.client] = {cost:0, hours:0, breakdown:{}};
-    bySite[r.client].cost += cost;
-    bySite[r.client].hours += hrs;
-    if(!bySite[r.client].breakdown[r.filedBy]) bySite[r.client].breakdown[r.filedBy]={cost:0,hours:0};
-    bySite[r.client].breakdown[r.filedBy].cost += cost;
-    bySite[r.client].breakdown[r.filedBy].hours += hrs;
+    people.forEach(person=>{
+      const rate = laborRates[person]||0;
+      if(!rate) noRate[person] = (noRate[person]||0) + hrs;
+      const cost = hrs * rate;
+      bySite[r.client].cost += cost;
+      bySite[r.client].hours += hrs;
+      if(!bySite[r.client].breakdown[person]) bySite[r.client].breakdown[person]={cost:0,hours:0};
+      bySite[r.client].breakdown[person].cost += cost;
+      bySite[r.client].breakdown[person].hours += hrs;
+    });
   });
 
   const totalCost = Object.values(bySite).reduce((s,v)=>s+v.cost,0);
@@ -1363,6 +1369,15 @@ function renderLabor(){
   html += `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">
     ${months.map(m=>`<button onclick="laborMonth='${m}';renderLabor()" style="padding:4px 12px;border-radius:99px;border:1px solid ${m===laborMonth?'var(--green)':'var(--border)'};background:${m===laborMonth?'var(--green)':'var(--bg)'};color:${m===laborMonth?'#fff':'var(--text-2)'};font-size:12px;font-weight:500;font-family:inherit;cursor:pointer">${new Date(m+'-15').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</button>`).join('')}
   </div>`;
+
+  // Flag people with hours but no rate, so their cost isn't silently $0
+  const missing = Object.entries(noRate).filter(([p])=>!LABOR_EXCLUDE.includes(p)).sort((a,b)=>b[1]-a[1]);
+  if(missing.length){
+    html += `<div style="background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:13px;color:#713f12">
+      <b>No hourly rate set</b>, so these hours count as $0: ${missing.map(([p,h])=>`${p} (${Math.round(h*10)/10} hrs)`).join(', ')}.
+      Set their rates below${missing.some(([p])=>!allCrew.includes(p))?'. Names not in the rate list below are from older reports or a different spelling':''}.
+    </div>`;
+  }
 
   // Rates editor
   html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">

@@ -144,7 +144,68 @@ async function saveBatch(estimates, realmId) {
       await sb('POST', 'qb_estimate_lines', lines.slice(i, i + 500), 'return=minimal');
     }
   }
-  return { updated: updates.length, inserted: inserts.length };
+  const est = await syncEstimatesTab(estimates, now);
+  return { updated: updates.length, inserted: inserts.length, tab: est };
+}
+
+// Keep the tracker's Estimates tab current straight from QuickBooks (no waiting on the Billing
+// Tracker sheet). Existing rows (matched on QB estimate #) get amount, client, dates and QB status
+// refreshed; people's own status/notes/due dates are left alone, except an estimate that turns
+// Accepted moves to "Approved". New estimates are added only if dated in the last 180 days and
+// still Pending or Accepted, so years of old estimates don't flood the tab.
+const PRE_APPROVAL = ['Not Started', 'Needs Site Visit', 'Needs Shot', 'Estimate In Progress',
+  'Estimate Distributed Internally', 'Estimate Sent'];
+
+function guessType(text) {
+  const t = (text || '').toLowerCase();
+  if (/consult|feasibility|design|study|review|cost estimating|stakeholder/.test(t)) return 'Consulting';
+  if (/plant health|maintenance|aeration|aerification|fertiliz|weed|overseed|topdress|winteriz|infield prep|program|mowing/.test(t)) return 'Maintenance';
+  return 'Construction';
+}
+
+async function syncEstimatesTab(estimates, now) {
+  const withNum = estimates.filter(e => e.DocNumber && /^[\w-]+$/.test(e.DocNumber));
+  if (!withNum.length) return { updated: 0, added: 0 };
+  const nums = withNum.map(e => e.DocNumber);
+  const rows = await sb('GET', `estimates?qb_estimate_number=in.(${nums.join(',')})&select=id,qb_estimate_number,status`);
+  const byNum = new Map((rows || []).map(r => [String(r.qb_estimate_number), r]));
+  const cutoff = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10);
+  let updated = 0;
+  const adds = [];
+  await Promise.all(withNum.map(async e => {
+    const qbStatus = e.TxnStatus || 'Pending';
+    const fields = {
+      amount: parseFloat(e.TotalAmt || 0),
+      client: (e.CustomerRef && e.CustomerRef.name) || '',
+      est_created_date: e.TxnDate || null,
+      accepted_date: e.AcceptedDate || null,
+      qb_status: qbStatus,
+      qb_synced_at: now,
+    };
+    const ex = byNum.get(String(e.DocNumber));
+    if (ex) {
+      if (qbStatus === 'Accepted' && PRE_APPROVAL.includes(ex.status)) fields.status = 'Approved';
+      await sb('PATCH', `estimates?id=eq.${ex.id}`, fields, 'return=minimal');
+      updated++;
+    } else if ((qbStatus === 'Pending' || qbStatus === 'Accepted') && (e.TxnDate || '') >= cutoff) {
+      const first = ((e.Line || []).find(l => l.DetailType === 'SalesItemLineDetail' && l.Description) || {}).Description || '';
+      const firstLine = first.split('\n')[0].replace(/\s+/g, ' ').trim().slice(0, 90);
+      adds.push({
+        ...fields,
+        qb_estimate_number: String(e.DocNumber),
+        project_name: [fields.client, firstLine].filter(Boolean).join(' - ').slice(0, 140) || `Estimate #${e.DocNumber}`,
+        project_date: (e.TxnDate || '').slice(0, 4),
+        type: guessType(first),
+        scope: '',
+        status: qbStatus === 'Accepted' ? 'Approved' : 'Estimate Sent',
+        notes: '',
+        source: 'quickbooks',
+        updated_at: now,
+      });
+    }
+  }));
+  if (adds.length) await sb('POST', 'estimates', adds, 'return=minimal');
+  return { updated, added: adds.length };
 }
 
 exports.handler = async function (event) {
@@ -162,7 +223,7 @@ exports.handler = async function (event) {
     const accessToken = await getAccessToken();
 
     let cursor = q.reset === '1' ? null : await getSetting('QB_SYNC_CURSOR');
-    let synced = 0, inserted = 0, updated = 0, hasMore = true;
+    let synced = 0, inserted = 0, updated = 0, tabUpdated = 0, tabAdded = 0, hasMore = true;
 
     while (hasMore && Date.now() - started < TIME_BUDGET_MS) {
       const where = cursor ? ` WHERE MetaData.LastUpdatedTime > '${cursor}'` : '';
@@ -172,6 +233,7 @@ exports.handler = async function (event) {
 
       const res = await saveBatch(page, realmId);
       synced += page.length; inserted += res.inserted; updated += res.updated;
+      tabUpdated += res.tab.updated; tabAdded += res.tab.added;
 
       cursor = page[page.length - 1].MetaData.LastUpdatedTime;
       await setSetting('QB_SYNC_CURSOR', cursor);
@@ -179,7 +241,7 @@ exports.handler = async function (event) {
     }
 
     await setSetting('QB_LAST_SYNC_AT', new Date().toISOString());
-    return json(200, { synced, inserted, updated, hasMore, cursor, errors: [], synced_at: new Date().toISOString() });
+    return json(200, { synced, inserted, updated, estimates_tab: { updated: tabUpdated, added: tabAdded }, hasMore, cursor, errors: [], synced_at: new Date().toISOString() });
   } catch (e) {
     return json(500, { error: e.message });
   }

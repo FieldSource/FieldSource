@@ -552,7 +552,8 @@ const STATUS_COLORS={upcoming:'#f1f5f9',inprog:'#fef3c7',touchup:'#fee2e2',compl
 const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBsZGx2dGxiZ3hpemJwcGFsaWFnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NzI5NDEsImV4cCI6MjA5MzE0ODk0MX0.uihnFIhsnPWiCg-O9Et7vJOHw_G8OacdDkQ7JNtw8Bg';
 
-async function sbFetch(method, path, body=null){
+async function sbFetch(method, path, body=null, _retried=false){
+  if(currentToken) await ensureFreshToken();
   const token = currentToken || SUPABASE_KEY;
   const opts = {
     method,
@@ -568,7 +569,10 @@ async function sbFetch(method, path, body=null){
   if(!res.ok){
     const t=await res.text();
     console.error('Supabase error:', method, path, t);
-    if(t.includes('JWT expired')){ doLogout(); return null; }
+    if(t.includes('JWT expired')){
+      if(!_retried && await refreshSession()) return sbFetch(method, path, body, true);
+      doLogout(); return null;
+    }
     throw new Error(t);
   }
   const text = await res.text();
@@ -3579,6 +3583,7 @@ let estimateTypeFilter = 'All';
 let estimateSortBy = 'due'; // column key: name,type,amount,created,due,status,days,proposal,tips
 let estimateSortDir = 'asc';
 let estimateCreatedFrom = '';
+let estimateClientFilter = ''; // '' = all clients, '__none__' = no client set
 let estimateCreatedTo = '';
 
 async function loadEstimates(){
@@ -3677,6 +3682,8 @@ function renderEstimates(){
   let filtered = [...estimates];
   if(estimateStatusFilter!=='All') filtered = filtered.filter(e=>e.status===estimateStatusFilter);
   if(estimateTypeFilter!=='All') filtered = filtered.filter(e=>e.type===estimateTypeFilter);
+  if(estimateClientFilter==='__none__') filtered = filtered.filter(e=>!(e.client||'').trim());
+  else if(estimateClientFilter) filtered = filtered.filter(e=>(e.client||'').trim()===estimateClientFilter);
   if(estimateCreatedFrom) filtered = filtered.filter(e=>e.createdDate && e.createdDate>=estimateCreatedFrom);
   if(estimateCreatedTo) filtered = filtered.filter(e=>e.createdDate && e.createdDate<=estimateCreatedTo);
 
@@ -3716,14 +3723,24 @@ function renderEstimates(){
     </div>
   </div>
 
-  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-    ${['All',...ESTIMATE_STATUSES].map(s=>`<button onclick="estimateStatusFilter='${s}';renderEstimates()" class="site-chip${estimateStatusFilter===s?' active':''}">${s}</button>`).join('')}
-  </div>
-  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-    ${['All',...ESTIMATE_TYPES].map(t=>`<button onclick="estimateTypeFilter='${t}';renderEstimates()" class="site-chip${estimateTypeFilter===t?' active':''}">${t}</button>`).join('')}
-  </div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-    <span style="font-size:12px;color:var(--text-3)">Created:</span>
+    <span style="font-size:12px;color:var(--text-3)">Status:</span>
+    <select onchange="estimateStatusFilter=this.value;renderEstimates()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">
+      <option value="All">All statuses</option>
+      ${ESTIMATE_STATUSES.map(st=>`<option value="${st}"${estimateStatusFilter===st?' selected':''}>${st} (${estimates.filter(e=>e.status===st).length})</option>`).join('')}
+    </select>
+    <span style="font-size:12px;color:var(--text-3);margin-left:6px">Type:</span>
+    <select onchange="estimateTypeFilter=this.value;renderEstimates()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">
+      <option value="All">All types</option>
+      ${ESTIMATE_TYPES.map(t=>`<option value="${t}"${estimateTypeFilter===t?' selected':''}>${t} (${estimates.filter(e=>e.type===t).length})</option>`).join('')}
+    </select>
+    <span style="font-size:12px;color:var(--text-3);margin-left:6px">Client:</span>
+    <select onchange="estimateClientFilter=this.value;renderEstimates()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);max-width:220px">
+      <option value="">All clients</option>
+      ${[...new Set(estimates.map(e=>(e.client||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b)).map(c=>`<option value="${escEst(c)}"${estimateClientFilter===c?' selected':''}>${escEst(c)} (${estimates.filter(e=>(e.client||'').trim()===c).length})</option>`).join('')}
+      ${estimates.some(e=>!(e.client||'').trim())?`<option value="__none__"${estimateClientFilter==='__none__'?' selected':''}>No client set (${estimates.filter(e=>!(e.client||'').trim()).length})</option>`:''}
+    </select>
+    <span style="font-size:12px;color:var(--text-3);margin-left:6px">Created:</span>
     ${[['30','Last 30 days'],['90','Last 90 days'],['ytd','This year']].map(([k,l])=>`<button onclick="setEstimateCreatedPreset('${k}')" class="site-chip" style="padding:4px 10px">${l}</button>`).join('')}
     <input type="date" value="${estimateCreatedFrom}" onchange="estimateCreatedFrom=this.value;renderEstimates()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg)">
     <span style="font-size:12px;color:var(--text-3)">to</span>
@@ -9472,6 +9489,7 @@ async function doLogin(){
     localStorage.setItem('fs_token', currentToken);
     localStorage.setItem('fs_refresh', refreshToken);
     localStorage.setItem('fs_user', JSON.stringify(currentUser));
+    localStorage.setItem('fs_login_at', String(Date.now()));
     showApp();
   } catch(e){
     errEl.textContent = 'Connection error. Please try again.';
@@ -9481,6 +9499,9 @@ async function doLogin(){
 
 function doLogout(){
   localStorage.removeItem('fs_token');
+  localStorage.removeItem('fs_refresh');
+  localStorage.removeItem('fs_login_at');
+  refreshToken = null;
   localStorage.removeItem('fs_user');
   currentUser = null; currentToken = null; isAdmin = false; isScheduler = false; isReportOnly = false;
   document.getElementById('login-screen').style.display = 'flex';
@@ -9564,6 +9585,12 @@ function checkSession(){
   const token = localStorage.getItem('fs_token');
   const refresh = localStorage.getItem('fs_refresh');
   const user = localStorage.getItem('fs_user');
+  if(token && user && loginExpiredForDay()){
+    doLogout();
+    const e = document.getElementById('login-error');
+    if(e) e.textContent = 'New day: please sign in again.';
+    return;
+  }
   if(token && user){
     try{
       currentToken = token;
@@ -9592,25 +9619,87 @@ function requireAdmin(action){
 // ── TOKEN REFRESH ────────────────────────────────────────────
 let refreshToken = null;
 
-async function refreshSession(){
-  if(!refreshToken) return;
+// Seconds until the current login token expires (read from the token itself).
+function tokenSecondsLeft(){
   try{
-    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-      method: 'POST',
-      headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken })
-    });
-    const data = await res.json();
-    if(!res.ok || data.error){ doLogout(); return; }
-    currentToken = data.access_token;
-    refreshToken = data.refresh_token;
-    localStorage.setItem('fs_token', currentToken);
-    localStorage.setItem('fs_refresh', refreshToken);
-  } catch(e){ console.warn('Token refresh failed', e); }
+    const part = (currentToken||'').split('.')[1];
+    const exp = JSON.parse(atob(part.replace(/-/g,'+').replace(/_/g,'/'))).exp;
+    return exp - Date.now()/1000;
+  }catch(e){ return -1; }
 }
 
-// Refresh every 45 minutes to stay ahead of the 1hr expiry
-setInterval(refreshSession, 45 * 60 * 1000);
+// Renew the login. Returns true if we have a good token afterwards.
+// Only logs out when Supabase actually rejects the refresh token, never on a network blip.
+let refreshInFlight = null;
+function refreshSession(){
+  if(!refreshToken) refreshToken = localStorage.getItem('fs_refresh');
+  if(!refreshToken) return Promise.resolve(tokenSecondsLeft() > 0);
+  if(refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async ()=>{
+    try{
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken })
+      });
+      const data = await res.json().catch(()=>({}));
+      if(!res.ok || data.error){
+        if(res.status===400 || res.status===401){ doLogout(); return false; }
+        return tokenSecondsLeft() > 0;
+      }
+      currentToken = data.access_token;
+      refreshToken = data.refresh_token;
+      localStorage.setItem('fs_token', currentToken);
+      localStorage.setItem('fs_refresh', refreshToken);
+      return true;
+    } catch(e){ console.warn('Token refresh failed', e); return tokenSecondsLeft() > 0; }
+    finally { refreshInFlight = null; }
+  })();
+  return refreshInFlight;
+}
+
+// ── ONE LOGIN PER DAY ──
+// A login lasts until 3:00 AM the next morning, then everyone signs in again for the new day.
+const DAILY_LOGOUT_HOUR = 3;
+function loginExpiredForDay(){
+  let at = +localStorage.getItem('fs_login_at') || 0;
+  if(!at){ at = Date.now(); localStorage.setItem('fs_login_at', String(at)); } // sessions from before this change start counting now
+  const cutoff = new Date(at);
+  cutoff.setHours(DAILY_LOGOUT_HOUR, 0, 0, 0);
+  if(cutoff.getTime() <= at) cutoff.setDate(cutoff.getDate() + 1);
+  return Date.now() >= cutoff.getTime();
+}
+function endDailySession(){
+  doLogout();
+  const e = document.getElementById('login-error');
+  if(e) e.textContent = 'New day: please sign in again.';
+}
+
+// Make sure the token is good for at least 5 more minutes; renew it if not.
+async function ensureFreshToken(){
+  if(!currentToken) return false;
+  if(currentUser && loginExpiredForDay()){ endDailySession(); return false; }
+  if(tokenSecondsLeft() > 300) return true;
+  return refreshSession();
+}
+
+// Check every minute, and right away when you come back to the tab or wake the computer.
+setInterval(()=>{ if(currentUser) ensureFreshToken(); }, 60 * 1000);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && currentUser) ensureFreshToken(); });
+window.addEventListener('focus', ()=>{ if(currentUser) ensureFreshToken(); });
+
+// Calls to the tracker's own server functions also get a fresh token automatically.
+(function(){
+  const _fetch = window.fetch.bind(window);
+  window.fetch = async function(input, init){
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if(url.startsWith('/.netlify/functions/') && init && init.headers && init.headers['Authorization'] && currentToken){
+      await ensureFreshToken();
+      init = { ...init, headers: { ...init.headers, 'Authorization': 'Bearer ' + (currentToken||'') } };
+    }
+    return _fetch(input, init);
+  };
+})();
 
 // ── DRAG AND DROP ────────────────────────────────────────────
 let dragJobId = null;
@@ -9840,6 +9929,7 @@ async function doResetPassword(){
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes((currentUser.email||'').toLowerCase());
     localStorage.setItem('fs_token', currentToken);
     localStorage.setItem('fs_user', JSON.stringify(currentUser));
+    localStorage.setItem('fs_login_at', String(Date.now()));
     resetAccessToken = null;
     history.replaceState(null, '', window.location.pathname);
     setTimeout(()=>{ document.getElementById('reset-screen').style.display='none'; showApp(); }, 1200);

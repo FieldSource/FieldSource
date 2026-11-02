@@ -2816,6 +2816,36 @@ const PM_TYPES = {
 const PM_COLORS = ['#2563eb','#16a34a','#dc2626','#9333ea','#ea580c','#0891b2','#ca8a04','#db2777','#4f46e5','#65a30d','#0f766e','#7c2d12'];
 const PM_PEOPLE_EXTRA = ['Brian','Wes','Robert','Ryan','Jake','Matt'];
 
+// Pick a color for a new project that no active project is using.
+// First the 12 presets; after those, new distinct colors spaced around the color wheel
+// (golden-angle steps) and checked against what's in use, so colors never repeat among active projects.
+function pmHexToHue(hex){
+  const h=(hex||'#000').replace('#',''); const r=parseInt(h.substr(0,2),16)/255,g=parseInt(h.substr(2,2),16)/255,b=parseInt(h.substr(4,2),16)/255;
+  const mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn; if(!d) return 0;
+  let hu = mx===r ? ((g-b)/d)%6 : mx===g ? (b-r)/d+2 : (r-g)/d+4; return (hu*60+360)%360;
+}
+function pmHslHex(h,s,l){
+  s/=100; l/=100; const k=n=>(n+h/30)%12, a=s*Math.min(l,1-l);
+  const f=n=>Math.round(255*(l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1))))).toString(16).padStart(2,'0');
+  return ('#'+f(0)+f(8)+f(4)).toUpperCase();
+}
+function pmNextColor(){
+  const used = pm.projects.filter(p=>p.status!=='Complete').map(p=>(p.color||'').toUpperCase());
+  const free = PM_COLORS.find(c=>!used.includes(c.toUpperCase()));
+  if(free) return free;
+  const usedHues = used.map(pmHexToHue);
+  let best = null, bestGap = -1;
+  for(let i=0;i<48;i++){
+    const hue = (i*137.508)%360, sat = [70,60,75][i%3];
+    let light = [42,34,46][i%3]; if(hue>40 && hue<190) light -= 10; // yellows/greens/cyans are bright; darken so white text stays readable
+    const gap = Math.min(...usedHues.map(u=>Math.min(Math.abs(u-hue), 360-Math.abs(u-hue))));
+    const c = pmHslHex(hue, sat, light);
+    if(used.includes(c)) continue;
+    if(gap > bestGap){ bestGap = gap; best = c; }
+  }
+  return best || PM_COLORS[0];
+}
+
 const pmEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const pmIsMilestone = t=>t==='milestone_ext'||t==='milestone_int';
 function pmSaveCollapsed(){ try{ localStorage.setItem('pm_collapsed', JSON.stringify(pm.collapsed)); }catch(e){} }
@@ -2987,13 +3017,31 @@ function pmTreeFromProject(projectId){
   });
   return build(null);
 }
-async function pmSaveAsTemplate(projectId){
+function pmSaveAsTemplate(projectId){
   const p = pmProject(projectId); if(!p) return;
-  const name = prompt('Template name:', `${p.name} template`); if(!name) return;
+  pmModal(`<div class="sheet-title">Save as template</div>
+    <div style="font-size:12px;color:var(--text-3);margin:4px 0 12px">Copies this project's phases, tasks and subtasks (with types, work-day lengths and hours, not dates) into a template.</div>
+    <label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="radio" name="pmsat" value="new" checked onchange="document.getElementById('pmsat-new').disabled=false;document.getElementById('pmsat-old').disabled=true"> New template named</label>
+    <input id="pmsat-new" class="pm-in" style="margin:4px 0 10px 22px;width:calc(100% - 22px)" value="${pmEsc(p.name)} template">
+    ${pm.templates.length?`<label style="display:flex;gap:6px;align-items:center;font-size:13px"><input type="radio" name="pmsat" value="old" onchange="document.getElementById('pmsat-new').disabled=true;document.getElementById('pmsat-old').disabled=false"> Replace an existing template</label>
+    <select id="pmsat-old" class="pm-in" disabled style="margin:4px 0 0 22px;width:calc(100% - 22px)">${pm.templates.map(t=>`<option value="${t.id}">${pmEsc(t.name)}</option>`).join('')}</select>`:''}
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
+    <button class="pm-btn primary" onclick="pmDoSaveAsTemplate('${projectId}')">Save</button></div>`, 480);
+}
+async function pmDoSaveAsTemplate(projectId){
+  const items = pmTreeFromProject(projectId);
+  const replace = document.querySelector('input[name="pmsat"]:checked').value==='old';
   try{
-    const row = await sbFetch('POST','/rest/v1/pm_templates', { name, items: pmTreeFromProject(projectId), created_by:(currentUser&&currentUser.email)||'' });
-    pm.templates.push(row[0]); pm.templates.sort((a,b)=>a.name.localeCompare(b.name));
-    pmToast('Template saved');
+    if(replace){
+      const id = document.getElementById('pmsat-old').value, t = pm.templates.find(x=>x.id===id);
+      if(!confirm(`Replace everything in "${t.name}" with this project's phases and tasks?`)) return;
+      await sbFetch('PATCH', `/rest/v1/pm_templates?id=eq.${id}`, { items }); t.items = items;
+    } else {
+      const name = document.getElementById('pmsat-new').value.trim(); if(!name) return;
+      const row = await sbFetch('POST','/rest/v1/pm_templates', { name, items, created_by:(currentUser&&currentUser.email)||'' });
+      pm.templates.push(row[0]); pm.templates.sort((a,b)=>a.name.localeCompare(b.name));
+    }
+    document.getElementById('pm-overlay').remove(); pmToast('Template saved');
   }catch(e){ alert('Could not save template: '+e.message); }
 }
 // ── shell: tabs + rendering ──
@@ -3061,7 +3109,6 @@ function pmProjectsHtml(){
       </div>`;
     }).join('');
   };
-  const legacy = pmLegacyPending();
   const side = `<div class="pm-card" style="position:sticky;top:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
       <div style="font-size:15px;font-weight:700">Projects</div>
@@ -3072,7 +3119,6 @@ function pmProjectsHtml(){
     </select>
     ${group('client','Client projects')}${group('internal','Internal / Field Source')}
     ${!list.length?'<div style="font-size:12px;color:var(--text-3);margin-top:10px">No projects here yet.</div>':''}
-    ${legacy.length?`<button class="pm-btn" style="margin-top:12px;width:100%" onclick="pmImportLegacy()">Import ${legacy.length} project${legacy.length===1?'':'s'} from the old Consulting view</button>`:''}
   </div>`;
   const p = pmProject(pm.sel);
   return `<div class="pm-grid">${side}<div>${p ? pmWorkspaceHtml(p) : `<div class="pm-card" style="color:var(--text-3)">Pick a project on the left, or click <b>+ New</b>.</div>`}</div></div>`;
@@ -3268,7 +3314,7 @@ async function pmSaveItem(id, base){
 }
 
 function pmEditProject(id){
-  const p = id ? pmProject(id) : { name:'', client:'', kind:'client', color: PM_COLORS[pm.projects.length % PM_COLORS.length], status:'Active', start_date:'', notes:'' };
+  const p = id ? pmProject(id) : { name:'', client:'', kind:'client', color: pmNextColor(), status:'Active', start_date:'', notes:'' };
   const tplOpts = pm.templates.map(t=>`<option value="${t.id}">${pmEsc(t.name)}</option>`).join('');
   pmModal(`
     <div class="sheet-title">${id?'Edit project':'New project'}</div>
@@ -3280,7 +3326,8 @@ function pmEditProject(id){
       <div><div class="pm-lbl">Status</div><select id="pmp-status" class="pm-in">${['Active','On hold','Complete'].map(s=>`<option${p.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
       <div><div class="pm-lbl">Start date</div><input id="pmp-start" type="date" class="pm-in" value="${pmEsc(p.start_date||'')}"></div>
       <div><div class="pm-lbl">Color</div><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-        ${PM_COLORS.map(c=>`<span onclick="document.getElementById('pmp-color').value='${c}'" style="width:20px;height:20px;border-radius:50%;background:${c};cursor:pointer;display:inline-block"></span>`).join('')}
+        ${PM_COLORS.map(c=>{ const taken = pm.projects.find(x=>x.id!==id && x.status!=='Complete' && (x.color||'').toUpperCase()===c.toUpperCase());
+          return `<span onclick="document.getElementById('pmp-color').value='${c}'" title="${taken?'Used by '+pmEsc(taken.name):'Available'}" style="width:20px;height:20px;border-radius:50%;background:${c};cursor:pointer;display:inline-block;position:relative;${taken?'opacity:.35':''}"></span>`; }).join('')}
         <input id="pmp-color" type="color" value="${pmEsc(p.color||'#2563eb')}" style="width:32px;height:24px;border:none;background:none"></div></div>
     </div>
     <div style="margin-top:10px"><div class="pm-lbl">Notes</div><textarea id="pmp-notes" class="pm-in" rows="2">${pmEsc(p.notes||'')}</textarea></div>
@@ -3384,7 +3431,7 @@ async function pmImportLegacy(){
       let p = pm.projects.find(x=>x.legacy_id===c.id);
       if(!p){
         const res = await sbFetch('POST','/rest/v1/pm_projects', { name: c.projectName||c.client||'Imported project', client:c.client||'', kind:'client',
-          color:PM_COLORS[(pm.projects.length+n)%PM_COLORS.length], status:'Active', notes:c.notes||'', legacy_id:c.id, created_by:(currentUser&&currentUser.email)||'' });
+          color:pmNextColor(), status:'Active', notes:c.notes||'', legacy_id:c.id, created_by:(currentUser&&currentUser.email)||'' });
         p = res[0]; pm.projects.push(p);
       }
       const rows = [];
@@ -3605,27 +3652,136 @@ function pmGanttToday(){
   if(line) s.scrollLeft = Math.max(0, parseFloat(line.style.left) - 120);
 }
 
+// ── Template editor ──
+// Edit a template's phases, tasks and subtasks directly. Works on a copy; nothing saves until Save.
+let pmTpl = null; // { id|null, name, items:[nodes], keys:Map }
+function pmTplIndex(){
+  pmTpl.keys = new Map(); let k = 0;
+  const walk = (nodes, parent)=>nodes.forEach(n=>{ n._k = 'n'+(k++); pmTpl.keys.set(n._k, { node:n, list:nodes, parent }); walk(n.children = n.children||[], n); });
+  walk(pmTpl.items, null);
+}
+function pmTplOpen(id){
+  const t = id ? pm.templates.find(x=>x.id===id) : null;
+  pmTpl = { id: t ? t.id : null, name: t ? t.name : 'New template', items: t ? JSON.parse(JSON.stringify(t.items||[])) : [{ title:'New phase', type:'phase', children:[] }], dirty:false };
+  pmTplRender(true);
+}
+function pmTplCopy(id){
+  const t = pm.templates.find(x=>x.id===id);
+  pmTpl = { id:null, name: t.name+' (copy)', items: JSON.parse(JSON.stringify(t.items||[])), dirty:true };
+  pmTplRender(true);
+}
+function pmTplRender(fresh){
+  pmTplIndex();
+  const count = n=>(n.children||[]).reduce((s,c)=>s+1+count(c),0);
+  const total = pmTpl.items.reduce((s,p)=>s+1+count(p),0);
+  const hrs = (nodes)=>nodes.reduce((s,n)=>s+(Number(n.est_hours)||0)+hrs(n.children||[]),0);
+  const row = (n, depth)=>{
+    const isPhase = depth===0, ms = pmIsMilestone(n.type), hasKids = (n.children||[]).length>0;
+    const types = isPhase ? [['phase','▤ Phase']] : [['task','• Task'],['deliverable','■ Deliverable'],['milestone_ext','◆ Client milestone'],['milestone_int','◇ Internal milestone']];
+    return `<div style="display:flex;align-items:center;gap:6px;padding:5px 6px 5px ${6+depth*24}px;border-bottom:1px solid var(--border);${isPhase?'background:var(--surface)':''}">
+      <input value="${pmEsc(n.title)}" oninput="pmTplSet('${n._k}','title',this.value)" class="pm-in" style="flex:1;min-width:140px;padding:4px 6px;${isPhase?'font-weight:600':''}" placeholder="${isPhase?'Phase name':'Task name'}">
+      ${isPhase?'':`<select onchange="pmTplSet('${n._k}','type',this.value);pmTplRender()" class="pm-in" style="width:150px;padding:4px;font-size:12px">${types.map(([v,l])=>`<option value="${v}"${n.type===v?' selected':''}>${l}</option>`).join('')}</select>`}
+      ${isPhase||ms||hasKids?'<span style="width:62px"></span>':`<input type="number" min="1" value="${n.duration??''}" oninput="pmTplSet('${n._k}','duration',this.value===''?null:+this.value)" class="pm-in" style="width:62px;padding:4px;font-size:12px" placeholder="days" title="Length in work days">`}
+      ${isPhase||hasKids?'<span style="width:58px"></span>':`<input type="number" min="0" step="0.5" value="${n.est_hours??''}" oninput="pmTplSet('${n._k}','est_hours',this.value===''?null:+this.value)" class="pm-in" style="width:58px;padding:4px;font-size:12px" placeholder="hrs" title="Estimated hours">`}
+      <span style="display:flex;gap:1px;flex-shrink:0">
+        ${ms?'<span style="width:26px"></span>':`<button class="pm-ic" title="Add ${isPhase?'a task':'a subtask'} under this" onclick="pmTplAdd('${n._k}')">＋</button>`}
+        <button class="pm-ic" title="Move up" onclick="pmTplMove('${n._k}',-1)">↑</button>
+        <button class="pm-ic" title="Move down" onclick="pmTplMove('${n._k}',1)">↓</button>
+        ${depth>1?`<button class="pm-ic" title="Move out one level" onclick="pmTplOutdent('${n._k}')">⇤</button>`:''}
+        <button class="pm-ic" title="Delete" onclick="pmTplDel('${n._k}')">🗑</button>
+      </span>
+    </div>` + (n.children||[]).map(c=>row(c, depth+1)).join('');
+  };
+  const html = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div style="flex:1"><div class="pm-lbl">Template name</div><input id="pmt-name" class="pm-in" value="${pmEsc(pmTpl.name)}" oninput="pmTpl.name=this.value;pmTpl.dirty=true" style="font-weight:600;font-size:15px"></div>
+      <button class="pm-btn" style="margin-top:16px" onclick="pmTplClose()">✕</button>
+    </div>
+    <div style="font-size:12px;color:var(--text-3);margin:8px 0">${pmTpl.items.length} phases · ${total-pmTpl.items.length} tasks${hrs(pmTpl.items)?` · ${Math.round(hrs(pmTpl.items))} est. hours`:''}. <b>＋</b> adds a task under a phase or a subtask under a task. <b>days</b> = length in work days, <b>hrs</b> = estimated hours (both optional).</div>
+    <div style="border:1px solid var(--border);border-radius:var(--radius-sm);max-height:58vh;overflow-y:auto">${pmTpl.items.map(n=>row(n,0)).join('') || '<div style="padding:12px;color:var(--text-3);font-size:13px">No phases yet.</div>'}</div>
+    <button class="pm-btn" style="margin-top:8px" onclick="pmTplAddPhase()">+ Add phase</button>
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px">Changes apply to new projects made from this template. Projects already created from it don't change.</div>
+    <div id="pmt-err" style="color:#b91c1c;font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button class="pm-btn" onclick="pmTplClose()">Cancel</button>
+      <button class="pm-btn primary" onclick="pmTplSave()">Save template</button>
+    </div>`;
+  let o = document.getElementById('pm-overlay');
+  if(fresh || !o || !document.getElementById('pmt-name')){ o = pmModal(html, 860); o.onclick = e=>{ if(e.target===o) pmTplClose(); }; }
+  else { const sheet = o.firstElementChild, st = sheet.querySelector('div[style*="max-height:58vh"]'), top = st?st.scrollTop:0; sheet.innerHTML = '<div class="sheet-handle"></div>'+html; const st2 = sheet.querySelector('div[style*="max-height:58vh"]'); if(st2) st2.scrollTop = top; }
+}
+function pmTplSet(k, field, val){ const e = pmTpl.keys.get(k); if(!e) return; e.node[field] = val; pmTpl.dirty = true; if(field==='type' && pmIsMilestone(val)){ delete e.node.duration; e.node.children = []; } }
+function pmTplAdd(k){ const e = pmTpl.keys.get(k); e.node.children = e.node.children||[]; e.node.children.push({ title:'', type:'task', children:[] }); pmTpl.dirty = true; pmTplRender(); pmTplFocusLast(e.node.children[e.node.children.length-1]); }
+function pmTplAddPhase(){ pmTpl.items.push({ title:'', type:'phase', children:[] }); pmTpl.dirty = true; pmTplRender(); pmTplFocusLast(pmTpl.items[pmTpl.items.length-1]); }
+function pmTplFocusLast(node){ setTimeout(()=>{ const inp = document.querySelector(`#pm-overlay input[oninput*="'${node._k}','title'"]`); if(inp){ inp.focus(); inp.scrollIntoView({block:'nearest'}); } }, 0); }
+function pmTplMove(k, dir){ const e = pmTpl.keys.get(k), i = e.list.indexOf(e.node), j = i+dir; if(j<0 || j>=e.list.length) return; [e.list[i], e.list[j]] = [e.list[j], e.list[i]]; pmTpl.dirty = true; pmTplRender(); }
+function pmTplOutdent(k){
+  const e = pmTpl.keys.get(k); if(!e.parent) return;
+  const pe = pmTpl.keys.get(e.parent._k);
+  e.list.splice(e.list.indexOf(e.node), 1);
+  pe.list.splice(pe.list.indexOf(e.parent)+1, 0, e.node);
+  pmTpl.dirty = true; pmTplRender();
+}
+function pmTplDel(k){
+  const e = pmTpl.keys.get(k);
+  const n = (e.node.children||[]).length;
+  if((n || e.node.title) && !confirm(`Delete "${e.node.title||'this item'}"${n?` and the ${n} item${n===1?'':'s'} under it`:''}?`)) return;
+  e.list.splice(e.list.indexOf(e.node), 1); pmTpl.dirty = true; pmTplRender();
+}
+function pmTplClose(){ if(pmTpl && pmTpl.dirty && !confirm('Close without saving your changes?')) return; document.getElementById('pm-overlay')?.remove(); pmTpl = null; }
+function pmTplStrip(nodes, depth){
+  return nodes.filter(n=>(n.title||'').trim()).map(n=>{
+    const o = { title:n.title.trim(), type: depth===0 ? 'phase' : (n.type||'task') };
+    if(n.duration && !pmIsMilestone(o.type)) o.duration = n.duration;
+    if(n.est_hours!=null && n.est_hours!=='') o.est_hours = n.est_hours;
+    if(n.description) o.description = n.description;
+    const kids = pmTplStrip(n.children||[], depth+1); if(kids.length) o.children = kids;
+    return o;
+  });
+}
+async function pmTplSave(){
+  const name = (pmTpl.name||'').trim();
+  if(!name){ document.getElementById('pmt-err').textContent = 'Give the template a name.'; return; }
+  const items = pmTplStrip(pmTpl.items, 0);
+  if(!items.length){ document.getElementById('pmt-err').textContent = 'Add at least one phase.'; return; }
+  try{
+    if(pmTpl.id){ await sbFetch('PATCH', `/rest/v1/pm_templates?id=eq.${pmTpl.id}`, { name, items }); Object.assign(pm.templates.find(t=>t.id===pmTpl.id), { name, items }); }
+    else { const r = await sbFetch('POST','/rest/v1/pm_templates', { name, items, created_by:(currentUser&&currentUser.email)||'' }); pm.templates.push(r[0]); }
+    pm.templates.sort((a,b)=>a.name.localeCompare(b.name));
+    pmTpl.dirty = false; pmTplClose(); pmRender(); pmToast('Template saved');
+  }catch(e){ document.getElementById('pmt-err').textContent = 'Could not save: '+e.message; }
+}
+
 // ── Settings: templates + closures ──
 function pmSettingsHtml(){
   const count = n=>(n.children||[]).reduce((s,c)=>s+1+count(c),0);
   const tree = (nodes, depth)=>nodes.map(n=>`<div style="font-size:12px;padding:1px 0 1px ${depth*16}px;color:${depth?'var(--text-2)':'var(--text)'};font-weight:${depth?400:600}">${depth?PM_TYPES[n.type]?.icon||'•':'▤'} ${pmEsc(n.title)}${n.duration?` <span style="color:var(--text-3)">${n.duration}wd</span>`:''}</div>${tree(n.children||[],depth+1)}`).join('');
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start">
     <div class="pm-card">
-      <div style="font-size:15px;font-weight:700">Templates</div>
-      <div style="font-size:12px;color:var(--text-3);margin:4px 0 10px">To make or change a template: set up a project the way you want it, then use <b>Save as template</b> on that project. Templates keep phases, tasks, types, work-day lengths and hours, not dates.</div>
+      <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-size:15px;font-weight:700">Templates</div><button class="pm-btn primary" onclick="pmTplOpen()">+ New template</button></div>
+      <div style="font-size:12px;color:var(--text-3);margin:4px 0 10px">Click <b>Edit</b> to add, rename, reorder or remove phases, tasks and subtasks. You can also turn any project into a template with <b>Save as template</b> on the project. Templates keep the structure, types, work-day lengths and hours, not dates.</div>
       ${pm.templates.map(t=>`<details style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:8px">
         <summary style="cursor:pointer;font-size:13px;font-weight:600">${pmEsc(t.name)} <span style="font-weight:400;color:var(--text-3);font-size:12px">${(t.items||[]).length} phases · ${(t.items||[]).reduce((s,p)=>s+count(p),0)} items</span></summary>
         <div style="margin-top:8px">${tree(t.items||[],0)}</div>
-        <div style="display:flex;gap:6px;margin-top:8px"><button class="pm-btn" onclick="pmRenameTemplate('${t.id}')">Rename</button><button class="pm-btn" style="color:#b91c1c" onclick="pmDeleteTemplate('${t.id}')">Delete</button></div>
+        <div style="display:flex;gap:6px;margin-top:8px"><button class="pm-btn primary" onclick="pmTplOpen('${t.id}')">Edit</button><button class="pm-btn" onclick="pmTplCopy('${t.id}')">Duplicate</button><button class="pm-btn" onclick="pmRenameTemplate('${t.id}')">Rename</button><button class="pm-btn" style="color:#b91c1c" onclick="pmDeleteTemplate('${t.id}')">Delete</button></div>
       </details>`).join('') || '<div style="font-size:13px;color:var(--text-3)">No templates yet.</div>'}
     </div>
     <div class="pm-card">
       <div style="font-size:15px;font-weight:700">Holidays &amp; office closures</div>
       <div style="font-size:12px;color:var(--text-3);margin:4px 0 10px">These days are skipped when counting work days, and shaded on the calendar and timeline.</div>
-      <div style="display:flex;gap:6px;margin-bottom:10px"><input id="pmc-date" type="date" class="pm-in" style="width:auto"><input id="pmc-label" class="pm-in" placeholder="e.g. Office closed"><button class="pm-btn primary" onclick="pmAddClosure()">Add</button></div>
-      ${pm.closures.filter(c=>c.date>=pmShift(pmToday(),-60)).map(c=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px">
-        <span><b>${pmFmt(c.date,true)}</b> <span style="color:var(--text-3)">${pmD(c.date).toLocaleDateString('en-US',{weekday:'short'})}</span> · ${pmEsc(c.label)}</span>
-        <button class="pm-ic" onclick="pmDeleteClosure('${c.id}')">🗑</button></div>`).join('')}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+        <div><div class="pm-lbl">First day</div><input id="pmc-date" type="date" class="pm-in" onchange="const e=document.getElementById('pmc-end'); if(!e.value||e.value<this.value) e.value=this.value"></div>
+        <div><div class="pm-lbl">Last day</div><input id="pmc-end" type="date" class="pm-in"></div>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:12px"><input id="pmc-label" class="pm-in" placeholder="e.g. Winter break, Office closed"><button class="pm-btn primary" onclick="pmAddClosure()">Add</button></div>
+      <div style="font-size:11px;color:var(--text-3);margin:-6px 0 10px">For a single day, leave the last day the same as the first.</div>
+      ${pmClosureGroups().filter(g=>g.end>=pmShift(pmToday(),-60)).map(g=>{
+        const wd = g.days.filter(c=>{ const w=pmD(c.date).getDay(); return w!==0&&w!==6; }).length;
+        const range = g.start===g.end ? `${pmFmt(g.start,true)} <span style="color:var(--text-3)">${pmD(g.start).toLocaleDateString('en-US',{weekday:'short'})}</span>`
+          : `${pmFmt(g.start,true)} – ${pmFmt(g.end,true)} <span style="color:var(--text-3)">(${wd} work day${wd===1?'':'s'})</span>`;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <span><b>${range}</b> · ${pmEsc(g.label)}</span>
+        <button class="pm-ic" title="Remove" onclick="pmDeleteClosureGroup('${g.days.map(c=>c.id).join(',')}')">🗑</button></div>`; }).join('')}
     </div>
   </div>`;
 }
@@ -3637,15 +3793,47 @@ async function pmDeleteTemplate(id){
   const t = pm.templates.find(x=>x.id===id); if(!confirm(`Delete the template "${t.name}"? Projects made from it aren't affected.`)) return;
   try{ await sbFetch('DELETE', `/rest/v1/pm_templates?id=eq.${id}`); pm.templates = pm.templates.filter(x=>x.id!==id); pmRender(); }catch(e){ alert(e.message); }
 }
+// Consecutive days with the same label show as one range (e.g. Dec 24 – Jan 1, Winter break).
+function pmClosureGroups(){
+  const groups = [];
+  [...pm.closures].sort((a,b)=>a.date.localeCompare(b.date)).forEach(c=>{
+    const g = groups[groups.length-1];
+    if(g && g.label===c.label && pmShift(g.end,1)===c.date){ g.end = c.date; g.days.push(c); }
+    else groups.push({ start:c.date, end:c.date, label:c.label, days:[c] });
+  });
+  return groups;
+}
 async function pmAddClosure(){
-  const date = document.getElementById('pmc-date').value, label = document.getElementById('pmc-label').value.trim()||'Office closed';
-  if(!date) return;
+  const first = document.getElementById('pmc-date').value;
+  const last = document.getElementById('pmc-end').value || first;
+  const label = document.getElementById('pmc-label').value.trim() || 'Office closed';
+  if(!first) return;
+  if(last < first){ alert('The last day is before the first day.'); return; }
+  const have = new Map(pm.closures.map(c=>[c.date,c]));
+  const rows = [], relabel = [];
+  for(let d=first, n=0; d<=last && n<120; d=pmShift(d,1), n++){
+    const ex = have.get(d);
+    if(!ex) rows.push({ date:d, label });
+    else if(ex.label!==label && first!==last) relabel.push(ex); // days already listed join the new range's name
+  }
+  if(!rows.length && !relabel.length){ alert('Those days are already on the list.'); return; }
   try{
-    const r = await sbFetch('POST','/rest/v1/pm_closures', { date, label });
-    pm.closures.push(r[0]); pm.closures.sort((a,b)=>a.date.localeCompare(b.date));
+    if(relabel.length){ await sbFetch('PATCH', `/rest/v1/pm_closures?id=in.(${relabel.map(c=>c.id).join(',')})`, { label }); relabel.forEach(c=>c.label=label); }
+    const r = rows.length ? await sbFetch('POST','/rest/v1/pm_closures', rows) : [];
+    pm.closures.push(...(r||[])); pm.closures.sort((a,b)=>a.date.localeCompare(b.date));
     const moved = (await Promise.all(pm.projects.map(p=>pmReschedule(p.id)))).reduce((a,b)=>a+b,0);
     pmRender(); if(moved) pmToast(`${moved} scheduled item${moved===1?'':'s'} shifted around the closure`);
-  }catch(e){ alert(/duplicate|unique/i.test(e.message)?'That day is already on the list.':e.message); }
+  }catch(e){ alert(e.message); }
+}
+async function pmDeleteClosureGroup(ids){
+  const list = ids.split(',').filter(Boolean);
+  if(list.length>1 && !confirm(`Remove all ${list.length} days of this closure?`)) return;
+  try{
+    await sbFetch('DELETE', `/rest/v1/pm_closures?id=in.(${list.join(',')})`);
+    pm.closures = pm.closures.filter(c=>!list.includes(c.id));
+    const moved = (await Promise.all(pm.projects.map(p=>pmReschedule(p.id)))).reduce((a,b)=>a+b,0);
+    pmRender(); if(moved) pmToast(`${moved} scheduled item${moved===1?'':'s'} moved earlier`);
+  }catch(e){ alert(e.message); }
 }
 async function pmDeleteClosure(id){
   try{ await sbFetch('DELETE', `/rest/v1/pm_closures?id=eq.${id}`); pm.closures = pm.closures.filter(c=>c.id!==id); pmRender(); }catch(e){ alert(e.message); }

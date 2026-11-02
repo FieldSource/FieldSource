@@ -442,10 +442,12 @@ main{padding:12px 16px 100px}
 
 <div class="view-bar" id="consulting-bar" style="display:none">
   <div class="view-bar-row">
+    <button class="vtab" data-pm="overview" onclick="pmShow('overview')">Overview</button>
     <button class="vtab" data-pm="mywork" onclick="pmShow('mywork')">My Work</button>
     <button class="vtab" data-pm="projects" onclick="pmShow('projects')">Projects</button>
     <button class="vtab" data-pm="calendar" onclick="pmShow('calendar')">Calendar</button>
     <button class="vtab" data-pm="timeline" onclick="pmShow('timeline')">Timeline</button>
+    <button class="vtab" data-pm="workload" onclick="pmShow('workload')">Workload</button>
     <button class="vtab" data-pm="settings" onclick="pmShow('settings')">Templates &amp; Closures</button>
   </div>
 </div>
@@ -2782,7 +2784,7 @@ function setPortal(portal){
     Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'));
   }
   else if(portal==='consulting'){
-    loadConsulting().then(()=>pmShow(pmMe() ? 'mywork' : 'projects'));
+    loadConsulting().then(()=>pmShow(pmMe() ? 'mywork' : 'overview'));
   }
   else if(portal==='fleet'){
     loadFleet().then(()=>{
@@ -2806,7 +2808,7 @@ const pm = {
   collapsed: (()=>{ try{ return JSON.parse(localStorage.getItem('pm_collapsed')||'{}'); }catch(e){ return {}; } })(),
   calMonth: new Date().toISOString().slice(0,7), calProject:'', calKeyOnly:false, calHideDone:true,
   ganttProject:'', ganttZoom:'week', ganttHideDone:false,
-  notes:[], myShowDone:false,
+  notes:[], myShowDone:false, decisions:[], questions:[], time:[], submittals:[],
 };
 const PM_TYPES = {
   phase:        { label:'Phase',              icon:'▤' },
@@ -2899,6 +2901,10 @@ async function pmLoad(force){
   if(pm.loaded && !force) return;
   try{
     const notesQ = sbFetch('GET','/rest/v1/pm_notifications?select=*&order=created_at.asc').catch(()=>[]);
+    const decQ = sbFetch('GET','/rest/v1/pm_decisions?select=*&order=decided_on.asc').catch(()=>[]);
+    const qQ = sbFetch('GET','/rest/v1/pm_questions?select=*&order=created_at.asc').catch(()=>[]);
+    const tQ = sbFetch('GET','/rest/v1/pm_time?select=*&order=work_date.asc').catch(()=>[]);
+    const sQ = sbFetch('GET','/rest/v1/pm_submittals?select=*&order=sent_on.asc').catch(()=>[]);
     const [p,i,t,c,f] = await Promise.all([
       sbFetch('GET','/rest/v1/pm_projects?select=*&order=created_at.asc'),
       sbFetch('GET','/rest/v1/pm_items?select=*&order=sort.asc'),
@@ -2906,7 +2912,7 @@ async function pmLoad(force){
       sbFetch('GET','/rest/v1/pm_closures?select=*&order=date.asc'),
       sbFetch('GET','/rest/v1/pm_files?select=*&order=created_at.desc'),
     ]);
-    pm.projects = p||[]; pm.items = i||[]; pm.templates = t||[]; pm.closures = c||[]; pm.files = f||[]; pm.notes = (await notesQ)||[];
+    pm.projects = p||[]; pm.items = i||[]; pm.templates = t||[]; pm.closures = c||[]; pm.files = f||[]; pm.notes = (await notesQ)||[]; pm.decisions = (await decQ)||[]; pm.questions = (await qQ)||[]; pm.time = (await tQ)||[]; pm.submittals = (await sQ)||[];
     pm.loaded = true; pm.error = '';
     if(!pm.sel || !pmProject(pm.sel)){ const first = pm.projects.find(x=>x.status!=='Complete'); pm.sel = first ? first.id : (pm.projects[0]||{}).id || null; }
   }catch(e){
@@ -2915,7 +2921,7 @@ async function pmLoad(force){
 }
 
 // ── saving ──
-const PM_ITEM_FIELDS = ['project_id','parent_id','type','title','description','owner','priority','status','start_date','due_date','duration_days','length_unit','est_hours','dep_type','dep_lag','dep_wait','started_at','party','party_name','budget','depends_on','auto_schedule','done_at','sort'];
+const PM_ITEM_FIELDS = ['project_id','parent_id','type','title','description','owner','priority','status','start_date','due_date','duration_days','length_unit','est_hours','dep_type','dep_lag','dep_wait','started_at','party','party_name','meeting_notes','attendees','fee','billed','invoice_no','billed_on','budget','depends_on','auto_schedule','done_at','sort'];
 function pmClean(it){ const o={}; PM_ITEM_FIELDS.forEach(k=>{ if(k in it) o[k] = (it[k]==='' && !['title','description','owner'].includes(k)) ? null : it[k]; }); return o; }
 async function pmPatchItem(it){ await sbFetch('PATCH', `/rest/v1/pm_items?id=eq.${it.id}`, { ...pmClean(it), updated_at:new Date().toISOString() }); }
 
@@ -3109,6 +3115,9 @@ function pmStyles(){
   if(document.getElementById('pm-styles')) return;
   const s = document.createElement('style'); s.id='pm-styles';
   s.textContent = `
+  .pm-tbl th{background:var(--surface)!important;color:var(--text-2)!important;font-weight:700}
+  .pm-row{flex-wrap:wrap;row-gap:4px}
+  .pm-row .pm-lenadd{display:none} .pm-row:hover .pm-lenadd{display:inline-block}
   .pm-grid{display:grid;grid-template-columns:250px minmax(0,1fr);gap:16px;align-items:start;max-width:1120px;margin:0 auto}
   .pm-narrow{max-width:900px;margin:0 auto}
   @media (max-width:820px){.pm-grid{grid-template-columns:1fr}}
@@ -3150,6 +3159,8 @@ function pmRender(){
   else if(pm.tab==='timeline') el.innerHTML = pmGanttHtml();
   else if(pm.tab==='settings') el.innerHTML = pmSettingsHtml();
   else if(pm.tab==='mywork') el.innerHTML = pmMyWorkHtml();
+  else if(pm.tab==='overview') el.innerHTML = pmOverviewHtml();
+  else if(pm.tab==='workload') el.innerHTML = pmWorkloadHtml();
   else el.innerHTML = pmProjectsHtml();
   window.scrollTo(sx, sy);
   if(pm.tab==='timeline') pmGanttAfter(gl, gt);
@@ -3244,6 +3255,7 @@ function pmMyWorkHtml(){
       ${waiting?`<span class="pm-chip" style="background:#fef3c7;color:#92400e" title="Starts ${pmEsc(pmTriggerLabel(it, dep))}">⏳ Waiting on ${pmEsc(dep.title)}</span>`
         :`<span style="font-size:12px;white-space:nowrap;min-width:84px;text-align:right;color:${pmOverdue(it)?'#dc2626':'var(--text-2)'}">${d?(it.start_date&&it.due_date&&it.start_date!==it.due_date?pmFmt(it.start_date)+' – ':'')+pmFmt(d):'—'}</span>`}
       ${!pmIsMilestone(it.type)&&it.status!=='done'?`<button class="pm-ic" title="${it.status==='in_progress'?'Mark not started':'Mark started'}" onclick="pmToggleStarted('${it.id}')">${it.status==='in_progress'?'⏸':'▶'}</button>`:''}
+      ${pmIsMilestone(it.type)?`<button class="pm-ic" title="Meeting notes" onclick="pmMeetingNotes('${it.id}')">📝</button>`:`<button class="pm-ic" title="Log time" onclick="pmLogTime('${it.id}')">⏱</button>`}
     </div>`;
   };
   const unread = who ? pmUnreadFor(who) : [];
@@ -3273,8 +3285,624 @@ function pmMyWorkHtml(){
         <div style="padding:8px 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${color};background:var(--surface);border-bottom:1px solid var(--border)">${label} · ${list.length}</div>
         ${list.map(row).join('')}</div>`;
     }).join('') || `<div class="pm-card" style="color:var(--text-3);font-size:13px">${who?`Nothing assigned to ${pmEsc(who)} right now.`:'No tasks are assigned to anyone yet.'} Assign tasks with the Owner field on any task.</div>`}
-    <div style="font-size:11px;color:var(--text-3)">Check the box when it's done, ▶ when you start it. Click a task to see all its details. The Projects tab shows every phase of every project.</div>
+    ${(()=>{ const qs = pm.questions.filter(q=>q.status==='Open' && projs.has(q.project_id) && (who ? q.owner===who : !!q.owner)).sort((a,b)=>(a.due_date||'9').localeCompare(b.due_date||'9'));
+      return qs.length ? `<div class="pm-card" style="padding:0;overflow:hidden;margin-bottom:12px">
+        <div style="padding:8px 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#1d4ed8;background:var(--surface);border-bottom:1px solid var(--border)">Questions ${who?'to chase':'being chased'} · ${qs.length}</div>
+        ${qs.map(q=>{ const p = projs.get(q.project_id), late = q.due_date && q.due_date < today; return `<div class="pm-row" style="padding-left:10px">
+          <span class="pm-dot" style="margin:0;background:${pmEsc(p.color)}"></span>
+          <span style="flex:1;min-width:0">❓ ${pmEsc(q.question)}<div style="font-size:11px;color:var(--text-3)">${pmEsc(p.name)}${q.asked_of?' · waiting on '+pmEsc(q.asked_of):''}${!who&&q.owner?' · '+pmEsc(q.owner):''}</div></span>
+          <span style="font-size:12px;color:${late?'#dc2626':'var(--text-2)'};white-space:nowrap">${q.due_date?(late?'overdue · ':'')+pmFmt(q.due_date):''}</span>
+          <button class="pm-btn" style="font-size:11px;padding:3px 8px" onclick="pmAnswerQuestion('${q.id}')">Answer</button></div>`; }).join('')}</div>` : ''; })()}
+    <div style="font-size:11px;color:var(--text-3)">Check the box when it's done, ▶ when you start it, ⏱ to log time. Click a task to see all its details. The Projects tab shows every phase of every project.</div>
   </div>`;
+}
+
+// ── Decision log ──
+// Every decision made on a project (fence height, foul pole color, ...), kept for bid documents.
+// Changing a decision adds a new entry and marks the old one Superseded, so the history stays.
+const PM_DEC_CATEGORIES = ['Site & grading','Turf & surfaces','Irrigation & drainage','Fencing & netting','Lighting & electrical','Structures & amenities','Equipment & furnishings','Scope & phasing','Other'];
+const PM_DEC_SOURCES = ['Meeting','Email','Phone call','Site visit','Text','Other'];
+function pmDecs(projectId){ return pm.decisions.filter(d=>d.project_id===projectId); }
+function pmDecCats(projectId){ return [...new Set([...PM_DEC_CATEGORIES, ...pm.decisions.map(d=>d.category).filter(Boolean)])]; }
+
+function pmOpenDecisions(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  pm._dec = pm._dec && pm._dec.projectId===projectId ? pm._dec : { projectId, q:'', history:false, cat:'' };
+  const st = pm._dec;
+  const all = pmDecs(projectId);
+  const q = st.q.toLowerCase();
+  const shown = all.filter(d=>(st.history || d.status!=='Superseded') && (!st.cat || d.category===st.cat)
+    && (!q || [d.topic,d.decision,d.category,d.decided_by,d.notes].join(' ').toLowerCase().includes(q)));
+  const cats = [...new Set(shown.map(d=>d.category||'Other'))].sort((a,b)=>{ const ia=PM_DEC_CATEGORIES.indexOf(a), ib=PM_DEC_CATEGORIES.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib) || a.localeCompare(b); });
+  const live = all.filter(d=>d.status!=='Superseded');
+  const badge = d=>d.status==='Tentative' ? '<span class="pm-chip" style="background:#fef3c7;color:#92400e">Tentative</span>'
+    : d.status==='Superseded' ? '<span class="pm-chip" style="background:#f1f5f9;color:#64748b">Superseded</span>' : '<span class="pm-chip" style="background:#dcfce7;color:#166534">Final</span>';
+  const link = d=>{ const it = d.item_id && pmItem(d.item_id); return it ? ` · re: ${pmEsc(it.title)}` : ''; };
+  pmModal(`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">📋 Decision log</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)} · ${live.length} decision${live.length===1?'':'s'}${live.filter(d=>d.status==='Tentative').length?` (${live.filter(d=>d.status==='Tentative').length} tentative)`:''}</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="pm-btn primary" onclick="pmEditDecision(null,'${projectId}')">+ Log a decision</button>
+        <button class="pm-btn" onclick="pmBidNotes('${projectId}')" title="Printable list for bid documents">🖨 Bid notes</button>
+        <button class="pm-btn" onclick="pmDecCsv('${projectId}')" title="Spreadsheet file">⬇ CSV</button>
+        <button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">✕</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 8px;align-items:center">
+      <input class="pm-in" style="flex:1;min-width:180px" placeholder="Search decisions…" value="${pmEsc(st.q)}" oninput="pm._dec.q=this.value;clearTimeout(pm._decT);pm._decT=setTimeout(()=>{pmOpenDecisions('${projectId}');const i=document.querySelector('#pm-overlay input[placeholder^=Search]');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length);}},250)">
+      <select class="pm-in" style="width:auto" onchange="pm._dec.cat=this.value;pmOpenDecisions('${projectId}')"><option value="">All categories</option>${pmDecCats(projectId).filter(c=>all.some(d=>d.category===c)).map(c=>`<option${st.cat===c?' selected':''}>${pmEsc(c)}</option>`).join('')}</select>
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${st.history?'checked':''} onchange="pm._dec.history=this.checked;pmOpenDecisions('${projectId}')"> Show changed / superseded</label>
+    </div>
+    <div style="max-height:60vh;overflow-y:auto">
+    ${cats.map(c=>`<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);margin:12px 0 6px">${pmEsc(c)}</div>
+      ${shown.filter(d=>(d.category||'Other')===c).sort((a,b)=>(a.topic||'').localeCompare(b.topic||'') || (b.decided_on||'').localeCompare(a.decided_on||'')).map(d=>`
+        <div style="border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:6px;${d.status==='Superseded'?'opacity:.6':''}">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+            <div style="min-width:0"><div style="font-size:13px;font-weight:700">${pmEsc(d.topic)}</div>
+              <div style="font-size:14px;margin-top:2px;white-space:pre-wrap;${d.status==='Superseded'?'text-decoration:line-through':''}">${pmEsc(d.decision)}</div></div>
+            <div style="display:flex;gap:4px;align-items:center;flex-shrink:0">${badge(d)}
+              <button class="pm-ic" title="Edit" onclick="pmEditDecision('${d.id}','${projectId}')">✎</button>
+              ${d.status!=='Superseded'?`<button class="pm-btn" style="font-size:11px;padding:3px 8px" onclick="pmEditDecision(null,'${projectId}','${d.id}')">Change decision</button>`:''}</div>
+          </div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:4px">${d.decided_on?pmFmt(d.decided_on,true):'No date'}${d.decided_by?' · decided by '+pmEsc(d.decided_by):''}${d.source?' · '+pmEsc(d.source):''}${link(d)}${d.superseded_by&&pm.decisions.find(x=>x.id===d.superseded_by)?' · replaced '+pmFmt(pm.decisions.find(x=>x.id===d.superseded_by).decided_on||'',true):''}</div>
+          ${d.notes?`<div style="font-size:12px;color:var(--text-2);margin-top:4px;white-space:pre-wrap">${pmEsc(d.notes)}</div>`:''}
+        </div>`).join('')}`).join('') || `<div style="padding:16px;font-size:13px;color:var(--text-3)">${all.length?'Nothing matches.':'No decisions logged yet. Log them as they\'re made (fence heights, colors, materials, scope calls) so they\'re all here at bid time.'}</div>`}
+    </div>`, 820);
+}
+
+function pmEditDecision(id, projectId, replacesId){
+  const old = replacesId ? pm.decisions.find(x=>x.id===replacesId) : null;
+  const d = id ? pm.decisions.find(x=>x.id===id) : { topic: old?old.topic:'', decision:'', category: old?old.category:'', decided_on: pmToday(), decided_by: old?old.decided_by:'', source:'Meeting', status:'Final', item_id: old?old.item_id:'', notes:'' };
+  const items = pm.items.filter(i=>i.project_id===projectId).sort((a,b)=>(a.sort||0)-(b.sort||0));
+  const p = pmProject(projectId);
+  const people = [...new Set([...PM_OWNERS.map(o=>o.name), p&&p.client?p.client:null, ...pm.decisions.map(x=>x.decided_by)].filter(Boolean))];
+  pmModal(`
+    <div class="sheet-title">${id?'Edit decision':old?'Change decision':'Log a decision'}</div>
+    ${old?`<div style="font-size:12px;background:var(--bg);border-radius:8px;padding:8px 10px;margin:6px 0">Replacing: <b>${pmEsc(old.decision)}</b> (${pmFmt(old.decided_on||'',true)}). The old one stays in the log, marked Superseded.</div>`:''}
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-top:8px">
+      <div><div class="pm-lbl">Topic</div><input id="pmd-topic" class="pm-in" value="${pmEsc(d.topic)}" placeholder="e.g. Backstop fence height"></div>
+      <div><div class="pm-lbl">Category</div><input id="pmd-cat" class="pm-in" list="pmd-cats" value="${pmEsc(d.category||'')}" placeholder="Pick or type"><datalist id="pmd-cats">${pmDecCats(projectId).map(c=>`<option value="${pmEsc(c)}">`).join('')}</datalist></div>
+    </div>
+    <div style="margin-top:10px"><div class="pm-lbl">Decision</div><textarea id="pmd-dec" class="pm-in" rows="3" placeholder="e.g. 25 ft backstop, black vinyl-coated chain link, 8 ft fence along both foul lines">${pmEsc(d.decision)}</textarea></div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:10px">
+      <div><div class="pm-lbl">Date decided</div><input id="pmd-date" type="date" class="pm-in" value="${pmEsc(d.decided_on||'')}"></div>
+      <div><div class="pm-lbl">Decided by</div><input id="pmd-by" class="pm-in" list="pmd-people" value="${pmEsc(d.decided_by||'')}" placeholder="Name or group"><datalist id="pmd-people">${people.map(n=>`<option value="${pmEsc(n)}">`).join('')}</datalist></div>
+      <div><div class="pm-lbl">How</div><select id="pmd-src" class="pm-in">${PM_DEC_SOURCES.map(s=>`<option${(d.source||'')===s?' selected':''}>${s}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Status</div><select id="pmd-status" class="pm-in">${['Final','Tentative'].concat(id&&d.status==='Superseded'?['Superseded']:[]).map(s=>`<option${d.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div style="margin-top:10px"><div class="pm-lbl">Came up in (optional)</div><select id="pmd-item" class="pm-in"><option value="">Whole project</option>${items.map(i=>`<option value="${i.id}"${d.item_id===i.id?' selected':''}>${i.type==='phase'?'▤ ':'  '}${pmEsc(i.title)}</option>`).join('')}</select></div>
+    <div style="margin-top:10px"><div class="pm-lbl">Notes (optional)</div><textarea id="pmd-notes" class="pm-in" rows="2" placeholder="Why, alternatives considered, cost impact, who to confirm with…">${pmEsc(d.notes||'')}</textarea></div>
+    <div id="pmd-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;margin-top:14px">
+      <div>${id?`<button class="pm-btn" style="color:#b91c1c" onclick="pmDeleteDecision('${id}','${projectId}')">Delete</button>`:''}</div>
+      <div style="display:flex;gap:8px"><button class="pm-btn" onclick="pmOpenDecisions('${projectId}')">Back</button>
+      <button class="pm-btn primary" onclick="pmSaveDecision(${id?`'${id}'`:'null'},'${projectId}',${replacesId?`'${replacesId}'`:'null'})">Save</button></div>
+    </div>`, 720);
+  setTimeout(()=>document.getElementById(old?'pmd-dec':'pmd-topic')?.focus(), 0);
+}
+async function pmSaveDecision(id, projectId, replacesId){
+  const g = k=>document.getElementById(k).value;
+  const row = { project_id:projectId, topic:g('pmd-topic').trim(), decision:g('pmd-dec').trim(), category:g('pmd-cat').trim()||'Other',
+    decided_on:g('pmd-date')||null, decided_by:g('pmd-by').trim(), source:g('pmd-src'), status:g('pmd-status'), item_id:g('pmd-item')||null, notes:g('pmd-notes').trim(),
+    updated_at:new Date().toISOString() };
+  if(!row.topic || !row.decision){ document.getElementById('pmd-err').textContent = 'Fill in the topic and the decision.'; return; }
+  try{
+    if(id){ await sbFetch('PATCH', `/rest/v1/pm_decisions?id=eq.${id}`, row); Object.assign(pm.decisions.find(x=>x.id===id), row); }
+    else {
+      const r = await sbFetch('POST','/rest/v1/pm_decisions', { ...row, created_by:(currentUser&&currentUser.email)||'' });
+      const nd = r[0]; pm.decisions.push(nd);
+      if(replacesId){ const old = pm.decisions.find(x=>x.id===replacesId); await sbFetch('PATCH', `/rest/v1/pm_decisions?id=eq.${replacesId}`, { status:'Superseded', superseded_by: nd.id }); old.status='Superseded'; old.superseded_by=nd.id; }
+    }
+    pmOpenDecisions(projectId); pmRender();
+  }catch(e){ document.getElementById('pmd-err').textContent = 'Could not save: '+e.message; }
+}
+async function pmDeleteDecision(id, projectId){
+  if(!confirm('Delete this decision? To record a change instead, use "Change decision" so the history is kept.')) return;
+  try{ await sbFetch('DELETE', `/rest/v1/pm_decisions?id=eq.${id}`); pm.decisions = pm.decisions.filter(x=>x.id!==id); pmOpenDecisions(projectId); pmRender(); }
+  catch(e){ alert(e.message); }
+}
+function pmDecForBid(projectId){
+  return pmDecs(projectId).filter(d=>d.status!=='Superseded')
+    .sort((a,b)=>{ const ia=PM_DEC_CATEGORIES.indexOf(a.category), ib=PM_DEC_CATEGORIES.indexOf(b.category); return (ia<0?99:ia)-(ib<0?99:ib) || (a.category||'').localeCompare(b.category||'') || (a.topic||'').localeCompare(b.topic||''); });
+}
+// Printable bid notes: opens a clean page; use the browser's Print → Save as PDF.
+function pmBidNotes(projectId){
+  const p = pmProject(projectId), list = pmDecForBid(projectId);
+  if(!list.length){ alert('No decisions logged yet.'); return; }
+  const e = s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const cats = [...new Set(list.map(d=>d.category||'Other'))];
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Bid notes – ${e(p.name)}</title>
+  <style>body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#111;max-width:820px;margin:32px auto;padding:0 20px;line-height:1.4}
+  h1{font-size:22px;margin:0}.sub{color:#555;font-size:13px;margin:4px 0 20px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#333;border-bottom:2px solid ${p.color||'#2563eb'};padding-bottom:4px;margin:22px 0 8px}
+  table{width:100%;border-collapse:collapse;font-size:13px}td{padding:6px 6px;border-bottom:1px solid #e5e7eb;vertical-align:top}td.t{width:28%;font-weight:600}td.m{width:24%;color:#555;font-size:11px}
+  .tent{display:inline-block;font-size:10px;background:#fef3c7;color:#92400e;border-radius:99px;padding:1px 6px;margin-left:4px}.n{color:#555;font-size:12px;margin-top:2px}
+  .bar{display:flex;gap:8px;margin-bottom:16px}.bar button{font:inherit;padding:6px 12px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer}
+  @media print{.bar{display:none}body{margin:0}}</style></head><body>
+  <div class="bar"><button onclick="window.print()">Print / Save as PDF</button></div>
+  <h1>Bid notes: ${e(p.name)}</h1>
+  <div class="sub">${p.client?e(p.client)+' · ':''}Decision log as of ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})} · ${list.length} decisions${list.some(d=>d.status==='Tentative')?' · items marked Tentative still need confirmation':''}</div>
+  ${cats.map(c=>`<h2>${e(c)}</h2><table>${list.filter(d=>(d.category||'Other')===c).map(d=>`<tr><td class="t">${e(d.topic)}${d.status==='Tentative'?'<span class="tent">Tentative</span>':''}</td>
+    <td>${e(d.decision).replace(/\n/g,'<br>')}${d.notes?`<div class="n">${e(d.notes).replace(/\n/g,'<br>')}</div>`:''}</td>
+    <td class="m">${d.decided_on?new Date(d.decided_on+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}${d.decided_by?'<br>'+e(d.decided_by):''}${d.source?'<br>'+e(d.source):''}</td></tr>`).join('')}</table>`).join('')}
+  ${(()=>{ const subs = pm.submittals.filter(x=>x.project_id===projectId).sort((a,b)=>(a.sent_on||'').localeCompare(b.sent_on||''));
+    return subs.length ? `<h2>Documents issued</h2><table>${subs.map(x=>`<tr><td class="t">${e(x.title)}${x.revision?' · '+e(x.revision):''}</td><td>${x.sent_to?'To '+e(x.sent_to):''}${x.method?' ('+e(x.method)+')':''}${x.notes?`<div class="n">${e(x.notes)}</div>`:''}</td><td class="m">${x.sent_on?new Date(x.sent_on+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}</td></tr>`).join('')}</table>` : ''; })()}
+  </body></html>`;
+  const win = window.open('', '_blank');
+  if(!win){ alert('Your browser blocked the new tab. Allow pop-ups for the tracker and try again.'); return; }
+  win.document.write(html); win.document.close();
+}
+function pmDecCsv(projectId){
+  const p = pmProject(projectId), list = pmDecs(projectId);
+  if(!list.length){ alert('No decisions logged yet.'); return; }
+  const q = v=>`"${String(v??'').replace(/"/g,'""')}"`;
+  const rows = [['Category','Topic','Decision','Status','Date decided','Decided by','How','Came up in','Notes']]
+    .concat(list.sort((a,b)=>(a.category||'').localeCompare(b.category||'')||(a.topic||'').localeCompare(b.topic||'')).map(d=>[d.category,d.topic,d.decision,d.status,d.decided_on,d.decided_by,d.source,(d.item_id&&pmItem(d.item_id)||{}).title||'',d.notes]));
+  const blob = new Blob(['\uFEFF'+rows.map(r=>r.map(q).join(',')).join('\r\n')], { type:'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `${p.name.replace(/[\\/:*?"<>|]/g,'')} - decision log.csv`; a.click();
+}
+
+// ===== Shared project math =====
+function pmLeavesUnder(projectId, rootId){ const all = rootId ? pmDesc(rootId) : pm.items.filter(i=>i.project_id===projectId); return all.filter(i=>i.type!=='phase' && !pm.items.some(c=>c.parent_id===i.id)); }
+function pmPhaseOf(it){ let c = it; while(c && c.parent_id) c = pmItem(c.parent_id); return c; }
+function pmPhaseStatus(ph){ const l = pmLeavesUnder(ph.project_id, ph.id); if(!l.length) return { pct:0, state:'empty', done:0, total:0 }; const d = l.filter(x=>x.status==='done').length;
+  return { pct: Math.round(d/l.length*100), state: d===l.length ? 'complete' : (d || l.some(x=>x.status==='in_progress')) ? 'active' : 'not started', done:d, total:l.length }; }
+function pmCurrentPhase(projectId){ return pmKids(projectId, null).find(ph=>pmPhaseStatus(ph).state!=='complete' && pmPhaseStatus(ph).state!=='empty') || null; }
+function pmHoursLogged(f){ return pm.time.filter(f).reduce((t,x)=>t+(Number(x.hours)||0),0); }
+function pmHoursEst(projectId, rootId){ return pmLeavesUnder(projectId, rootId).reduce((t,i)=>t+(Number(i.est_hours)||0),0); }
+const pmMoney = n=>'$'+Math.round(Number(n)||0).toLocaleString('en-US');
+const pmH = n=>{ const v = Math.round((Number(n)||0)*10)/10; return v+'h'; };
+function pmIsFsName(n){ return PM_OWNERS.some(o=>o.name===n); }
+
+// ===== 1. Open questions =====
+function pmQs(projectId){ return pm.questions.filter(q=>q.project_id===projectId); }
+function pmOpenQuestions(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  pm._qShowAll = pm._qShowAll || false;
+  const list = pmQs(projectId).filter(q=>pm._qShowAll || q.status==='Open').sort((a,b)=>(a.status!=='Open')-(b.status!=='Open') || (a.due_date||'9').localeCompare(b.due_date||'9'));
+  const openN = pmQs(projectId).filter(q=>q.status==='Open').length;
+  pmModal(`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">❓ Open questions</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)} · ${openN} open · things we're waiting to decide or hear back on</div></div>
+      <div style="display:flex;gap:6px"><button class="pm-btn primary" onclick="pmEditQuestion(null,'${projectId}')">+ Add a question</button><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">✕</button></div>
+    </div>
+    <label style="font-size:12px;display:flex;gap:4px;align-items:center;margin:10px 0"><input type="checkbox" ${pm._qShowAll?'checked':''} onchange="pm._qShowAll=this.checked;pmOpenQuestions('${projectId}')"> Show answered and dropped</label>
+    <div style="max-height:60vh;overflow-y:auto">${list.map(q=>{
+      const late = q.status==='Open' && q.due_date && q.due_date < pmToday(), it = q.item_id && pmItem(q.item_id);
+      return `<div style="border:1px solid ${late?'#fca5a5':'var(--border)'};border-radius:8px;padding:9px 11px;margin-bottom:6px;${q.status!=='Open'?'opacity:.65':''}">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+          <div style="font-size:14px;font-weight:600;white-space:pre-wrap">${pmEsc(q.question)}</div>
+          <div style="display:flex;gap:4px;flex-shrink:0;align-items:center">
+            ${q.status==='Open'?`<button class="pm-btn primary" style="font-size:11px;padding:3px 8px" onclick="pmAnswerQuestion('${q.id}')">Answer</button>`:`<span class="pm-chip" style="background:${q.status==='Answered'?'#dcfce7;color:#166534':'#f1f5f9;color:#64748b'}">${q.status}</span>`}
+            <button class="pm-ic" title="Edit" onclick="pmEditQuestion('${q.id}','${projectId}')">✎</button></div>
+        </div>
+        <div style="font-size:11px;color:${late?'#dc2626':'var(--text-3)'};margin-top:3px">${q.asked_of?'Waiting on <b>'+pmEsc(q.asked_of)+'</b>':'Who answers: not set'}${q.owner?' · '+pmEsc(q.owner)+' chasing':''}${q.due_date?` · ${late?'overdue, ':''}need by ${pmFmt(q.due_date)}`:''}${q.asked_on?' · asked '+pmFmt(q.asked_on):''}${it?' · re: '+pmEsc(it.title):''}</div>
+        ${q.status==='Answered'?`<div style="font-size:13px;margin-top:5px;padding:6px 8px;background:var(--bg);border-radius:6px"><b>Answer${q.answered_on?' ('+pmFmt(q.answered_on)+')':''}:</b> ${pmEsc(q.answer)}${q.decision_id?' <span class="pm-chip">📋 in decision log</span>':''}</div>`:''}
+      </div>`; }).join('') || `<div style="padding:14px;font-size:13px;color:var(--text-3)">${pmQs(projectId).length?'No open questions.':'Nothing yet. Add questions as they come up ("Does the AD want the cages inside the fence?") with who owes the answer and by when.'}</div>`}</div>`, 760);
+}
+function pmEditQuestion(id, projectId, prefill){
+  const q = id ? pm.questions.find(x=>x.id===id) : { question:'', asked_of:'', owner: pmMe()||'', asked_on: pmToday(), due_date:'', item_id:'', status:'Open', ...(prefill||{}) };
+  const p = pmProject(projectId);
+  const items = pm.items.filter(i=>i.project_id===projectId).sort((a,b)=>(a.sort||0)-(b.sort||0));
+  const askOpts = [...new Set([p&&p.client, ...PM_OWNERS.map(o=>o.name), ...pm.questions.map(x=>x.asked_of)].filter(Boolean))];
+  pmModal(`<div class="sheet-title">${id?'Edit question':'Add a question'}</div>
+    <div style="margin-top:8px"><div class="pm-lbl">Question</div><textarea id="pmq-q" class="pm-in" rows="2" placeholder="e.g. Does the AD want the batting cages inside the outfield fence?">${pmEsc(q.question)}</textarea></div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:10px">
+      <div><div class="pm-lbl">Who owes the answer</div><input id="pmq-of" class="pm-in" list="pmq-ofs" value="${pmEsc(q.asked_of||'')}" placeholder="Client, a sub, or one of us"><datalist id="pmq-ofs">${askOpts.map(n=>`<option value="${pmEsc(n)}">`).join('')}</datalist></div>
+      <div><div class="pm-lbl">Field Source person chasing it</div><select id="pmq-owner" class="pm-in"><option value="">—</option>${PM_OWNERS.map(o=>`<option${q.owner===o.name?' selected':''}>${o.name}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Asked on</div><input id="pmq-on" type="date" class="pm-in" value="${pmEsc(q.asked_on||'')}"></div>
+      <div><div class="pm-lbl">Need an answer by</div><input id="pmq-due" type="date" class="pm-in" value="${pmEsc(q.due_date||'')}"></div>
+    </div>
+    <div style="margin-top:10px"><div class="pm-lbl">Came up in (optional)</div><select id="pmq-item" class="pm-in"><option value="">Whole project</option>${items.map(i=>`<option value="${i.id}"${q.item_id===i.id?' selected':''}>${i.type==='phase'?'▤ ':'  '}${pmEsc(i.title)}</option>`).join('')}</select></div>
+    ${id?`<div style="margin-top:10px"><div class="pm-lbl">Status</div><select id="pmq-status" class="pm-in">${['Open','Answered','Dropped'].map(s=>`<option${q.status===s?' selected':''}>${s}</option>`).join('')}</select></div>`:''}
+    <div id="pmq-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;margin-top:14px"><div>${id?`<button class="pm-btn" style="color:#b91c1c" onclick="pmDeleteRow('pm_questions','questions','${id}',()=>pmOpenQuestions('${projectId}'))">Delete</button>`:''}</div>
+    <div style="display:flex;gap:8px"><button class="pm-btn" onclick="pmOpenQuestions('${projectId}')">Back</button><button class="pm-btn primary" onclick="pmSaveQuestion(${id?`'${id}'`:'null'},'${projectId}')">Save</button></div></div>`, 640);
+}
+async function pmSaveQuestion(id, projectId){
+  const g = k=>(document.getElementById(k)||{}).value;
+  const row = { project_id:projectId, question:(g('pmq-q')||'').trim(), asked_of:(g('pmq-of')||'').trim(), owner:g('pmq-owner')||'', asked_on:g('pmq-on')||null, due_date:g('pmq-due')||null, item_id:g('pmq-item')||null };
+  if(id && g('pmq-status')) row.status = g('pmq-status');
+  if(!row.question){ document.getElementById('pmq-err').textContent='Type the question.'; return; }
+  try{
+    const old = id ? pm.questions.find(x=>x.id===id) : null;
+    if(id){ await sbFetch('PATCH', `/rest/v1/pm_questions?id=eq.${id}`, row); Object.assign(old, row); }
+    else { const r = await sbFetch('POST','/rest/v1/pm_questions', { ...row, status:'Open', created_by:(currentUser&&currentUser.email)||'' }); pm.questions.push(r[0]); }
+    if(row.owner && row.owner!==pmMe() && (!old || old.owner!==row.owner)) pmNotifyText(row.owner, projectId, `asked you to chase: ${row.question}`);
+    pmOpenQuestions(projectId); pmRender();
+  }catch(e){ document.getElementById('pmq-err').textContent = 'Could not save: '+e.message; }
+}
+function pmAnswerQuestion(id){
+  const q = pm.questions.find(x=>x.id===id); if(!q) return;
+  pmModal(`<div class="sheet-title">Answer</div>
+    <div style="font-size:14px;font-weight:600;margin:6px 0 10px">${pmEsc(q.question)}</div>
+    <div class="pm-lbl">Answer</div><textarea id="pma-ans" class="pm-in" rows="3" placeholder="What did they say?"></textarea>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div><div class="pm-lbl">Answered on</div><input id="pma-on" type="date" class="pm-in" value="${pmToday()}"></div>
+      <div><div class="pm-lbl">Answered by</div><input id="pma-by" class="pm-in" value="${pmEsc(q.asked_of||'')}"></div>
+    </div>
+    <label style="display:flex;gap:6px;align-items:center;font-size:13px;margin-top:12px"><input id="pma-dec" type="checkbox" checked> Also record it in the decision log</label>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><button class="pm-btn" onclick="pmOpenQuestions('${q.project_id}')">Back</button><button class="pm-btn primary" onclick="pmSaveAnswer('${id}')">Save answer</button></div>`, 620);
+  setTimeout(()=>document.getElementById('pma-ans')?.focus(), 0);
+}
+async function pmSaveAnswer(id){
+  const q = pm.questions.find(x=>x.id===id);
+  const ans = document.getElementById('pma-ans').value.trim(), on = document.getElementById('pma-on').value||pmToday(), by = document.getElementById('pma-by').value.trim();
+  if(!ans){ alert('Type the answer.'); return; }
+  try{
+    let decision_id = null;
+    if(document.getElementById('pma-dec').checked){
+      const topic = q.question.replace(/\?+\s*$/,'').slice(0,120);
+      const r = await sbFetch('POST','/rest/v1/pm_decisions', { project_id:q.project_id, item_id:q.item_id||null, topic, decision:ans, category:'Other', decided_on:on, decided_by:by, source:'Question answered', status:'Final', notes:`From open question: ${q.question}`, created_by:(currentUser&&currentUser.email)||'' });
+      pm.decisions.push(r[0]); decision_id = r[0].id;
+    }
+    const upd = { status:'Answered', answer:ans, answered_on:on, decision_id };
+    await sbFetch('PATCH', `/rest/v1/pm_questions?id=eq.${id}`, upd); Object.assign(q, upd);
+    pmOpenQuestions(q.project_id); pmRender();
+    if(decision_id) pmToast('Answered and added to the decision log (set its category there)');
+  }catch(e){ alert('Could not save: '+e.message); }
+}
+async function pmDeleteRow(table, key, id, after){
+  if(!confirm('Delete this?')) return;
+  try{ await sbFetch('DELETE', `/rest/v1/${table}?id=eq.${id}`); pm[key] = pm[key].filter(x=>x.id!==id); after && after(); pmRender(); }
+  catch(e){ alert(e.message); }
+}
+async function pmNotifyText(owner, projectId, text){
+  if(!owner || owner===pmMe()) return;
+  const p = pmProject(projectId), who = pmMe() || ((currentUser&&currentUser.email)||'').split('@')[0];
+  try{ const r = await sbFetch('POST','/rest/v1/pm_notifications', { recipient:owner, project_id:projectId, message:`${who} ${text}${p?' ('+p.name+')':''}`, created_by:(currentUser&&currentUser.email)||'' }); pm.notes.push(...(r||[])); }catch(e){}
+}
+
+// ===== 2. Meeting notes → tasks / decisions / questions =====
+function pmMeetingNotes(itemId){
+  const it = pmItem(itemId); if(!it) return;
+  const lines = (it.meeting_notes||'').split('\n');
+  const made = pm._mnMade && pm._mnMade.id===itemId ? pm._mnMade.lines : {};
+  pm._mnMade = { id:itemId, lines:made };
+  pmModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">📝 Meeting notes</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(it.title)}${it.due_date?' · '+pmFmt(it.due_date,true):''} · ${pmEsc((pmProject(it.project_id)||{}).name||'')}</div></div>
+      <button class="pm-btn" onclick="pmSaveMeetingNotes('${itemId}',true)">✕</button></div>
+    <div style="margin-top:10px"><div class="pm-lbl">Attendees</div><input id="pmn-att" class="pm-in" value="${pmEsc(it.attendees||'')}" placeholder="e.g. Brian, Wes, Steve McAfee (AD), Board rep"></div>
+    <div style="margin-top:10px"><div class="pm-lbl">Notes (one point per line)</div><textarea id="pmn-notes" class="pm-in" rows="9" placeholder="- Backstop raised to 25 ft&#10;- Wes to shoot outfield grades next week&#10;- Need to confirm dugout roof color with AD" oninput="pmMnPreview()">${pmEsc(it.meeting_notes||'')}</textarea></div>
+    <div class="pm-lbl" style="margin-top:12px">Turn lines into…</div>
+    <div id="pmn-lines" style="max-height:30vh;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><button class="pm-btn primary" onclick="pmSaveMeetingNotes('${itemId}',true)">Save notes</button></div>`, 780);
+  pmMnPreview();
+}
+function pmMnPreview(){
+  const box = document.getElementById('pmn-lines'); if(!box) return;
+  const it = pmItem(pm._mnMade.id), made = pm._mnMade.lines;
+  const lines = document.getElementById('pmn-notes').value.split('\n').map(l=>l.replace(/^\s*[-*•]\s*/,'').trim());
+  box.innerHTML = lines.map((l,i)=>!l?'':`<div style="display:flex;gap:6px;align-items:center;padding:5px 8px;border-bottom:1px solid var(--border);font-size:13px">
+    <span style="flex:1;min-width:0">${pmEsc(l)}</span>
+    ${made[l]?`<span class="pm-chip" style="background:#dcfce7;color:#166534">✓ ${made[l]}</span>`:`
+    <select class="pm-in" id="pmn-own-${i}" style="width:auto;font-size:11px;padding:2px 4px"><option value="">owner…</option>${PM_OWNERS.map(o=>`<option>${o.name}</option>`).join('')}</select>
+    <button class="pm-btn" style="font-size:11px;padding:3px 7px" onclick="pmMnTask(${i})">→ Task</button>
+    <button class="pm-btn" style="font-size:11px;padding:3px 7px" onclick="pmMnDecision(${i})">→ Decision</button>
+    <button class="pm-btn" style="font-size:11px;padding:3px 7px" onclick="pmMnQuestion(${i})">→ Question</button>`}
+  </div>`).join('') || '<div style="padding:8px;font-size:12px;color:var(--text-3)">Lines you type above show up here.</div>';
+}
+function pmMnLine(i){ return document.getElementById('pmn-notes').value.split('\n')[i].replace(/^\s*[-*•]\s*/,'').trim(); }
+async function pmSaveMeetingNotes(itemId, close){
+  const it = pmItem(itemId); if(!it) return;
+  const notes = document.getElementById('pmn-notes')?.value ?? it.meeting_notes, att = document.getElementById('pmn-att')?.value ?? it.attendees;
+  if(notes!==(it.meeting_notes||'') || att!==(it.attendees||'')){ it.meeting_notes = notes; it.attendees = att; try{ await pmPatchItem(it); }catch(e){ alert('Could not save notes: '+e.message); return; } }
+  if(close){ document.getElementById('pm-overlay')?.remove(); pmRender(); }
+}
+async function pmMnTask(i){
+  const it = pmItem(pm._mnMade.id), title = pmMnLine(i), owner = document.getElementById('pmn-own-'+i).value;
+  await pmSaveMeetingNotes(it.id, false);
+  const parent = it.parent_id || null;
+  const row = pmFullRow({ id:crypto.randomUUID(), project_id:it.project_id, parent_id:parent, type:'task', title, owner, sort: pmKids(it.project_id, parent).length, description:`From meeting: ${it.title}${it.due_date?' ('+pmFmt(it.due_date,true)+')':''}` });
+  try{ const r = await sbFetch('POST','/rest/v1/pm_items', row); pm.items.push(...r); if(owner) pmNotify(owner, r[0], 'assigned'); pm._mnMade.lines[title] = 'task'+(owner?' · '+owner:''); pmMnPreview(); }
+  catch(e){ alert(e.message); }
+}
+async function pmMnDecision(i){
+  const it = pmItem(pm._mnMade.id), text = pmMnLine(i);
+  await pmSaveMeetingNotes(it.id, false);
+  const m = text.match(/^([^:–-]{2,60})\s*[:–-]\s*(.+)$/);
+  const topic = m ? m[1].trim() : text.split(/\s+/).slice(0,6).join(' '), decision = m ? m[2].trim() : text;
+  const r = await sbFetch('POST','/rest/v1/pm_decisions', { project_id:it.project_id, item_id:it.id, topic, decision, category:'Other', decided_on:it.due_date||pmToday(), decided_by:'', source:'Meeting', status:'Final', created_by:(currentUser&&currentUser.email)||'' }).catch(e=>{ alert(e.message); return null; });
+  if(!r) return; pm.decisions.push(r[0]); pm._mnMade.lines[text] = 'decision (set topic/category in the log)'; pmMnPreview();
+}
+async function pmMnQuestion(i){
+  const it = pmItem(pm._mnMade.id), text = pmMnLine(i), owner = document.getElementById('pmn-own-'+i).value;
+  await pmSaveMeetingNotes(it.id, false);
+  const r = await sbFetch('POST','/rest/v1/pm_questions', { project_id:it.project_id, item_id:it.id, question:text, asked_of:'', owner, asked_on:it.due_date||pmToday(), status:'Open', created_by:(currentUser&&currentUser.email)||'' }).catch(e=>{ alert(e.message); return null; });
+  if(!r) return; pm.questions.push(r[0]); pm._mnMade.lines[text] = 'question'+(owner?' · '+owner:''); pmMnPreview();
+}
+
+// ===== 3. Time: logged vs estimated =====
+function pmLogTime(itemId, projectId){
+  const it = itemId ? pmItem(itemId) : null; projectId = projectId || (it && it.project_id);
+  const items = pm.items.filter(i=>i.project_id===projectId && i.type!=='phase').sort((a,b)=>(a.sort||0)-(b.sort||0));
+  const me = pmMe();
+  pmModal(`<div class="sheet-title">⏱ Log time</div><div style="font-size:12px;color:var(--text-3);margin-bottom:10px">${pmEsc((pmProject(projectId)||{}).name||'')}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 90px;gap:10px">
+      <div><div class="pm-lbl">Who</div><select id="pmt-who" class="pm-in">${PM_OWNERS.map(o=>`<option${(me||'Brian')===o.name?' selected':''}>${o.name}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Date</div><input id="pmt-date" type="date" class="pm-in" value="${pmToday()}"></div>
+      <div><div class="pm-lbl">Hours</div><input id="pmt-hrs" type="number" step="0.25" min="0" class="pm-in" placeholder="2.5"></div>
+    </div>
+    <div style="margin-top:10px"><div class="pm-lbl">On</div><select id="pmt-item" class="pm-in"><option value="">General project time</option>${items.map(i=>`<option value="${i.id}"${itemId===i.id?' selected':''}>${pmEsc(i.title)}</option>`).join('')}</select></div>
+    <div style="margin-top:10px"><div class="pm-lbl">Note (optional)</div><input id="pmt-note" class="pm-in" placeholder="What you worked on"></div>
+    ${it?`<div style="font-size:12px;color:var(--text-3);margin-top:8px">Logged so far on this item: <b>${pmH(pmHoursLogged(x=>x.item_id===it.id))}</b>${it.est_hours?` of ${pmH(it.est_hours)} estimated`:''}</div>`:''}
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Cancel</button><button class="pm-btn primary" onclick="pmSaveTime('${projectId}')">Log it</button></div>`, 520);
+  setTimeout(()=>document.getElementById('pmt-hrs')?.focus(), 0);
+}
+async function pmSaveTime(projectId){
+  const hrs = Number(document.getElementById('pmt-hrs').value);
+  if(!(hrs>0)){ alert('Enter the hours.'); return; }
+  const row = { project_id:projectId, item_id:document.getElementById('pmt-item').value||null, person:document.getElementById('pmt-who').value, work_date:document.getElementById('pmt-date').value||pmToday(), hours:hrs, note:document.getElementById('pmt-note').value.trim(), created_by:(currentUser&&currentUser.email)||'' };
+  try{ const r = await sbFetch('POST','/rest/v1/pm_time', row); pm.time.push(r[0]); document.getElementById('pm-overlay').remove(); pmRender(); pmToast(`Logged ${pmH(hrs)}`); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+function pmOpenTime(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  const entries = pm.time.filter(t=>t.project_id===projectId).sort((a,b)=>(b.work_date||'').localeCompare(a.work_date||''));
+  const total = entries.reduce((s,t)=>s+(Number(t.hours)||0),0), est = pmHoursEst(projectId);
+  const rate = Number(p.hourly_rate)||0, cost = total*rate;
+  const byPerson = PM_OWNERS.map(o=>[o.name, pmHoursLogged(t=>t.project_id===projectId && t.person===o.name)]).filter(x=>x[1]);
+  const phases = pmKids(projectId, null).map(ph=>{ const ids = new Set([ph.id, ...pmDesc(ph.id).map(d=>d.id)]); return { ph, est: pmHoursEst(projectId, ph.id), act: pmHoursLogged(t=>t.project_id===projectId && ids.has(t.item_id)) }; });
+  const general = pmHoursLogged(t=>t.project_id===projectId && !t.item_id);
+  const bar = (a,e)=>{ if(!e) return ''; const pct = Math.min(100, a/e*100); return `<div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:3px"><div style="height:100%;width:${pct}%;background:${a>e?'#dc2626':a>e*.85?'#f59e0b':'#16a34a'}"></div></div>`; };
+  pmModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">⏱ Time</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)}</div></div>
+      <div style="display:flex;gap:6px"><button class="pm-btn primary" onclick="pmLogTime(null,'${projectId}')">+ Log time</button><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">✕</button></div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:12px 0">
+      <div class="pm-card" style="padding:10px"><div class="pm-lbl">Logged</div><div style="font-size:20px;font-weight:700">${pmH(total)}</div>${est?`<div style="font-size:11px;color:var(--text-3)">of ${pmH(est)} estimated</div>${bar(total,est)}`:''}</div>
+      ${rate?`<div class="pm-card" style="padding:10px"><div class="pm-lbl">Cost at ${pmMoney(rate)}/hr</div><div style="font-size:20px;font-weight:700">${pmMoney(cost)}</div>${p.budget?`<div style="font-size:11px;color:var(--text-3)">of ${pmMoney(p.budget)} budget (${Math.round(cost/p.budget*100)}%)</div>${bar(cost,p.budget)}`:''}</div>`:`<div class="pm-card" style="padding:10px;font-size:12px;color:var(--text-3)">Set an hourly rate on the project (Edit) to see cost against the budget.</div>`}
+      <div class="pm-card" style="padding:10px"><div class="pm-lbl">By person</div>${byPerson.map(([n,h])=>`<div style="font-size:12px;display:flex;justify-content:space-between"><span>${n}</span><b>${pmH(h)}</b></div>`).join('')||'<div style="font-size:12px;color:var(--text-3)">—</div>'}</div>
+    </div>
+    <div class="pm-lbl">By phase: logged vs estimated</div>
+    ${phases.map(x=>`<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:13px"><div style="display:flex;justify-content:space-between"><span>${pmEsc(x.ph.title)}</span><span><b>${pmH(x.act)}</b>${x.est?` / ${pmH(x.est)}`:''}</span></div>${bar(x.act,x.est)}</div>`).join('')}
+    ${general?`<div style="padding:5px 0;font-size:13px;display:flex;justify-content:space-between"><span style="color:var(--text-3)">General project time</span><b>${pmH(general)}</b></div>`:''}
+    <div class="pm-lbl" style="margin-top:12px">Entries</div>
+    <div style="max-height:28vh;overflow-y:auto">${entries.slice(0,200).map(t=>{ const it = t.item_id && pmItem(t.item_id); return `<div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">
+      <span style="width:70px;color:var(--text-3)">${pmFmt(t.work_date)}</span><span style="width:60px">${pmEsc(t.person)}</span><b style="width:44px">${pmH(t.hours)}</b>
+      <span style="flex:1;min-width:0;color:var(--text-2)">${it?pmEsc(it.title):'General'}${t.note?' · '+pmEsc(t.note):''}</span>
+      <button class="pm-ic" onclick="pmDeleteRow('pm_time','time','${t.id}',()=>pmOpenTime('${projectId}'))">🗑</button></div>`; }).join('') || '<div style="font-size:12px;color:var(--text-3)">No time logged yet.</div>'}</div>`, 760);
+}
+
+// ===== 4. Workload: hours and deadlines per person per week =====
+const PM_WEEK_CAPACITY = 40;
+function pmWorkloadData(weeks){
+  const projs = new Map(pm.projects.filter(p=>p.status!=='Complete').map(p=>[p.id,p]));
+  const set = pmClosureSet();
+  const data = {}; PM_OWNERS.forEach(o=>{ data[o.name] = { weeks: weeks.map(()=>({ hrs:0, items:[], due:[] })), nodate:{ hrs:0, items:[] } }; });
+  const wkIdx = d=>{ for(let i=weeks.length-1;i>=0;i--) if(d>=weeks[i]) return d<=pmShift(weeks[i],6) ? i : -1; return -1; };
+  pm.items.forEach(it=>{
+    if(!projs.has(it.project_id) || it.type==='phase' || it.status==='done' || !data[it.owner]) return;
+    if(pm.items.some(c=>c.parent_id===it.id)) return;
+    const row = data[it.owner], hrs = Number(it.est_hours)||0;
+    if(pmIsMilestone(it.type) || (it.type==='deliverable' && !it.start_date)){
+      const d = it.due_date || it.start_date; if(!d) return;
+      const w = wkIdx(d); if(w>=0) row.weeks[w].due.push(it);
+      return;
+    }
+    const s = it.start_date || it.due_date, e = it.due_date || it.start_date;
+    if(!s){ row.nodate.hrs += hrs; row.nodate.items.push(it); return; }
+    const days = []; for(let d=s, n=0; d<=e && n<400; d=pmShift(d,1), n++) if(pmIsWorkday(d,set)) days.push(d);
+    if(!days.length) days.push(s);
+    const per = hrs / days.length, touched = new Set();
+    days.forEach(d=>{ const w = wkIdx(d); if(w<0) return; row.weeks[w].hrs += per; touched.add(w); });
+    touched.forEach(w=>row.weeks[w].items.push(it));
+    if(it.type==='deliverable'){ const w = wkIdx(e); if(w>=0) row.weeks[w].due.push(it); }
+  });
+  return data;
+}
+function pmWorkloadHtml(){
+  const n = pm.wlWeeks || 8;
+  let mon = pmToday(); while(pmD(mon).getDay()!==1) mon = pmShift(mon,-1);
+  const weeks = Array.from({length:n}, (_,i)=>pmShift(mon, i*7));
+  const data = pmWorkloadData(weeks);
+  const set = pmClosureSet();
+  const cap = w=>{ let wd=0; for(let i=0;i<5;i++) if(pmIsWorkday(pmShift(w,i),set)) wd++; return PM_WEEK_CAPACITY*wd/5; };
+  const cell = (name, wi)=>{
+    const c = data[name].weeks[wi], h = Math.round(c.hrs*10)/10, capW = cap(weeks[wi]);
+    const bg = !h && !c.due.length ? 'transparent' : h>capW ? '#fee2e2' : h>capW*.8 ? '#fef3c7' : '#dcfce7';
+    return `<td onclick="pmWorkloadCell('${name}',${wi})" style="cursor:pointer;text-align:center;padding:8px 4px;border:1px solid var(--border);background:${bg}">
+      ${h?`<div style="font-weight:700;font-size:13px;color:${h>capW?'#b91c1c':'var(--text)'}">${h}h</div>`:'<div style="color:var(--text-3);font-size:12px">—</div>'}
+      ${c.items.length?`<div style="font-size:10px;color:var(--text-3)">${c.items.length} task${c.items.length===1?'':'s'}</div>`:''}
+      ${c.due.length?`<div style="font-size:11px;color:#b91c1c;font-weight:600">◆ ${c.due.length} due</div>`:''}
+    </td>`;
+  };
+  pm._wl = { weeks, data };
+  return `<div class="pm-card" style="max-width:1120px;margin:0 auto">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div style="font-size:16px;font-weight:700">Workload</div>
+      <select class="pm-in" style="width:auto" onchange="pm.wlWeeks=+this.value;pmRender()">${[4,8,12,16].map(k=>`<option value="${k}"${n===k?' selected':''}>Next ${k} weeks</option>`).join('')}</select>
+      <span style="font-size:11px;color:var(--text-3);margin-left:auto">Estimated hours of open tasks, spread over their work days · ◆ = milestones/deliverables due · green under 80% of ${PM_WEEK_CAPACITY}h, amber 80–100%, red over · click a cell for details</span>
+    </div>
+    <div style="overflow-x:auto"><table class="pm-tbl" style="border-collapse:collapse;width:100%;min-width:${120+n*70}px">
+      <thead><tr><th style="text-align:left;font-size:11px;color:var(--text-3);padding:6px">Person</th>
+        ${weeks.map(w=>`<th style="font-size:11px;color:var(--text-2);padding:6px;font-weight:600">Week of<br>${pmFmt(w)}</th>`).join('')}
+        <th style="font-size:11px;color:var(--text-3);padding:6px">No dates</th></tr></thead>
+      <tbody>${PM_OWNERS.map(o=>`<tr><td style="padding:8px;font-weight:600;font-size:13px;border:1px solid var(--border)">${o.name}</td>${weeks.map((_,wi)=>cell(o.name,wi)).join('')}
+        <td onclick="pmWorkloadCell('${o.name}',-1)" style="cursor:pointer;text-align:center;border:1px solid var(--border);font-size:12px;color:var(--text-3)">${data[o.name].nodate.items.length?`${data[o.name].nodate.items.length} task${data[o.name].nodate.items.length===1?'':'s'}${data[o.name].nodate.hrs?'<br>'+pmH(data[o.name].nodate.hrs):''}`:'—'}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px">Hours come from each task's estimate (Length in hours, or "Hours of work" on day-based tasks). Tasks without an hours estimate count as tasks but add no hours. Unassigned tasks and client/sub work assigned to someone for follow-up are included under that person.</div>
+  </div>`;
+}
+function pmWorkloadCell(name, wi){
+  const d = pm._wl.data[name], c = wi<0 ? { hrs:d.nodate.hrs, items:d.nodate.items, due:[] } : d.weeks[wi];
+  const title = wi<0 ? `${name}: tasks with no dates` : `${name}: week of ${pmFmt(pm._wl.weeks[wi],true)}`;
+  const row = it=>{ const p = pmProject(it.project_id); return `<div class="pm-row" style="cursor:pointer" onclick="pmEditItem('${it.id}')"><span class="pm-dot" style="margin:0;background:${pmEsc(p.color)}"></span>
+    <span style="flex:1">${PM_TYPES[it.type].icon==='•'?'':PM_TYPES[it.type].icon+' '}${pmEsc(it.title)}<div style="font-size:11px;color:var(--text-3)">${pmEsc(p.name)}</div></span>
+    ${it.est_hours?`<span class="pm-chip">${pmH(it.est_hours)}</span>`:''}<span style="font-size:12px;color:var(--text-2)">${it.start_date&&it.due_date&&it.start_date!==it.due_date?pmFmt(it.start_date)+' – ':''}${pmFmt(it.due_date||it.start_date)||''}</span></div>`; };
+  pmModal(`<div class="sheet-title">${pmEsc(title)}</div><div style="font-size:12px;color:var(--text-3);margin-bottom:8px">${pmH(c.hrs)} estimated${wi>=0?` · ${c.due.length} due`:''}</div>
+    ${c.due.length?`<div class="pm-lbl">Due this week</div>${c.due.map(row).join('')}`:''}
+    ${c.items.length?`<div class="pm-lbl" style="margin-top:8px">Working on</div>${c.items.map(row).join('')}`:''}
+    ${!c.due.length&&!c.items.length?'<div style="font-size:13px;color:var(--text-3)">Nothing scheduled.</div>':''}
+    <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Close</button></div>`, 620);
+}
+
+// ===== 5. Client update =====
+function pmClientUpdate(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  const since = pm._cuSince && pm._cuSince.p===projectId ? pm._cuSince.d : (p.last_update_at ? p.last_update_at.slice(0,10) : pmShift(pmToday(),-14));
+  pm._cuSince = { p:projectId, d:since };
+  const ahead = pmShift(pmToday(), 30);
+  const its = pm.items.filter(i=>i.project_id===projectId && i.type!=='phase');
+  const leaf = i=>!pm.items.some(c=>c.parent_id===i.id);
+  const done = its.filter(i=>i.status==='done' && leaf(i) && (i.done_at||'') >= since);
+  const coming = its.filter(i=>i.status!=='done' && i.party!=='client' && leaf(i) && (i.due_date||i.start_date) && (i.due_date||i.start_date) >= pmToday() && (i.due_date||i.start_date) <= ahead)
+    .sort((a,b)=>(a.due_date||a.start_date).localeCompare(b.due_date||b.start_date));
+  const decs = pm.decisions.filter(d=>d.project_id===projectId && d.status!=='Superseded' && (d.decided_on||'') >= since);
+  const onClient = its.filter(i=>i.party==='client' && i.status!=='done');
+  const qs = pm.questions.filter(q=>q.project_id===projectId && q.status==='Open' && q.asked_of && !pmIsFsName(q.asked_of));
+  const cur = pmCurrentPhase(projectId);
+  const b = arr=>arr.map(x=>'  - '+x).join('\n');
+  const text = [
+    `Here's where things stand on ${p.name}${cur?`. We're currently in ${cur.title} (${pmPhaseStatus(cur).pct}% complete)`:''}.`,
+    done.length ? `\nCompleted since ${pmFmt(since)}:\n${b(done.map(i=>i.title))}` : '',
+    coming.length ? `\nComing up:\n${b(coming.slice(0,10).map(i=>`${pmFmt(i.due_date||i.start_date)}: ${i.title}${pmIsMilestone(i.type)?' (meeting/milestone)':''}`))}` : '',
+    decs.length ? `\nDecisions made:\n${b(decs.map(d=>`${d.topic}: ${d.decision}`))}` : '',
+    (onClient.length||qs.length) ? `\nWhat we need from you:\n${b([...onClient.map(i=>`${i.title}${i.due_date?' (by '+pmFmt(i.due_date)+')':''}`), ...qs.map(q=>`${q.question}${q.due_date?' (by '+pmFmt(q.due_date)+')':''}`)])}` : '',
+    `\nLet me know if you have any questions.`,
+  ].filter(Boolean).join('\n');
+  const subject = `${p.name}: project update ${new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'})}`;
+  pmModal(`<div class="sheet-title">✉ Client update</div>
+    <div style="font-size:12px;color:var(--text-3);margin:2px 0 10px">${pmEsc(p.name)}${p.last_update_at?` · last update sent ${pmFmt(p.last_update_at.slice(0,10),true)}`:' · no update sent yet'}</div>
+    <div style="display:flex;gap:8px;align-items:center;font-size:12px;margin-bottom:8px">Covering changes since <input type="date" class="pm-in" style="width:auto" value="${since}" onchange="pm._cuSince={p:'${projectId}',d:this.value};pmClientUpdate('${projectId}')"></div>
+    <div class="pm-lbl">Subject</div><input id="pmcu-subj" class="pm-in" value="${pmEsc(subject)}">
+    <div class="pm-lbl" style="margin-top:8px">Message (edit freely)</div><textarea id="pmcu-body" class="pm-in" rows="16" style="font-family:inherit">${pmEsc(text)}</textarea>
+    <div style="font-size:11px;color:var(--text-3);margin-top:4px">Built from tasks completed, upcoming dates, decisions, and anything marked as the client's or asked of them.</div>
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="pm-btn" onclick="pmMarkUpdateSent('${projectId}')">Mark as sent</button>
+      <div style="display:flex;gap:8px"><button class="pm-btn" onclick="navigator.clipboard.writeText(document.getElementById('pmcu-body').value).then(()=>pmToast('Copied'))">Copy text</button>
+      <button class="pm-btn primary" onclick="window.open('mailto:?subject='+encodeURIComponent(document.getElementById('pmcu-subj').value)+'&body='+encodeURIComponent(document.getElementById('pmcu-body').value));pmMarkUpdateSent('${projectId}',true)">Open in email</button></div>
+    </div>`, 720);
+}
+async function pmMarkUpdateSent(projectId, quiet){
+  const p = pmProject(projectId), now = new Date().toISOString();
+  try{ await sbFetch('PATCH', `/rest/v1/pm_projects?id=eq.${projectId}`, { last_update_at: now }); p.last_update_at = now; pm._cuSince = null; if(!quiet){ document.getElementById('pm-overlay')?.remove(); } pmRender(); pmToast('Marked as sent'); }
+  catch(e){ alert(e.message); }
+}
+
+// ===== 6. Overview: every project's health =====
+function pmHealth(p){
+  const its = pm.items.filter(i=>i.project_id===p.id && i.type!=='phase');
+  const leaves = its.filter(i=>!pm.items.some(c=>c.parent_id===i.id));
+  const done = leaves.filter(i=>i.status==='done').length;
+  const next = its.filter(i=>(pmIsMilestone(i.type)||i.type==='deliverable') && i.status!=='done' && i.due_date && i.due_date>=pmToday()).sort((a,b)=>a.due_date.localeCompare(b.due_date))[0];
+  const est = leaves.reduce((t,i)=>t+(Number(i.est_hours)||0),0), act = pmHoursLogged(t=>t.project_id===p.id);
+  const fees = pmKids(p.id,null).filter(ph=>Number(ph.fee)>0);
+  return { p, pct: leaves.length ? Math.round(done/leaves.length*100) : 0, total: leaves.length, cur: pmCurrentPhase(p.id), next,
+    overdue: leaves.filter(pmOverdue).length, client: its.filter(i=>i.party==='client'&&i.status!=='done').length, subs: its.filter(i=>i.party==='sub'&&i.status!=='done').length,
+    qs: pm.questions.filter(q=>q.project_id===p.id && q.status==='Open').length, qsLate: pm.questions.filter(q=>q.project_id===p.id && q.status==='Open' && q.due_date && q.due_date<pmToday()).length,
+    est, act, cost: act*(Number(p.hourly_rate)||0),
+    toBill: fees.filter(ph=>!ph.billed && pmPhaseStatus(ph).state==='complete'), feeTotal: fees.reduce((t,ph)=>t+Number(ph.fee),0),
+    lastUpdate: p.last_update_at ? Math.floor((Date.now()-new Date(p.last_update_at))/864e5) : null };
+}
+function pmOverviewHtml(){
+  const hs = pm.projects.filter(p=>p.status!=='Complete').map(pmHealth)
+    .sort((a,b)=>(b.overdue>0)-(a.overdue>0) || (a.next?a.next.due_date:'9').localeCompare(b.next?b.next.due_date:'9'));
+  const all = { overdue: hs.reduce((t,h)=>t+h.overdue,0), client: hs.reduce((t,h)=>t+h.client,0), qs: hs.reduce((t,h)=>t+h.qs,0), toBill: hs.reduce((t,h)=>t+h.toBill.length,0), toBillAmt: hs.reduce((t,h)=>t+h.toBill.reduce((s,ph)=>s+Number(ph.fee),0),0) };
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);padding:8px 6px;text-align:left;border-bottom:1px solid var(--border-2)';
+  const td = 'padding:9px 6px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:top';
+  const stat = (v,l,c)=>`<div class="pm-card" style="padding:10px 12px"><div style="font-size:22px;font-weight:700;color:${v?c:'var(--text-3)'}">${v}</div><div style="font-size:11px;color:var(--text-3)">${l}</div></div>`;
+  return `<div style="max-width:1180px;margin:0 auto">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px">
+      ${stat(hs.length,'active projects','var(--text)')}${stat(all.overdue,'tasks past due','#dc2626')}${stat(all.client,'items waiting on clients','#9a3412')}${stat(all.qs,'open questions','#1d4ed8')}
+      ${stat(all.toBill ? pmMoney(all.toBillAmt) : 0, all.toBill ? `ready to bill (${all.toBill} phase${all.toBill===1?'':'s'})` : 'ready to bill','#15803d')}
+    </div>
+    <div class="pm-card" style="padding:0;overflow-x:auto"><table class="pm-tbl" style="width:100%;border-collapse:collapse;min-width:760px">
+      <thead><tr><th style="${th}">Project</th><th style="${th}">Phase</th><th style="${th}">Next deadline</th><th style="${th}">Attention</th><th style="${th}">Hours</th><th style="${th}">Billing</th><th style="${th}">Client update</th></tr></thead>
+      <tbody>${hs.map(h=>`<tr style="cursor:pointer" onclick="pm.sel='${h.p.id}';pmShow('projects')">
+        <td style="${td}"><div style="display:flex;gap:8px"><span class="pm-dot" style="background:${pmEsc(h.p.color)}"></span><div><b>${pmEsc(h.p.name)}</b><div style="font-size:11px;color:var(--text-3)">${pmEsc(h.p.client||'Field Source')}</div></div></div></td>
+        <td style="${td}">${h.cur?pmEsc(h.cur.title):'—'}<div style="height:5px;background:var(--border);border-radius:3px;margin-top:4px;width:110px;overflow:hidden"><div style="height:100%;width:${h.pct}%;background:${pmEsc(h.p.color)}"></div></div><div style="font-size:11px;color:var(--text-3)">${h.pct}% of ${h.total} tasks</div></td>
+        <td style="${td}">${h.next?`${PM_TYPES[h.next.type].icon} ${pmEsc(h.next.title)}<div style="font-size:11px;color:var(--text-3)">${pmFmt(h.next.due_date)} · ${Math.max(0,pmWorkdaysBetween(pmToday(),h.next.due_date)-1)} work days</div>`:'<span style="color:var(--text-3)">—</span>'}</td>
+        <td style="${td};font-size:12px">${[h.overdue?`<div style="color:#dc2626">${h.overdue} past due</div>`:'', h.client?`<div style="color:#9a3412">👤 ${h.client} on client</div>`:'', h.subs?`<div style="color:#5b21b6">🔧 ${h.subs} with subs</div>`:'', h.qs?`<div style="color:${h.qsLate?'#dc2626':'#1d4ed8'}">❓ ${h.qs} open question${h.qs===1?'':'s'}${h.qsLate?` (${h.qsLate} late)`:''}</div>`:''].join('')||'<span style="color:#16a34a">On track</span>'}</td>
+        <td style="${td};font-size:12px">${h.act||h.est?`${pmH(h.act)}${h.est?` / ${pmH(h.est)}`:''}${h.est&&h.act>h.est?'<div style="color:#dc2626">over estimate</div>':''}`:'—'}${h.p.budget&&h.cost?`<div style="color:${h.cost>h.p.budget?'#dc2626':'var(--text-3)'}">${Math.round(h.cost/h.p.budget*100)}% of budget</div>`:''}</td>
+        <td style="${td};font-size:12px">${h.toBill.length?`<b style="color:#15803d">${pmMoney(h.toBill.reduce((s,ph)=>s+Number(ph.fee),0))} ready</b>`:h.feeTotal?`<span style="color:var(--text-3)">${pmMoney(h.feeTotal)} in fees</span>`:'—'}</td>
+        <td style="${td};font-size:12px;color:${h.lastUpdate===null||h.lastUpdate>14?'#b45309':'var(--text-3)'}">${h.lastUpdate===null?'Never sent':h.lastUpdate===0?'Today':h.lastUpdate+' days ago'}</td>
+      </tr>`).join('') || `<tr><td colspan="7" style="${td};color:var(--text-3)">No active projects.</td></tr>`}</tbody>
+    </table></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px">Click a project to open it. Sorted by anything past due, then the nearest deadline. Client updates older than 2 weeks show in orange.</div>
+  </div>`;
+}
+
+// ===== 7. Phase fees & billing =====
+function pmOpenFees(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  const phases = pmKids(projectId, null);
+  const tot = phases.reduce((t,ph)=>t+(Number(ph.fee)||0),0), billed = phases.filter(ph=>ph.billed).reduce((t,ph)=>t+(Number(ph.fee)||0),0);
+  const ready = phases.filter(ph=>!ph.billed && Number(ph.fee)>0 && pmPhaseStatus(ph).state==='complete');
+  pmModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">💲 Fees &amp; billing</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)}</div></div>
+      <button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">✕</button></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0">
+      <div><div class="pm-lbl">QuickBooks estimate #</div><input id="pmf-qb" class="pm-in" value="${pmEsc(p.qb_estimate||'')}" placeholder="e.g. 1844" onchange="pmSaveProjField('${projectId}','qb_estimate',this.value.trim())"></div>
+      <div><div class="pm-lbl">Project budget</div><div style="font-size:14px;padding:7px 0">${p.budget?pmMoney(p.budget):'<span style="color:var(--text-3)">Not set (Edit project)</span>'}</div></div>
+    </div>
+    <table class="pm-tbl" style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr>${['Phase','Fee','Progress','Billing'].map(h=>`<th style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);text-align:left;padding:6px;border-bottom:1px solid var(--border-2)">${h}</th>`).join('')}</tr></thead>
+      <tbody>${phases.map(ph=>{ const st = pmPhaseStatus(ph); return `<tr>
+        <td style="padding:7px 6px;border-bottom:1px solid var(--border)">${pmEsc(ph.title)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid var(--border)"><input type="number" step="1" class="pm-in" style="width:110px;padding:4px 6px" value="${ph.fee??''}" placeholder="$" onchange="pmSavePhaseFee('${ph.id}',this.value)"></td>
+        <td style="padding:7px 6px;border-bottom:1px solid var(--border);font-size:12px">${st.state==='empty'?'<span style="color:var(--text-3)">no tasks</span>':`${st.pct}% <span style="color:var(--text-3)">(${st.done}/${st.total})</span>`}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid var(--border);font-size:12px">${ph.billed?`<span class="pm-chip" style="background:#dcfce7;color:#166534">Billed${ph.invoice_no?' #'+pmEsc(ph.invoice_no):''}${ph.billed_on?' · '+pmFmt(ph.billed_on):''}</span> <button class="pm-ic" title="Undo" onclick="pmSetBilled('${ph.id}',false)">↺</button>`
+          : st.state==='complete' && Number(ph.fee)>0 ? `<button class="pm-btn primary" style="font-size:11px;padding:3px 8px" onclick="pmSetBilled('${ph.id}',true)">Ready: mark billed</button>`
+          : Number(ph.fee)>0 ? `<span style="color:var(--text-3)">Bill when complete</span> <button class="pm-ic" title="Mark billed anyway (partial / deposit)" onclick="pmSetBilled('${ph.id}',true)">＄</button>` : '<span style="color:var(--text-3)">—</span>'}</td></tr>`; }).join('')}
+      </tbody>
+      <tfoot><tr><td style="padding:8px 6px;font-weight:700">Total</td><td style="padding:8px 6px;font-weight:700">${pmMoney(tot)}</td><td colspan="2" style="padding:8px 6px;font-size:12px">${pmMoney(billed)} billed · <b style="color:#15803d">${pmMoney(ready.reduce((t,ph)=>t+Number(ph.fee),0))} ready to bill</b> · ${pmMoney(tot-billed)} remaining${p.budget&&tot&&tot!==Number(p.budget)?` · <span style="color:#b45309">fees ${tot>p.budget?'exceed':'are under'} the ${pmMoney(p.budget)} budget</span>`:''}</td></tr></tfoot>
+    </table>
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px">A phase becomes "ready to bill" when all its tasks are checked off. Invoicing itself still happens in QuickBooks; record the invoice number here.</div>`, 760);
+}
+async function pmSaveProjField(projectId, field, value){ try{ await sbFetch('PATCH', `/rest/v1/pm_projects?id=eq.${projectId}`, { [field]: value }); pmProject(projectId)[field] = value; pmRender(); }catch(e){ alert(e.message); } }
+async function pmSavePhaseFee(id, v){ const ph = pmItem(id); ph.fee = v===''?null:Number(v); try{ await pmPatchItem(ph); pmOpenFees(ph.project_id); pmRender(); }catch(e){ alert(e.message); } }
+async function pmSetBilled(id, on){
+  const ph = pmItem(id);
+  if(on){ const inv = prompt(`Invoice number for "${ph.title}" (optional):`, ph.invoice_no||''); if(inv===null) return; ph.billed = true; ph.invoice_no = inv.trim(); ph.billed_on = pmToday(); }
+  else { if(!confirm('Mark this phase as not billed?')) return; ph.billed = false; ph.invoice_no = ''; ph.billed_on = null; }
+  try{ await pmPatchItem(ph); pmOpenFees(ph.project_id); pmRender(); }catch(e){ alert(e.message); }
+}
+
+// ===== 8. Drawing / submittal log =====
+function pmOpenSubmittals(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  const list = pm.submittals.filter(s=>s.project_id===projectId).sort((a,b)=>(b.sent_on||'').localeCompare(a.sent_on||''));
+  pmModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">📐 Submittal log</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)} · drawing sets and documents issued</div></div>
+      <div style="display:flex;gap:6px"><button class="pm-btn primary" onclick="pmEditSubmittal(null,'${projectId}')">+ Log a submittal</button><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">✕</button></div></div>
+    <div style="margin-top:12px;max-height:62vh;overflow-y:auto">${list.map(s=>{ const f = s.file_id && pm.files.find(x=>x.id===s.file_id), it = s.item_id && pmItem(s.item_id);
+      return `<div style="display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:6px">
+        <div style="width:78px;flex-shrink:0;font-size:12px;color:var(--text-2)"><b>${s.sent_on?pmFmt(s.sent_on):'—'}</b></div>
+        <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600">${pmEsc(s.title)}${s.revision?` <span class="pm-chip">${pmEsc(s.revision)}</span>`:''}</div>
+          <div style="font-size:12px;color:var(--text-3)">${s.sent_to?'To '+pmEsc(s.sent_to):''}${s.method?' · '+pmEsc(s.method):''}${it?' · '+pmEsc(it.title):''}</div>
+          ${s.notes?`<div style="font-size:12px;color:var(--text-2);margin-top:3px;white-space:pre-wrap">${pmEsc(s.notes)}</div>`:''}
+          ${f?`<div style="margin-top:4px"><span style="font-size:12px;color:var(--green-dark);cursor:pointer" onclick="pmViewFile('${f.id}')">📄 ${pmEsc(f.file_name)}</span></div>`:''}</div>
+        <button class="pm-ic" onclick="pmEditSubmittal('${s.id}','${projectId}')">✎</button></div>`; }).join('') || '<div style="padding:12px;font-size:13px;color:var(--text-3)">Nothing issued yet. Log each drawing set or document you send out: what, which revision, when, and to whom.</div>'}</div>`, 760);
+}
+function pmEditSubmittal(id, projectId){
+  const s = id ? pm.submittals.find(x=>x.id===id) : { title:'', revision:'', sent_on:pmToday(), sent_to:'', method:'Email', notes:'', item_id:'', file_id:'' };
+  const files = pm.files.filter(f=>f.project_id===projectId), items = pm.items.filter(i=>i.project_id===projectId).sort((a,b)=>(a.sort||0)-(b.sort||0));
+  const p = pmProject(projectId);
+  pmModal(`<div class="sheet-title">${id?'Edit submittal':'Log a submittal'}</div>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-top:8px">
+      <div><div class="pm-lbl">What was issued</div><input id="pms-title" class="pm-in" list="pms-titles" value="${pmEsc(s.title)}" placeholder="e.g. SD drawing set, Bid documents, Addendum"><datalist id="pms-titles">${['Existing conditions base map','Concept plans','SD drawing set','DD drawing set','CD drawing set','Specifications','Bid documents','Addendum','Cost estimate','Response to RFI'].map(t=>`<option value="${t}">`).join('')}</datalist></div>
+      <div><div class="pm-lbl">Revision</div><input id="pms-rev" class="pm-in" value="${pmEsc(s.revision||'')}" placeholder="e.g. Rev 1, Addendum 2"></div>
+      <div><div class="pm-lbl">Sent to</div><input id="pms-to" class="pm-in" value="${pmEsc(s.sent_to||'')}" placeholder="${pmEsc(p.client||'Client, bidders, architect…')}"></div>
+      <div><div class="pm-lbl">Date sent</div><input id="pms-date" type="date" class="pm-in" value="${pmEsc(s.sent_on||'')}"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div><div class="pm-lbl">How</div><select id="pms-method" class="pm-in">${['Email','Upload / portal','Printed set','Hand delivered','Other'].map(m=>`<option${s.method===m?' selected':''}>${m}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Phase / deliverable</div><select id="pms-item" class="pm-in"><option value="">—</option>${items.map(i=>`<option value="${i.id}"${s.item_id===i.id?' selected':''}>${i.type==='phase'?'▤ ':'  '}${pmEsc(i.title)}</option>`).join('')}</select></div>
+    </div>
+    <div style="margin-top:10px"><div class="pm-lbl">File (from the project's Files)</div><select id="pms-file" class="pm-in"><option value="">— none —</option>${files.map(f=>`<option value="${f.id}"${s.file_id===f.id?' selected':''}>${pmEsc(f.file_name)}</option>`).join('')}</select></div>
+    <div style="margin-top:10px"><div class="pm-lbl">Notes</div><textarea id="pms-notes" class="pm-in" rows="2" placeholder="What changed in this revision, comments received…">${pmEsc(s.notes||'')}</textarea></div>
+    <div style="display:flex;justify-content:space-between;margin-top:14px"><div>${id?`<button class="pm-btn" style="color:#b91c1c" onclick="pmDeleteRow('pm_submittals','submittals','${id}',()=>pmOpenSubmittals('${projectId}'))">Delete</button>`:''}</div>
+      <div style="display:flex;gap:8px"><button class="pm-btn" onclick="pmOpenSubmittals('${projectId}')">Back</button><button class="pm-btn primary" onclick="pmSaveSubmittal(${id?`'${id}'`:'null'},'${projectId}')">Save</button></div></div>`, 680);
+}
+async function pmSaveSubmittal(id, projectId){
+  const g = k=>document.getElementById(k).value;
+  const row = { project_id:projectId, title:g('pms-title').trim(), revision:g('pms-rev').trim(), sent_to:g('pms-to').trim(), sent_on:g('pms-date')||null, method:g('pms-method'), item_id:g('pms-item')||null, file_id:g('pms-file')||null, notes:g('pms-notes').trim() };
+  if(!row.title){ alert('What was issued?'); return; }
+  try{
+    if(id){ await sbFetch('PATCH', `/rest/v1/pm_submittals?id=eq.${id}`, row); Object.assign(pm.submittals.find(x=>x.id===id), row); }
+    else { const r = await sbFetch('POST','/rest/v1/pm_submittals', { ...row, created_by:(currentUser&&currentUser.email)||'' }); pm.submittals.push(r[0]); }
+    pmOpenSubmittals(projectId); pmRender();
+  }catch(e){ alert('Could not save: '+e.message); }
 }
 
 // ── Projects workspace ──
@@ -3318,24 +3946,34 @@ function pmWorkspaceHtml(p){
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
       <div><div style="font-size:18px;font-weight:700">${pmEsc(p.name)}</div>
         <div style="font-size:13px;color:var(--text-2)">${p.client?pmEsc(p.client):'Field Source'} · ${pmEsc(p.status)}${p.start_date?' · started '+pmFmt(p.start_date):''}</div></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="pm-btn" onclick="pmDeadlines('${p.id}')">⏰ Deadlines</button>
-        <button class="pm-btn" onclick="pmOpenFiles('${p.id}')">📎 Files${files.length?' ('+files.length+')':''}</button>
-        <button class="pm-btn" onclick="pm.calProject='${p.id}';pmShow('calendar')">📅 Calendar</button>
-        <button class="pm-btn" onclick="pm.ganttProject='${p.id}';pmShow('timeline')">📊 Timeline</button>
-        <button class="pm-btn" onclick="pmSaveAsTemplate('${p.id}')">Save as template</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="pm-btn" onclick="pmClientUpdate('${p.id}')">✉ Client update</button>
         <button class="pm-btn" onclick="pmEditProject('${p.id}')">Edit</button>
       </div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      <button class="pm-btn" onclick="pmOpenDecisions('${p.id}')">📋 Decisions${pmDecs(p.id).filter(d=>d.status!=='Superseded').length?' ('+pmDecs(p.id).filter(d=>d.status!=='Superseded').length+')':''}</button>
+      <button class="pm-btn" onclick="pmOpenQuestions('${p.id}')">❓ Questions${pmQs(p.id).filter(q=>q.status==='Open').length?' ('+pmQs(p.id).filter(q=>q.status==='Open').length+')':''}</button>
+      <button class="pm-btn" onclick="pmDeadlines('${p.id}')">⏰ Deadlines</button>
+      <button class="pm-btn" onclick="pmOpenSubmittals('${p.id}')">📐 Submittals${pm.submittals.filter(x=>x.project_id===p.id).length?' ('+pm.submittals.filter(x=>x.project_id===p.id).length+')':''}</button>
+      <button class="pm-btn" onclick="pmOpenTime('${p.id}')">⏱ Time${pmHoursLogged(t=>t.project_id===p.id)?' ('+pmH(pmHoursLogged(t=>t.project_id===p.id))+')':''}</button>
+      <button class="pm-btn" onclick="pmOpenFees('${p.id}')">💲 Fees</button>
+      <button class="pm-btn" onclick="pmOpenFiles('${p.id}')">📎 Files${files.length?' ('+files.length+')':''}</button>
+      <span style="margin-left:auto;display:flex;gap:10px;font-size:12px;align-items:center">
+        <a style="cursor:pointer;color:var(--text-2)" onclick="pm.calProject='${p.id}';pmShow('calendar')">📅 Calendar</a>
+        <a style="cursor:pointer;color:var(--text-2)" onclick="pm.ganttProject='${p.id}';pmShow('timeline')">📊 Timeline</a>
+        <a style="cursor:pointer;color:var(--text-2)" onclick="pmSaveAsTemplate('${p.id}')">Save as template</a></span>
     </div>
     ${p.notes?`<div style="font-size:13px;color:var(--text-2);margin-top:8px;white-space:pre-wrap">${pmEsc(p.notes)}</div>`:''}
     <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--text-2)">
       <span><b>${r.done}/${r.total}</b> done</span>
-      ${r.hours?`<span><b>${Math.round(r.hours)}</b> est. hours</span>`:''}
+      ${r.hours||pmHoursLogged(t=>t.project_id===p.id)?`<span><b>${pmH(pmHoursLogged(t=>t.project_id===p.id))}</b> logged${r.hours?` of ${Math.round(r.hours)} est.`:''}</span>`:''}
       ${p.budget?`<span><b>${money(p.budget)}</b> project budget</span>`:''}
       ${next?`<span>Next: <b>${PM_TYPES[next.type].icon} ${pmEsc(next.title)}</b> ${pmFmt(next.due_date)}</span>`:''}
       ${its.filter(pmOverdue).length?`<span style="color:#dc2626"><b>${its.filter(pmOverdue).length}</b> past due</span>`:''}
       ${its.filter(i=>i.party==='client'&&i.status!=='done').length?`<span style="color:#9a3412">👤 <b>${its.filter(i=>i.party==='client'&&i.status!=='done').length}</b> on the client</span>`:''}
       ${its.filter(i=>i.party==='sub'&&i.status!=='done').length?`<span style="color:#5b21b6">🔧 <b>${its.filter(i=>i.party==='sub'&&i.status!=='done').length}</b> with subs</span>`:''}
+      ${pmQs(p.id).filter(q=>q.status==='Open').length?`<span style="color:#1d4ed8;cursor:pointer" onclick="pmOpenQuestions('${p.id}')">❓ <b>${pmQs(p.id).filter(q=>q.status==='Open').length}</b> open question${pmQs(p.id).filter(q=>q.status==='Open').length===1?'':'s'}</span>`:''}
     </div>
   </div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
@@ -3375,15 +4013,18 @@ function pmRowHtml(it, depth){
         ${dep?`<span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:4px">⚡ ${pmEsc(pmTriggerLabel(it, dep))}</span>`:''}
         ${(()=>{ const nx = pm.items.filter(x=>x.depends_on===it.id); return nx.length ? `<span style="font-size:11px;color:#a16207;font-weight:400;margin-left:4px" title="Sets off: ${pmEsc(nx.map(x=>x.title).join(', '))}">⚡ sets off ${nx.length===1?pmEsc(nx[0].title):nx.length+' tasks'}</span>` : ''; })()}</span>
       ${pr}
+      ${pmIsMilestone(it.type)?`<button class="pm-ic" title="${it.meeting_notes?'Meeting notes':'Add meeting notes'}" onclick="pmMeetingNotes('${it.id}')" style="${it.meeting_notes?'':'opacity:.45'}">📝</button>`:''}
+      ${!r && pmHoursLogged(t=>t.item_id===it.id) ? `<span class="pm-chip" title="Hours logged${it.est_hours?' / estimated':''}" style="${it.est_hours && pmHoursLogged(t=>t.item_id===it.id)>it.est_hours?'background:#fee2e2;color:#991b1b':''}">⏱ ${pmH(pmHoursLogged(t=>t.item_id===it.id))}${it.est_hours?'/'+pmH(it.est_hours):''}</span>` : ''}
       ${pmPartyChip(it)}
       ${it.owner?`<span class="pm-chip" title="${pmIsExternal(it)?'Field Source follow-up':'Owner'}">${pmIsExternal(it)?'↻ ':''}${pmEsc(it.owner)}</span>`:''}
       ${r&&r.total?`<span class="pm-chip">${r.done}/${r.total}</span>`:''}
       ${r ? (r.hours?`<span class="pm-chip" title="Total estimated hours">${Math.round(r.hours)}h</span>`:'')
-          : (!pmIsMilestone(it.type) ? `<span class="pm-chip" style="cursor:pointer;${pmLenValue(it)?'':'opacity:.5'}" title="Length: click to change" onclick="pmQuickLength('${it.id}',this)">${pmLenLabel(it)||'+ length'}</span>` : '')}
+          : (!pmIsMilestone(it.type) ? `<span class="pm-chip${pmLenValue(it)?'':' pm-lenadd'}" style="cursor:pointer;${pmLenValue(it)?'':'opacity:.6'}" title="Length: click to change" onclick="pmQuickLength('${it.id}',this)">${pmLenLabel(it)||'+ length'}</span>` : '')}
       ${dep && it.dep_wait && !(it.start_date||it.due_date) && it.status!=='done'
         ? `<span class="pm-chip" style="background:#fef3c7;color:#92400e;min-width:90px;text-align:center" title="Gets dates when ${pmEsc(dep.title)} ${it.dep_type==='start'?'starts':'is done'}">⏳ Waiting</span>`
-        : `<span onclick="pmEditItem('${it.id}')" title="Click to change dates" style="cursor:pointer;font-size:12px;white-space:nowrap;min-width:90px;text-align:right;color:${late?'#dc2626':'var(--text-2)'};font-weight:${late?600:400}">${dates}</span>`}
+        : `<span onclick="pmEditItem('${it.id}')" title="Click to change dates" style="margin-left:auto;cursor:pointer;font-size:12px;white-space:nowrap;min-width:90px;text-align:right;color:${late?'#dc2626':'var(--text-2)'};font-weight:${late?600:400}">${dates}</span>`}
       <span class="pm-acts">
+        ${!isPhase && !kids.length ? `<button class="pm-ic" title="Log time" onclick="pmLogTime('${it.id}')">⏱</button>` : ''}
         ${!isPhase && !kids.length && it.status!=='done' && !pmIsMilestone(it.type) ? `<button class="pm-ic" title="${it.status==='in_progress'?'Mark not started':'Mark started (sets off anything waiting for this to start)'}" onclick="pmToggleStarted('${it.id}')">${it.status==='in_progress'?'⏸':'▶'}</button>` : ''}
         <button class="pm-ic" title="Add ${isPhase?'task':'subtask'}" onclick="pmEditItem(null,{project_id:'${it.project_id}',parent_id:'${it.id}',type:'task'})">＋</button>
         <button class="pm-ic" title="Move up" onclick="pmMove('${it.id}',-1)">↑</button>
@@ -3590,6 +4231,8 @@ function pmEditItem(id, defaults){
       <div><div class="pm-lbl" id="pmi-due-lbl">Due</div><input id="pmi-due" type="date" class="pm-in" value="${v('due_date')}" onchange="pmItemDatesChanged('due')"></div>
     </div>
     <div id="pmi-dates-note" style="font-size:11px;color:var(--text-3);margin-top:4px"></div>
+    ${id && it.type!=='phase' && pmHoursLogged(t=>t.item_id===id) ? `<div style="font-size:12px;margin-top:6px">⏱ <b>${pmH(pmHoursLogged(t=>t.item_id===id))}</b> logged${it.est_hours?` of ${pmH(it.est_hours)} estimated`:''}</div>` : ''}
+    ${it.type==='phase' ? `<div style="margin-top:10px;max-width:220px"><div class="pm-lbl">Phase fee ($)</div><input id="pmi-fee" type="number" step="1" class="pm-in" value="${pmEsc(it.fee??'')}" placeholder="optional"></div>` : ''}
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:10px">
       <div id="pmi-hours-wrap"><div class="pm-lbl">Hours of work (optional)</div><input id="pmi-hours" type="number" step="0.5" class="pm-in" value="${pmLenUnit(it)==='days'?v('est_hours'):''}" placeholder="for budgeting"></div>
 
@@ -3616,7 +4259,11 @@ function pmEditItem(id, defaults){
     </div>`}
     <div id="pmi-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
     <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
-      <div>${id?`<button class="pm-btn" style="color:#b91c1c" onclick="document.getElementById('pm-overlay').remove();pmDeleteItem('${id}')">Delete</button>`:''}</div>
+      <div style="display:flex;gap:6px">${id?`<button class="pm-btn" style="color:#b91c1c" onclick="document.getElementById('pm-overlay').remove();pmDeleteItem('${id}')">Delete</button>
+        <button class="pm-btn" title="Record a decision that came up in this item" onclick="pmEditDecision(null,'${it.project_id}');setTimeout(()=>{const s=document.getElementById('pmd-item');if(s)s.value='${id}';},0)">📋 Decision</button>
+        <button class="pm-btn" title="Add an open question" onclick="pmEditQuestion(null,'${it.project_id}',{item_id:'${id}'})">❓ Question</button>
+        ${it.type!=='phase'?`<button class="pm-btn" onclick="pmLogTime('${id}')">⏱ Log time</button>`:''}
+        ${pmIsMilestone(it.type)?`<button class="pm-btn" onclick="pmMeetingNotes('${id}')">📝 Notes</button>`:''}`:''}</div>
       <div style="display:flex;gap:8px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
       <button class="pm-btn primary" onclick="pmSaveItem(${id?`'${id}'`:'null'}, ${pmEsc(JSON.stringify({project_id:it.project_id,parent_id:it.parent_id||null}))})">Save</button></div>
     </div>`);
@@ -3747,6 +4394,7 @@ async function pmSaveItem(id, base){
     dep_type: g('pmi-deptype'), dep_lag: Math.max(0, parseInt(g('pmi-deplag'))||0), dep_wait: document.getElementById('pmi-depwait').checked,
     party: (document.querySelector('input[name="pmi-party"]:checked')||{}).value || 'fs' };
   row.party_name = row.party==='fs' ? '' : g('pmi-partyname').trim();
+  if(document.getElementById('pmi-fee')) row.fee = g('pmi-fee')===''?null:Number(g('pmi-fee'));
   if(row.start_date && row.due_date && row.due_date < row.start_date){ document.getElementById('pmi-err').textContent='Due date is before the start date.'; return; }
   const old = id ? pmItem(id) : null;
   if(row.status==='done' && (!old || old.status!=='done')) row.done_at = pmToday();
@@ -3782,6 +4430,7 @@ function pmEditProject(id){
       <div><div class="pm-lbl">Client <span style="text-transform:none;font-weight:400">(leave blank for Field Source's own work)</span></div><input id="pmp-client" class="pm-in" value="${pmEsc(p.client)}" list="pmp-clients">
         <datalist id="pmp-clients">${(typeof CLIENTS!=='undefined'?CLIENTS:[]).map(c=>`<option value="${pmEsc(c)}">`).join('')}</datalist></div>
       <div><div class="pm-lbl">Project budget ($)</div><input id="pmp-budget" type="number" step="1" class="pm-in" value="${pmEsc(p.budget??'')}" placeholder="optional"></div>
+      <div><div class="pm-lbl">Hourly rate for budget tracking ($)</div><input id="pmp-rate" type="number" step="1" class="pm-in" value="${pmEsc(p.hourly_rate??'')}" placeholder="optional, e.g. 150"></div>
       <div><div class="pm-lbl">Status</div><select id="pmp-status" class="pm-in">${['Active','On hold','Complete'].map(s=>`<option${p.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
       <div><div class="pm-lbl">Start date</div><input id="pmp-start" type="date" class="pm-in" value="${pmEsc(p.start_date||'')}"></div>
       <div><div class="pm-lbl">Color</div><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
@@ -3816,7 +4465,7 @@ async function pmSaveProject(id){
   const g = k=>document.getElementById(k).value;
   const name = g('pmp-name').trim();
   if(!name){ document.getElementById('pmp-err').textContent='Give the project a name.'; return; }
-  const row = { name, client:g('pmp-client').trim(), kind: g('pmp-client').trim() ? 'client' : 'internal', budget: g('pmp-budget')===''?null:Number(g('pmp-budget')), status:g('pmp-status'), start_date:g('pmp-start')||null, color:g('pmp-color'), notes:g('pmp-notes'), updated_at:new Date().toISOString() };
+  const row = { name, client:g('pmp-client').trim(), kind: g('pmp-client').trim() ? 'client' : 'internal', budget: g('pmp-budget')===''?null:Number(g('pmp-budget')), hourly_rate: g('pmp-rate')===''?null:Number(g('pmp-rate')), status:g('pmp-status'), start_date:g('pmp-start')||null, color:g('pmp-color'), notes:g('pmp-notes'), updated_at:new Date().toISOString() };
   try{
     if(id){ await sbFetch('PATCH', `/rest/v1/pm_projects?id=eq.${id}`, row); Object.assign(pmProject(id), row); }
     else {

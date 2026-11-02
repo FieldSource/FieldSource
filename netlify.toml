@@ -1,2 +1,5 @@
 [functions."qb-sync-hourly"]
   schedule = "@hourly"
+
+[functions."nightly-backup"]
+  schedule = "0 7 * * *"

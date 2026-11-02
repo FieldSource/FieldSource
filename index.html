@@ -442,7 +442,11 @@ main{padding:12px 16px 100px}
 
 <div class="view-bar" id="consulting-bar" style="display:none">
   <div class="view-bar-row">
-    <button class="vtab" onclick="view='consulting-home';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderConsulting()">Overview</button>
+    <button class="vtab" data-pm="projects" onclick="pmShow('projects')">Projects</button>
+    <button class="vtab" data-pm="calendar" onclick="pmShow('calendar')">Calendar</button>
+    <button class="vtab" data-pm="timeline" onclick="pmShow('timeline')">Timeline</button>
+    <button class="vtab" data-pm="settings" onclick="pmShow('settings')">Templates &amp; Closures</button>
+    <button class="vtab" onclick="view='consulting-home';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderConsulting()">Classic</button>
   </div>
 </div>
 
@@ -2604,6 +2608,7 @@ function startPolling(){
       if(view==='mileage' && mileageModalOpen) return;
       // Don't re-render if in consulting detail view or any overlay modal is open
       if(view==='consulting-home' && consultingView==='detail') return;
+      if(view==='pm') return;
       if(document.querySelector('.modal-overlay')) return;
       if(view==='invoices' && invoiceView==='reports') return;
       // Preserve scroll position during background refresh
@@ -2777,13 +2782,7 @@ function setPortal(portal){
     Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'));
   }
   else if(portal==='consulting'){
-    loadConsulting().then(()=>{
-      view='consulting-home';
-      document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-      const bar = document.getElementById('consulting-bar');
-      if(bar) { const tabs = bar.querySelectorAll('.vtab'); if(tabs[0]) tabs[0].classList.add('active'); }
-      renderConsulting();
-    });
+    loadConsulting().then(()=>pmShow('projects'));
   }
   else if(portal==='fleet'){
     loadFleet().then(()=>{
@@ -2796,6 +2795,910 @@ function setPortal(portal){
   }
 }
 
+
+// ===================== PROJECT PLANNER (Consulting portal) =====================
+// Projects -> collapsible phases -> nested tasks / deliverables / milestones.
+// Views: Projects (workspace), Calendar (all projects, color-coded), Timeline (Gantt), Settings.
+// Work-day scheduling skips weekends + pm_closures. Dependencies auto-schedule successors.
+const pm = {
+  loaded:false, error:'', projects:[], items:[], templates:[], closures:[], files:[],
+  tab:'projects', sel:null, projFilter:'Active', showDone:true,
+  collapsed: (()=>{ try{ return JSON.parse(localStorage.getItem('pm_collapsed')||'{}'); }catch(e){ return {}; } })(),
+  calMonth: new Date().toISOString().slice(0,7), calProject:'', calKeyOnly:false, calHideDone:true,
+  ganttProject:'', ganttZoom:'week', ganttHideDone:false,
+};
+const PM_TYPES = {
+  phase:        { label:'Phase',              icon:'▤' },
+  task:         { label:'Task',               icon:'•' },
+  deliverable:  { label:'Deliverable',        icon:'■' },
+  milestone_ext:{ label:'Client milestone',   icon:'◆' },
+  milestone_int:{ label:'Internal milestone', icon:'◇' },
+};
+const PM_COLORS = ['#2563eb','#16a34a','#dc2626','#9333ea','#ea580c','#0891b2','#ca8a04','#db2777','#4f46e5','#65a30d','#0f766e','#7c2d12'];
+const PM_PEOPLE_EXTRA = ['Brian','Wes','Robert','Ryan','Jake','Matt'];
+
+const pmEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+const pmIsMilestone = t=>t==='milestone_ext'||t==='milestone_int';
+function pmSaveCollapsed(){ try{ localStorage.setItem('pm_collapsed', JSON.stringify(pm.collapsed)); }catch(e){} }
+
+// ── dates & work days ──
+const pmD = s=>new Date(s+'T12:00:00');
+const pmYmd = d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const pmToday = ()=>pmYmd(new Date());
+function pmClosureSet(){ return new Set(pm.closures.map(c=>c.date)); }
+function pmIsWorkday(s, set){ const w = pmD(s).getDay(); return w!==0 && w!==6 && !(set||pmClosureSet()).has(s); }
+function pmShift(s, days){ const d = pmD(s); d.setDate(d.getDate()+days); return pmYmd(d); }
+function pmNextWorkday(s){ const set = pmClosureSet(); let d = pmShift(s,1); for(let i=0;i<60 && !pmIsWorkday(d,set);i++) d = pmShift(d,1); return d; }
+function pmFirstWorkday(s){ const set = pmClosureSet(); let d = s; for(let i=0;i<60 && !pmIsWorkday(d,set);i++) d = pmShift(d,1); return d; }
+// Last day of a job that starts on s and takes n work days (n=1 -> same day).
+function pmAddWorkdays(s, n){ const set = pmClosureSet(); let d = pmFirstWorkday(s), left = Math.max(1, n||1) - 1; for(let i=0;left>0 && i<2000;i++){ d = pmShift(d,1); if(pmIsWorkday(d,set)) left--; } return d; }
+function pmWorkdaysBetween(a, b){ if(!a||!b||b<a) return 0; const set = pmClosureSet(); let n=0, d=a; for(let i=0;d<=b && i<3000;i++){ if(pmIsWorkday(d,set)) n++; d = pmShift(d,1); } return n; }
+function pmFmt(s, withYear){ if(!s) return ''; const d = pmD(s); const y = d.getFullYear() !== new Date().getFullYear(); return d.toLocaleDateString('en-US', { month:'short', day:'numeric', ...((withYear||y)?{year:'numeric'}:{}) }); }
+
+// ── tree helpers ──
+function pmKids(projectId, parentId){ return pm.items.filter(i=>i.project_id===projectId && (i.parent_id||null)===(parentId||null)).sort((a,b)=>(a.sort||0)-(b.sort||0)); }
+function pmDesc(id){ const out=[]; const walk=pid=>pm.items.filter(i=>i.parent_id===pid).forEach(c=>{ out.push(c); walk(c.id); }); walk(id); return out; }
+function pmProject(id){ return pm.projects.find(p=>p.id===id); }
+function pmItem(id){ return pm.items.find(i=>i.id===id); }
+// Date span of an item including everything under it.
+function pmRange(it){
+  const all = [it, ...pmDesc(it.id)];
+  const starts = all.map(x=>x.start_date||x.due_date).filter(Boolean).sort();
+  const ends = all.map(x=>x.due_date||x.start_date).filter(Boolean).sort();
+  return { start: starts[0]||null, end: ends[ends.length-1]||null };
+}
+function pmRollup(items){
+  const leaves = items.filter(i=>i.type!=='phase' && !pm.items.some(c=>c.parent_id===i.id));
+  return {
+    total: leaves.length, done: leaves.filter(i=>i.status==='done').length,
+    hours: items.reduce((t,i)=>t+(Number(i.est_hours)||0),0),
+    budget: items.reduce((t,i)=>t+(Number(i.budget)||0),0),
+  };
+}
+function pmOverdue(it){ return it.status!=='done' && (it.due_date||it.start_date) && (it.due_date||it.start_date) < pmToday(); }
+
+// ── loading ──
+async function pmLoad(force){
+  if(pm.loaded && !force) return;
+  try{
+    const [p,i,t,c,f] = await Promise.all([
+      sbFetch('GET','/rest/v1/pm_projects?select=*&order=created_at.asc'),
+      sbFetch('GET','/rest/v1/pm_items?select=*&order=sort.asc'),
+      sbFetch('GET','/rest/v1/pm_templates?select=*&order=name.asc'),
+      sbFetch('GET','/rest/v1/pm_closures?select=*&order=date.asc'),
+      sbFetch('GET','/rest/v1/pm_files?select=*&order=created_at.desc'),
+    ]);
+    pm.projects = p||[]; pm.items = i||[]; pm.templates = t||[]; pm.closures = c||[]; pm.files = f||[];
+    pm.loaded = true; pm.error = '';
+    if(!pm.sel || !pmProject(pm.sel)){ const first = pm.projects.find(x=>x.status!=='Complete'); pm.sel = first ? first.id : (pm.projects[0]||{}).id || null; }
+  }catch(e){
+    pm.error = /does not exist|relation|PGRST/i.test(e.message) ? 'setup' : e.message;
+  }
+}
+
+// ── saving ──
+const PM_ITEM_FIELDS = ['project_id','parent_id','type','title','description','owner','priority','status','start_date','due_date','duration_days','est_hours','budget','depends_on','auto_schedule','done_at','sort'];
+function pmClean(it){ const o={}; PM_ITEM_FIELDS.forEach(k=>{ if(k in it) o[k] = (it[k]==='' && !['title','description','owner'].includes(k)) ? null : it[k]; }); return o; }
+async function pmPatchItem(it){ await sbFetch('PATCH', `/rest/v1/pm_items?id=eq.${it.id}`, { ...pmClean(it), updated_at:new Date().toISOString() }); }
+
+// Move items that depend on others so each starts the next work day after its predecessor
+// finishes (or is due). Cascades down the chain. Returns the items that changed.
+function pmComputeSchedule(projectId){
+  const changed = new Map();
+  for(let pass=0; pass<30; pass++){
+    let moved = false;
+    pm.items.filter(i=>i.project_id===projectId && i.depends_on && i.auto_schedule!==false && i.status!=='done').forEach(it=>{
+      const pred = pmItem(it.depends_on); if(!pred) return;
+      const anchor = pred.status==='done' ? (pred.done_at||pmToday()) : (pred.due_date || pmRange(pred).end);
+      if(!anchor) return;
+      const start = pmNextWorkday(anchor);
+      let due;
+      if(pmIsMilestone(it.type)) due = start;
+      else if(it.duration_days) due = pmAddWorkdays(start, it.duration_days);
+      else if(it.start_date && it.due_date) due = pmAddWorkdays(start, Math.max(1, pmWorkdaysBetween(it.start_date, it.due_date)));
+      else due = it.due_date && it.due_date >= start ? it.due_date : null;
+      const newStart = pmIsMilestone(it.type) ? null : start;
+      if((it.start_date||null)!==newStart || (it.due_date||null)!==due){ it.start_date = newStart; it.due_date = due; changed.set(it.id, it); moved = true; }
+    });
+    if(!moved) break;
+  }
+  return [...changed.values()];
+}
+async function pmReschedule(projectId){
+  const changed = pmComputeSchedule(projectId);
+  await Promise.all(changed.map(pmPatchItem));
+  return changed.length;
+}
+
+async function pmToggleDone(id){
+  const it = pmItem(id); if(!it) return;
+  if(it.status==='done'){ it.status='todo'; it.done_at=null; }
+  else { it.status='done'; it.done_at=pmToday(); }
+  try{ await pmPatchItem(it); const n = await pmReschedule(it.project_id); pmRender(); if(n) pmToast(`${n} dependent item${n===1?'':'s'} rescheduled`); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+
+async function pmMove(id, dir){
+  const it = pmItem(id); if(!it) return;
+  const sibs = pmKids(it.project_id, it.parent_id);
+  sibs.forEach((s,i)=>{ if(s.sort!==i) s.sort=i; });
+  const idx = sibs.findIndex(s=>s.id===id), j = idx+dir;
+  if(j<0 || j>=sibs.length) return;
+  const other = sibs[j]; const a = it.sort; it.sort = other.sort; other.sort = a;
+  pmRender();
+  try{ await Promise.all(sibs.map(pmPatchItem)); }catch(e){ alert('Could not reorder: '+e.message); }
+}
+
+async function pmDeleteItem(id){
+  const it = pmItem(id); if(!it) return;
+  const desc = pmDesc(id);
+  if(!confirm(`Delete "${it.title}"${desc.length?` and the ${desc.length} item${desc.length===1?'':'s'} under it`:''}?`)) return;
+  try{
+    await sbFetch('DELETE', `/rest/v1/pm_items?id=eq.${id}`);
+    const gone = new Set([id, ...desc.map(d=>d.id)]);
+    pm.items = pm.items.filter(i=>!gone.has(i.id));
+    pm.items.forEach(i=>{ if(gone.has(i.depends_on)) i.depends_on = null; });
+    pmRender();
+  }catch(e){ alert('Could not delete: '+e.message); }
+}
+
+function pmToast(msg){
+  const t = document.createElement('div');
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.2)';
+  document.body.appendChild(t); setTimeout(()=>t.remove(), 2600);
+}
+
+// ── templates ──
+// Turn a template tree into new item rows (with client-side ids so parents link in one insert).
+function pmTemplateRows(tree, projectId, opts){
+  const rows = [];
+  const walk = (nodes, parentId, depth)=>nodes.forEach((n,i)=>{
+    const id = crypto.randomUUID();
+    rows.push({ id, project_id:projectId, parent_id:parentId, type: depth===0 ? 'phase' : (n.type==='phase'?'task':(n.type||'task')),
+      title:n.title||'Untitled', description:n.description||'', owner:n.owner||'', priority:n.priority||'Medium', status:'todo',
+      start_date:null, due_date:null, duration_days:n.duration||null, est_hours:n.est_hours??null, budget:n.budget??null,
+      depends_on:null, auto_schedule:true, done_at:null, sort:(opts.sortBase||0)+i });
+    if(n.children && n.children.length) walk(n.children, id, depth+1);
+  });
+  walk(tree, null, 0);
+  // Optional rough schedule: lay leaf items end to end in order, each depending on the one before.
+  if(opts.startDate){
+    let cursor = pmFirstWorkday(opts.startDate), prev = null;
+    const hasKids = new Set(rows.map(r=>r.parent_id).filter(Boolean));
+    const order = []; const dfs = pid=>rows.filter(r=>r.parent_id===pid).forEach(r=>{ order.push(r); dfs(r.id); }); dfs(null);
+    order.filter(r=>r.type!=='phase' && !hasKids.has(r.id)).forEach(r=>{
+      if(pmIsMilestone(r.type)){ r.due_date = cursor; }
+      else { r.start_date = cursor; r.due_date = pmAddWorkdays(cursor, r.duration_days||1); cursor = pmNextWorkday(r.due_date); }
+      if(prev) r.depends_on = prev.id;
+      prev = r;
+    });
+  }
+  return rows;
+}
+function pmTreeFromProject(projectId){
+  const build = pid=>pmKids(projectId, pid).map(it=>{
+    const n = { title:it.title, type:it.type };
+    if(it.description) n.description = it.description;
+    if(it.duration_days) n.duration = it.duration_days;
+    else if(it.start_date && it.due_date) n.duration = pmWorkdaysBetween(it.start_date, it.due_date);
+    if(it.est_hours!=null) n.est_hours = Number(it.est_hours);
+    const kids = build(it.id); if(kids.length) n.children = kids;
+    return n;
+  });
+  return build(null);
+}
+async function pmSaveAsTemplate(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  const name = prompt('Template name:', `${p.name} template`); if(!name) return;
+  try{
+    const row = await sbFetch('POST','/rest/v1/pm_templates', { name, items: pmTreeFromProject(projectId), created_by:(currentUser&&currentUser.email)||'' });
+    pm.templates.push(row[0]); pm.templates.sort((a,b)=>a.name.localeCompare(b.name));
+    pmToast('Template saved');
+  }catch(e){ alert('Could not save template: '+e.message); }
+}
+// ── shell: tabs + rendering ──
+function pmStyles(){
+  if(document.getElementById('pm-styles')) return;
+  const s = document.createElement('style'); s.id='pm-styles';
+  s.textContent = `
+  .pm-grid{display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start}
+  @media (max-width:820px){.pm-grid{grid-template-columns:1fr}}
+  .pm-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+  .pm-btn{font-size:12px;padding:5px 10px;border:1px solid var(--border-2);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer;font-family:inherit}
+  .pm-btn:hover{background:var(--bg)}
+  .pm-btn.primary{background:var(--green);border-color:var(--green);color:#fff;font-weight:600}
+  .pm-proj{display:flex;gap:8px;align-items:flex-start;padding:7px 8px;border-radius:8px;cursor:pointer}
+  .pm-proj:hover{background:var(--bg)} .pm-proj.sel{background:var(--accent)}
+  .pm-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:4px}
+  .pm-row{display:flex;align-items:center;gap:8px;padding:6px 6px;border-bottom:1px solid var(--border);font-size:13px}
+  .pm-row:hover{background:var(--bg)} .pm-row .pm-acts{opacity:0;display:flex;gap:2px} .pm-row:hover .pm-acts{opacity:1}
+  .pm-ic{border:none;background:none;cursor:pointer;color:var(--text-3);font-size:13px;padding:2px 4px;border-radius:4px}
+  .pm-ic:hover{background:var(--surface);color:var(--text)}
+  .pm-chip{font-size:11px;padding:1px 7px;border-radius:99px;background:var(--surface);color:var(--text-2);white-space:nowrap}
+  .pm-in{width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);box-sizing:border-box;font-family:inherit}
+  .pm-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin-bottom:3px}
+  @media (hover:none){.pm-row .pm-acts{opacity:1}}`;
+  document.head.appendChild(s);
+}
+async function pmShow(tab){
+  pm.tab = tab;
+  setView('pm');
+  document.querySelectorAll('#consulting-bar .vtab').forEach(b=>b.classList.toggle('active', b.dataset.pm===tab));
+  if(!pm.loaded) document.getElementById('main-content').innerHTML = '<div style="padding:30px;color:var(--text-3)">Loading projects…</div>';
+  await pmLoad();
+  pmRender();
+  document.querySelectorAll('#consulting-bar .vtab').forEach(b=>b.classList.toggle('active', b.dataset.pm===tab));
+}
+function pmRender(){
+  if(view!=='pm') return;
+  pmStyles();
+  const el = document.getElementById('main-content'); if(!el) return;
+  if(pm.error==='setup'){ el.innerHTML = `<div class="pm-card" style="max-width:620px">The project planner's database tables aren't set up yet. Run <b>project-planner-setup.sql</b> in the Supabase SQL Editor, then reload.</div>`; return; }
+  if(pm.error){ el.innerHTML = `<div class="pm-card" style="color:#b91c1c">Couldn't load projects: ${pmEsc(pm.error)}</div>`; return; }
+  const sx = window.scrollX, sy = window.scrollY;
+  const gs = document.getElementById('pm-gantt-scroll'); const gl = gs?gs.scrollLeft:null, gt = gs?gs.scrollTop:null;
+  if(pm.tab==='calendar') el.innerHTML = pmCalendarHtml();
+  else if(pm.tab==='timeline') el.innerHTML = pmGanttHtml();
+  else if(pm.tab==='settings') el.innerHTML = pmSettingsHtml();
+  else el.innerHTML = pmProjectsHtml();
+  window.scrollTo(sx, sy);
+  if(pm.tab==='timeline') pmGanttAfter(gl, gt);
+}
+
+// ── Projects workspace ──
+function pmProjectsHtml(){
+  const list = pm.projects.filter(p=>pm.projFilter==='All' || (pm.projFilter==='Active' ? p.status!=='Complete' : p.status===pm.projFilter));
+  const group = (kind,label)=>{
+    const ps = list.filter(p=>(p.kind||'client')===kind);
+    if(!ps.length) return '';
+    return `<div class="pm-lbl" style="margin:10px 0 4px">${label}</div>` + ps.map(p=>{
+      const its = pm.items.filter(i=>i.project_id===p.id), r = pmRollup(its);
+      const late = its.filter(pmOverdue).length;
+      return `<div class="pm-proj${p.id===pm.sel?' sel':''}" onclick="pm.sel='${p.id}';pmRender()">
+        <span class="pm-dot" style="background:${pmEsc(p.color||'#2563eb')}"></span>
+        <div style="min-width:0;flex:1"><div style="font-size:13px;font-weight:600;color:var(--text)">${pmEsc(p.name)}</div>
+        <div style="font-size:11px;color:var(--text-3)">${p.client?pmEsc(p.client)+' · ':''}${r.done}/${r.total} done${late?` · <span style="color:#dc2626">${late} late</span>`:''}${p.status!=='Active'?' · '+pmEsc(p.status):''}</div></div>
+      </div>`;
+    }).join('');
+  };
+  const legacy = (typeof consultingProjects!=='undefined'?consultingProjects:[]).filter(c=>!pm.projects.some(p=>p.legacy_id===c.id));
+  const side = `<div class="pm-card" style="position:sticky;top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
+      <div style="font-size:15px;font-weight:700">Projects</div>
+      <button class="pm-btn primary" onclick="pmEditProject()">+ New</button>
+    </div>
+    <select class="pm-in" style="margin-top:8px;font-size:12px;padding:4px 6px" onchange="pm.projFilter=this.value;pmRender()">
+      ${['Active','On hold','Complete','All'].map(f=>`<option${pm.projFilter===f?' selected':''}>${f}</option>`).join('')}
+    </select>
+    ${group('client','Client projects')}${group('internal','Internal / Field Source')}
+    ${!list.length?'<div style="font-size:12px;color:var(--text-3);margin-top:10px">No projects here yet.</div>':''}
+    ${legacy.length?`<button class="pm-btn" style="margin-top:12px;width:100%" onclick="pmImportLegacy()">Import ${legacy.length} project${legacy.length===1?'':'s'} from the old Consulting view</button>`:''}
+  </div>`;
+  const p = pmProject(pm.sel);
+  return `<div class="pm-grid">${side}<div>${p ? pmWorkspaceHtml(p) : `<div class="pm-card" style="color:var(--text-3)">Pick a project on the left, or click <b>+ New</b>.</div>`}</div></div>`;
+}
+
+function pmWorkspaceHtml(p){
+  const its = pm.items.filter(i=>i.project_id===p.id), r = pmRollup(its);
+  const next = its.filter(i=>pmIsMilestone(i.type)||i.type==='deliverable').filter(i=>i.status!=='done' && i.due_date && i.due_date>=pmToday()).sort((a,b)=>a.due_date.localeCompare(b.due_date))[0];
+  const files = pm.files.filter(f=>f.project_id===p.id);
+  const phases = pmKids(p.id, null);
+  const money = n=>'$'+Number(n||0).toLocaleString('en-US',{maximumFractionDigits:0});
+  return `<div class="pm-card" style="border-left:5px solid ${pmEsc(p.color)};margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+      <div><div style="font-size:18px;font-weight:700">${pmEsc(p.name)}</div>
+        <div style="font-size:13px;color:var(--text-2)">${p.client?pmEsc(p.client)+' · ':''}${p.kind==='internal'?'Internal':'Client project'} · ${pmEsc(p.status)}${p.start_date?' · started '+pmFmt(p.start_date):''}</div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="pm-btn" onclick="pmOpenFiles('${p.id}')">📎 Files${files.length?' ('+files.length+')':''}</button>
+        <button class="pm-btn" onclick="pm.calProject='${p.id}';pmShow('calendar')">📅 Calendar</button>
+        <button class="pm-btn" onclick="pm.ganttProject='${p.id}';pmShow('timeline')">📊 Timeline</button>
+        <button class="pm-btn" onclick="pmSaveAsTemplate('${p.id}')">Save as template</button>
+        <button class="pm-btn" onclick="pmEditProject('${p.id}')">Edit</button>
+      </div>
+    </div>
+    ${p.notes?`<div style="font-size:13px;color:var(--text-2);margin-top:8px;white-space:pre-wrap">${pmEsc(p.notes)}</div>`:''}
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:12px;color:var(--text-2)">
+      <span><b>${r.done}/${r.total}</b> done</span>
+      ${r.hours?`<span><b>${Math.round(r.hours)}</b> est. hours</span>`:''}
+      ${r.budget?`<span><b>${money(r.budget)}</b> budget</span>`:''}
+      ${next?`<span>Next: <b>${PM_TYPES[next.type].icon} ${pmEsc(next.title)}</b> ${pmFmt(next.due_date)}</span>`:''}
+      ${its.filter(pmOverdue).length?`<span style="color:#dc2626"><b>${its.filter(pmOverdue).length}</b> past due</span>`:''}
+    </div>
+  </div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
+    <button class="pm-btn primary" onclick="pmEditItem(null,{project_id:'${p.id}',parent_id:null,type:'phase'})">+ Phase</button>
+    <button class="pm-btn" onclick="pmAddFromTemplate('${p.id}')">+ Phases from a template</button>
+    <button class="pm-btn" onclick="pmCollapseAll('${p.id}',false)">Expand all</button>
+    <button class="pm-btn" onclick="pmCollapseAll('${p.id}',true)">Collapse all</button>
+    <label style="font-size:12px;color:var(--text-2);display:flex;gap:4px;align-items:center;margin-left:auto"><input type="checkbox" ${pm.showDone?'checked':''} onchange="pm.showDone=this.checked;pmRender()"> Show completed</label>
+  </div>
+  <div class="pm-card" style="padding:0;overflow:hidden">
+    ${phases.length ? phases.map(ph=>pmRowHtml(ph,0)).join('') : `<div style="padding:16px;font-size:13px;color:var(--text-3)">No phases yet. Add one, or pull phases in from a template.</div>`}
+  </div>
+  <div style="font-size:11px;color:var(--text-3);margin-top:8px">◆ client milestone · ◇ internal milestone · ■ deliverable · • task. Dates count work days only (weekends and closures skipped).</div>`;
+}
+
+function pmRowHtml(it, depth){
+  const kids = pmKids(it.project_id, it.id);
+  if(!pm.showDone && it.status==='done' && it.type!=='phase') return '';
+  const open = !pm.collapsed[it.id];
+  const isPhase = it.type==='phase';
+  const rng = (kids.length||isPhase) ? pmRange(it) : { start: it.start_date, end: it.due_date };
+  const r = kids.length ? pmRollup(pmDesc(it.id)) : null;
+  const dep = it.depends_on ? pmItem(it.depends_on) : null;
+  const late = pmOverdue(it) && !kids.length;
+  let dates = '';
+  if(pmIsMilestone(it.type)) dates = it.due_date ? pmFmt(it.due_date) : 'No date';
+  else if(rng.start && rng.end && rng.start!==rng.end) dates = `${pmFmt(rng.start)} – ${pmFmt(rng.end)}`;
+  else if(rng.end||rng.start) dates = (kids.length||isPhase?'':'Due ')+pmFmt(rng.end||rng.start);
+  const pr = it.priority==='High' ? `<span class="pm-chip" style="background:#fee2e2;color:#991b1b">High</span>` : '';
+  const tw = it.type==='milestone_ext' ? 'color:#b91c1c' : it.type==='milestone_int' ? 'color:#7c3aed' : it.type==='deliverable' ? 'color:#0369a1' : 'color:var(--text-3)';
+  return `<div class="pm-row" style="padding-left:${8+depth*22}px;${isPhase?'background:var(--surface);font-weight:600':''}${it.status==='done'&&!isPhase?';opacity:.55':''}">
+      <span style="width:16px;flex-shrink:0;cursor:${kids.length?'pointer':'default'};color:var(--text-3)" onclick="${kids.length?`pm.collapsed['${it.id}']=${open};pmSaveCollapsed();pmRender()`:''}">${kids.length?(open?'▾':'▸'):''}</span>
+      ${isPhase||kids.length ? '' : `<input type="checkbox" ${it.status==='done'?'checked':''} onclick="pmToggleDone('${it.id}')" style="cursor:pointer;flex-shrink:0">`}
+      <span style="${tw};flex-shrink:0;width:12px;text-align:center" title="${PM_TYPES[it.type]?.label||''}">${isPhase?'':PM_TYPES[it.type]?.icon||'•'}</span>
+      <span onclick="pmEditItem('${it.id}')" style="cursor:pointer;flex:1;min-width:120px;${it.status==='done'&&!isPhase?'text-decoration:line-through':''}">${pmEsc(it.title)}
+        ${it.status==='in_progress'?'<span class="pm-chip" style="background:#dbeafe;color:#1d4ed8;margin-left:4px">In progress</span>':''}
+        ${dep?`<span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:4px">↳ after ${pmEsc(dep.title)}</span>`:''}</span>
+      ${pr}
+      ${it.owner?`<span class="pm-chip">${pmEsc(it.owner)}</span>`:''}
+      ${r&&r.total?`<span class="pm-chip">${r.done}/${r.total}</span>`:''}
+      ${(r?r.hours:Number(it.est_hours))?`<span class="pm-chip">${Math.round(r?r.hours:Number(it.est_hours))}h</span>`:''}
+      <span style="font-size:12px;white-space:nowrap;min-width:90px;text-align:right;color:${late?'#dc2626':'var(--text-2)'};font-weight:${late?600:400}">${dates}</span>
+      <span class="pm-acts">
+        <button class="pm-ic" title="Add ${isPhase?'task':'subtask'}" onclick="pmEditItem(null,{project_id:'${it.project_id}',parent_id:'${it.id}',type:'task'})">＋</button>
+        <button class="pm-ic" title="Move up" onclick="pmMove('${it.id}',-1)">↑</button>
+        <button class="pm-ic" title="Move down" onclick="pmMove('${it.id}',1)">↓</button>
+        <button class="pm-ic" title="Delete" onclick="pmDeleteItem('${it.id}')">🗑</button>
+      </span>
+    </div>` + (open ? kids.map(k=>pmRowHtml(k, depth+1)).join('') : '');
+}
+
+function pmCollapseAll(projectId, collapse){
+  pm.items.filter(i=>i.project_id===projectId && pm.items.some(c=>c.parent_id===i.id)).forEach(i=>{ if(collapse) pm.collapsed[i.id]=true; else delete pm.collapsed[i.id]; });
+  pmSaveCollapsed(); pmRender();
+}
+
+// ── modals ──
+function pmModal(html, width){
+  document.getElementById('pm-overlay')?.remove();
+  const o = document.createElement('div');
+  o.className='modal-overlay centered'; o.id='pm-overlay';
+  o.innerHTML = `<div class="modal-sheet" style="max-width:${width||620}px;max-height:92vh;overflow-y:auto"><div class="sheet-handle"></div>${html}</div>`;
+  o.onclick = e=>{ if(e.target===o) o.remove(); };
+  document.body.appendChild(o);
+  return o;
+}
+function pmPeople(){
+  const names = new Set(PM_PEOPLE_EXTRA);
+  if(typeof USER_DISPLAY_NAMES!=='undefined') Object.values(USER_DISPLAY_NAMES).forEach(n=>names.add(n));
+  pm.items.forEach(i=>{ if(i.owner) names.add(i.owner); });
+  return [...names].sort();
+}
+
+function pmEditItem(id, defaults){
+  const it = id ? { ...pmItem(id) } : { title:'', description:'', owner:'', priority:'Medium', status:'todo', start_date:'', due_date:'', duration_days:'', est_hours:'', budget:'', depends_on:'', auto_schedule:true, ...defaults };
+  if(!it.project_id) return;
+  const p = pmProject(it.project_id);
+  const isTop = !it.parent_id;
+  const typeOpts = (isTop ? ['phase'] : []).concat(['task','deliverable','milestone_ext','milestone_int']);
+  const banned = new Set(id ? [id, ...pmDesc(id).map(d=>d.id)] : []);
+  const depOpts = pm.items.filter(i=>i.project_id===it.project_id && !banned.has(i.id) && i.type!=='phase');
+  const path = x=>{ const names=[]; let c=x; while(c){ names.unshift(c.title); c = c.parent_id?pmItem(c.parent_id):null; } return names.join(' › '); };
+  const v = k=>pmEsc(it[k]??'');
+  pmModal(`
+    <div class="sheet-title">${id?'Edit':'Add'} ${it.type==='phase'?'phase':'item'}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">${pmEsc(p.name)}${it.parent_id?' › '+pmEsc(path(pmItem(it.parent_id))):''}</div>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
+      <div><div class="pm-lbl">Title</div><input id="pmi-title" class="pm-in" value="${v('title')}" autofocus></div>
+      <div><div class="pm-lbl">Type</div><select id="pmi-type" class="pm-in" onchange="pmItemTypeChanged()">${typeOpts.map(t=>`<option value="${t}"${it.type===t?' selected':''}>${PM_TYPES[t].icon} ${PM_TYPES[t].label}</option>`).join('')}</select></div>
+    </div>
+    <div style="margin-top:10px"><div class="pm-lbl">Description</div><textarea id="pmi-desc" class="pm-in" rows="2">${v('description')}</textarea></div>
+    <datalist id="pm-people">${pmPeople().map(n=>`<option value="${pmEsc(n)}">`).join('')}</datalist>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">
+      <div><div class="pm-lbl">Owner</div><input id="pmi-owner" class="pm-in" list="pm-people" value="${v('owner')}"></div>
+      <div><div class="pm-lbl">Priority</div><select id="pmi-priority" class="pm-in">${['High','Medium','Low'].map(x=>`<option${it.priority===x?' selected':''}>${x}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Status</div><select id="pmi-status" class="pm-in">${[['todo','To do'],['in_progress','In progress'],['done','Done']].map(([k,l])=>`<option value="${k}"${it.status===k?' selected':''}>${l}</option>`).join('')}</select></div>
+    </div>
+    <div id="pmi-dates" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">
+      <div class="pmi-span"><div class="pm-lbl">Start</div><input id="pmi-start" type="date" class="pm-in" value="${v('start_date')}" onchange="pmItemDatesChanged('start')"></div>
+      <div class="pmi-span"><div class="pm-lbl">Work days</div><input id="pmi-dur" type="number" min="1" class="pm-in" value="${v('duration_days')}" oninput="pmItemDatesChanged('dur')"></div>
+      <div><div class="pm-lbl" id="pmi-due-lbl">Due</div><input id="pmi-due" type="date" class="pm-in" value="${v('due_date')}" onchange="pmItemDatesChanged('due')"></div>
+    </div>
+    <div id="pmi-dates-note" style="font-size:11px;color:var(--text-3);margin-top:4px"></div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:10px">
+      <div><div class="pm-lbl">Estimated hours</div><input id="pmi-hours" type="number" step="0.5" class="pm-in" value="${v('est_hours')}"></div>
+      <div><div class="pm-lbl">Budget ($)</div><input id="pmi-budget" type="number" step="1" class="pm-in" value="${v('budget')}"></div>
+    </div>
+    <div style="margin-top:10px"><div class="pm-lbl">Can't start until this is done</div>
+      <select id="pmi-dep" class="pm-in" onchange="document.getElementById('pmi-auto-wrap').style.display=this.value?'':'none'"><option value="">(nothing, schedule it myself)</option>
+        ${depOpts.map(d=>`<option value="${d.id}"${it.depends_on===d.id?' selected':''}>${pmEsc(path(d))}</option>`).join('')}</select>
+      <label id="pmi-auto-wrap" style="font-size:12px;color:var(--text-2);display:${it.depends_on?'flex':'none'};gap:6px;align-items:center;margin-top:6px"><input id="pmi-auto" type="checkbox" ${it.auto_schedule!==false?'checked':''}> Move this automatically when that one finishes or moves</label>
+    </div>
+    <div id="pmi-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
+      <div>${id?`<button class="pm-btn" style="color:#b91c1c" onclick="document.getElementById('pm-overlay').remove();pmDeleteItem('${id}')">Delete</button>`:''}</div>
+      <div style="display:flex;gap:8px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
+      <button class="pm-btn primary" onclick="pmSaveItem(${id?`'${id}'`:'null'}, ${pmEsc(JSON.stringify({project_id:it.project_id,parent_id:it.parent_id||null}))})">Save</button></div>
+    </div>`);
+  pmItemTypeChanged();
+}
+function pmItemTypeChanged(){
+  const t = document.getElementById('pmi-type').value;
+  const ms = pmIsMilestone(t);
+  document.querySelectorAll('.pmi-span').forEach(e=>e.style.display = ms?'none':'');
+  document.getElementById('pmi-due-lbl').textContent = ms ? 'Date' : 'Due';
+  document.getElementById('pmi-dates').style.gridTemplateColumns = ms ? '1fr' : 'repeat(3,1fr)';
+  pmItemDatesChanged();
+}
+function pmItemDatesChanged(src){
+  const s = document.getElementById('pmi-start'), d = document.getElementById('pmi-dur'), e = document.getElementById('pmi-due'), note = document.getElementById('pmi-dates-note');
+  if(pmIsMilestone(document.getElementById('pmi-type').value)){ note.textContent=''; return; }
+  if((src==='start'||src==='dur') && s.value && Number(d.value)>0) e.value = pmAddWorkdays(s.value, Number(d.value));
+  else if(src==='due' && s.value && e.value && e.value>=s.value) d.value = pmWorkdaysBetween(s.value, e.value);
+  else if(src==='start' && s.value && e.value && e.value>=s.value) d.value = pmWorkdaysBetween(s.value, e.value);
+  note.textContent = s.value && e.value ? `${pmWorkdaysBetween(s.value, e.value)} work day(s), weekends and closures skipped.` : 'Leave dates blank if you don\'t know them yet.';
+}
+async function pmSaveItem(id, base){
+  const g = k=>document.getElementById(k).value;
+  const title = g('pmi-title').trim();
+  if(!title){ document.getElementById('pmi-err').textContent='Give it a title.'; return; }
+  const type = g('pmi-type'), ms = pmIsMilestone(type);
+  const row = { ...base, title, type, description:g('pmi-desc'), owner:g('pmi-owner').trim(), priority:g('pmi-priority'), status:g('pmi-status'),
+    start_date: ms ? null : (g('pmi-start')||null), due_date: g('pmi-due')||null, duration_days: ms ? null : (Number(g('pmi-dur'))||null),
+    est_hours: g('pmi-hours')===''?null:Number(g('pmi-hours')), budget: g('pmi-budget')===''?null:Number(g('pmi-budget')),
+    depends_on: g('pmi-dep')||null, auto_schedule: document.getElementById('pmi-auto').checked };
+  if(row.start_date && row.due_date && row.due_date < row.start_date){ document.getElementById('pmi-err').textContent='Due date is before the start date.'; return; }
+  const old = id ? pmItem(id) : null;
+  if(row.status==='done' && (!old || old.status!=='done')) row.done_at = pmToday();
+  if(row.status!=='done') row.done_at = null;
+  try{
+    if(id){ Object.assign(old, row); await pmPatchItem(old); }
+    else {
+      row.sort = pmKids(row.project_id, row.parent_id).length;
+      const res = await sbFetch('POST','/rest/v1/pm_items', pmClean({ ...row, id: crypto.randomUUID() }));
+      pm.items.push(res[0]);
+      if(row.parent_id) delete pm.collapsed[row.parent_id];
+    }
+    document.getElementById('pm-overlay').remove();
+    const n = await pmReschedule(row.project_id);
+    pmRender();
+    if(n) pmToast(`${n} dependent item${n===1?'':'s'} rescheduled`);
+  }catch(e){ document.getElementById('pmi-err').textContent = 'Could not save: '+e.message; }
+}
+
+function pmEditProject(id){
+  const p = id ? pmProject(id) : { name:'', client:'', kind:'client', color: PM_COLORS[pm.projects.length % PM_COLORS.length], status:'Active', start_date:'', notes:'' };
+  const tplOpts = pm.templates.map(t=>`<option value="${t.id}">${pmEsc(t.name)}</option>`).join('');
+  pmModal(`
+    <div class="sheet-title">${id?'Edit project':'New project'}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
+      <div><div class="pm-lbl">Project name</div><input id="pmp-name" class="pm-in" value="${pmEsc(p.name)}" placeholder="Lima Central Catholic master plan"></div>
+      <div><div class="pm-lbl">Client</div><input id="pmp-client" class="pm-in" value="${pmEsc(p.client)}" list="pmp-clients">
+        <datalist id="pmp-clients">${(typeof CLIENTS!=='undefined'?CLIENTS:[]).map(c=>`<option value="${pmEsc(c)}">`).join('')}</datalist></div>
+      <div><div class="pm-lbl">Kind</div><select id="pmp-kind" class="pm-in"><option value="client"${p.kind!=='internal'?' selected':''}>Client project</option><option value="internal"${p.kind==='internal'?' selected':''}>Internal / Field Source</option></select></div>
+      <div><div class="pm-lbl">Status</div><select id="pmp-status" class="pm-in">${['Active','On hold','Complete'].map(s=>`<option${p.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Start date</div><input id="pmp-start" type="date" class="pm-in" value="${pmEsc(p.start_date||'')}"></div>
+      <div><div class="pm-lbl">Color</div><div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+        ${PM_COLORS.map(c=>`<span onclick="document.getElementById('pmp-color').value='${c}'" style="width:20px;height:20px;border-radius:50%;background:${c};cursor:pointer;display:inline-block"></span>`).join('')}
+        <input id="pmp-color" type="color" value="${pmEsc(p.color||'#2563eb')}" style="width:32px;height:24px;border:none;background:none"></div></div>
+    </div>
+    <div style="margin-top:10px"><div class="pm-lbl">Notes</div><textarea id="pmp-notes" class="pm-in" rows="2">${pmEsc(p.notes||'')}</textarea></div>
+    ${id?'':`<div style="margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <div class="pm-lbl">Start from a template</div>
+      <select id="pmp-tpl" class="pm-in" onchange="pmTplPreview(this.value,'pmp-tpl-phases')"><option value="">Blank project</option>${tplOpts}</select>
+      <div id="pmp-tpl-phases" style="margin-top:8px"></div>
+      <label style="font-size:12px;color:var(--text-2);display:flex;gap:6px;align-items:center;margin-top:8px"><input id="pmp-rough" type="checkbox"> Rough out a schedule from the start date (each item follows the one before; adjust anytime)</label>
+    </div>`}
+    <div id="pmp-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;margin-top:16px">
+      <div>${id?`<button class="pm-btn" style="color:#b91c1c" onclick="pmDeleteProject('${id}')">Delete project</button>`:''}</div>
+      <div style="display:flex;gap:8px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
+      <button class="pm-btn primary" onclick="pmSaveProject(${id?`'${id}'`:'null'})">${id?'Save':'Create project'}</button></div>
+    </div>`);
+  if(!id && pm.templates.length){ const sel=document.getElementById('pmp-tpl'); const std = pm.templates.find(t=>/standard/i.test(t.name)) || pm.templates[0]; sel.value = std.id; pmTplPreview(std.id,'pmp-tpl-phases'); }
+}
+function pmTplPreview(tplId, elId){
+  const el = document.getElementById(elId); if(!el) return;
+  const t = pm.templates.find(x=>x.id===tplId);
+  if(!t){ el.innerHTML=''; return; }
+  const count = n=>(n.children||[]).reduce((s,c)=>s+1+count(c),0);
+  el.innerHTML = `<div style="font-size:12px;color:var(--text-2);margin-bottom:4px">Phases to include (uncheck what this project doesn't need):</div>` +
+    (t.items||[]).map((ph,i)=>`<label style="display:flex;gap:6px;align-items:center;font-size:13px;padding:2px 0"><input type="checkbox" class="pm-tpl-ph" value="${i}" checked> ${pmEsc(ph.title)} <span style="color:var(--text-3);font-size:11px">${count(ph)} items</span></label>`).join('');
+}
+async function pmSaveProject(id){
+  const g = k=>document.getElementById(k).value;
+  const name = g('pmp-name').trim();
+  if(!name){ document.getElementById('pmp-err').textContent='Give the project a name.'; return; }
+  const row = { name, client:g('pmp-client').trim(), kind:g('pmp-kind'), status:g('pmp-status'), start_date:g('pmp-start')||null, color:g('pmp-color'), notes:g('pmp-notes'), updated_at:new Date().toISOString() };
+  try{
+    if(id){ await sbFetch('PATCH', `/rest/v1/pm_projects?id=eq.${id}`, row); Object.assign(pmProject(id), row); }
+    else {
+      if(document.getElementById('pmp-rough')?.checked && document.getElementById('pmp-tpl')?.value && !row.start_date){ document.getElementById('pmp-err').textContent='Pick a start date to rough out a schedule.'; return; }
+      const res = await sbFetch('POST','/rest/v1/pm_projects', { ...row, created_by:(currentUser&&currentUser.email)||'' });
+      const p = res[0]; pm.projects.push(p); pm.sel = p.id;
+      const tpl = pm.templates.find(t=>t.id===g('pmp-tpl'));
+      if(tpl){
+        const keep = [...document.querySelectorAll('.pm-tpl-ph:checked')].map(c=>tpl.items[+c.value]);
+        const rough = document.getElementById('pmp-rough').checked;
+        const rows = pmTemplateRows(keep, p.id, { startDate: rough ? row.start_date : null });
+        if(rows.length){ const ins = await sbFetch('POST','/rest/v1/pm_items', rows.map(pmClean).map((r,i)=>({ ...r, id: rows[i].id }))); pm.items.push(...ins); }
+      }
+    }
+    document.getElementById('pm-overlay').remove();
+    pmRender();
+  }catch(e){ document.getElementById('pmp-err').textContent = 'Could not save: '+e.message; }
+}
+async function pmDeleteProject(id){
+  const p = pmProject(id);
+  if(!confirm(`Delete "${p.name}" and everything in it (phases, tasks, file records)? This can't be undone.`)) return;
+  try{
+    await sbFetch('DELETE', `/rest/v1/pm_projects?id=eq.${id}`);
+    pm.projects = pm.projects.filter(x=>x.id!==id); pm.items = pm.items.filter(i=>i.project_id!==id); pm.files = pm.files.filter(f=>f.project_id!==id);
+    pm.sel = (pm.projects[0]||{}).id || null;
+    document.getElementById('pm-overlay')?.remove(); pmRender();
+  }catch(e){ alert('Could not delete: '+e.message); }
+}
+function pmAddFromTemplate(projectId){
+  if(!pm.templates.length){ alert('No templates yet. Save a project as a template first.'); return; }
+  pmModal(`<div class="sheet-title">Add phases from a template</div>
+    <select id="pma-tpl" class="pm-in" style="margin-top:8px" onchange="pmTplPreview(this.value,'pma-phases')">${pm.templates.map(t=>`<option value="${t.id}">${pmEsc(t.name)}</option>`).join('')}</select>
+    <div id="pma-phases" style="margin-top:8px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
+    <button class="pm-btn primary" onclick="pmDoAddFromTemplate('${projectId}')">Add</button></div>`, 480);
+  pmTplPreview(pm.templates[0].id, 'pma-phases');
+}
+async function pmDoAddFromTemplate(projectId){
+  const tpl = pm.templates.find(t=>t.id===document.getElementById('pma-tpl').value); if(!tpl) return;
+  const keep = [...document.querySelectorAll('.pm-tpl-ph:checked')].map(c=>tpl.items[+c.value]);
+  const rows = pmTemplateRows(keep, projectId, { sortBase: pmKids(projectId,null).length });
+  try{ if(rows.length){ const ins = await sbFetch('POST','/rest/v1/pm_items', rows.map(pmClean).map((r,i)=>({ ...r, id: rows[i].id }))); pm.items.push(...ins); }
+       document.getElementById('pm-overlay').remove(); pmRender(); }
+  catch(e){ alert('Could not add: '+e.message); }
+}
+
+// Bring projects over from the old Consulting view (stages become phases).
+async function pmImportLegacy(){
+  const legacy = consultingProjects.filter(c=>!pm.projects.some(p=>p.legacy_id===c.id));
+  if(!confirm(`Copy ${legacy.length} project(s) from the old Consulting view into the planner? The old ones stay where they are.`)) return;
+  try{
+    for(const [n,c] of legacy.entries()){
+      const res = await sbFetch('POST','/rest/v1/pm_projects', { name: c.projectName||c.client, client:c.client, kind:'client', color:PM_COLORS[(pm.projects.length+n)%PM_COLORS.length],
+        status:'Active', notes:c.notes||'', legacy_id:c.id, created_by:(currentUser&&currentUser.email)||'' });
+      const p = res[0]; pm.projects.push(p);
+      const rows = [];
+      CONSULTING_STAGES.forEach((stage,si)=>{
+        const phId = crypto.randomUUID();
+        rows.push({ id:phId, project_id:p.id, parent_id:null, type:'phase', title:stage, due_date:(c.stageDueDates||{})[stage]||null, sort:si, status:'todo', priority:'Medium', auto_schedule:true });
+        (c.tasks||[]).filter(t=>t.stage===stage).forEach((t,ti)=>rows.push({ id:crypto.randomUUID(), project_id:p.id, parent_id:phId, type:'task', title:t.title||'Task',
+          description:t.notes||'', priority:t.priority||'Medium', status:t.done?'done':'todo', due_date:t.dueDate||null, done_at:t.done?pmToday():null, sort:ti, auto_schedule:true }));
+      });
+      const ins = await sbFetch('POST','/rest/v1/pm_items', rows.map(r=>({ ...pmClean(r), id:r.id })));
+      pm.items.push(...ins);
+    }
+    pmRender(); pmToast('Imported');
+  }catch(e){ alert('Import stopped: '+e.message); }
+}
+// ── shared: project filter + color helpers ──
+function pmProjectFilterSel(cur, onchange){
+  return `<select class="pm-in" style="width:auto;font-size:12px;padding:4px 8px" onchange="${onchange}">
+    <option value="">All projects</option>
+    ${pm.projects.filter(p=>p.status!=='Complete' || p.id===cur).map(p=>`<option value="${p.id}"${cur===p.id?' selected':''}>${pmEsc(p.name)}</option>`).join('')}</select>`;
+}
+function pmTint(hex, a){ const h=(hex||'#2563eb').replace('#',''); const r=parseInt(h.substr(0,2),16),g=parseInt(h.substr(2,2),16),b=parseInt(h.substr(4,2),16); return `rgba(${r},${g},${b},${a})`; }
+function pmVisibleProjects(filterId){ return pm.projects.filter(p=>filterId ? p.id===filterId : p.status!=='Complete'); }
+
+// ── Calendar (month) ──
+function pmCalendarHtml(){
+  const [y,m] = pm.calMonth.split('-').map(Number);
+  const first = new Date(y, m-1, 1), startDow = first.getDay();
+  const gridStart = pmShift(pmYmd(first), -startDow);
+  const days = Array.from({length:42}, (_,i)=>pmShift(gridStart, i));
+  const closures = new Map(pm.closures.map(c=>[c.date, c.label]));
+  const projs = new Map(pmVisibleProjects(pm.calProject).map(p=>[p.id,p]));
+  const entries = {};
+  pm.items.filter(i=>projs.has(i.project_id) && i.type!=='phase').forEach(it=>{
+    if(pm.calHideDone && it.status==='done') return;
+    const key = pmIsMilestone(it.type) || it.type==='deliverable';
+    if(pm.calKeyOnly && !key) return;
+    if(pm.items.some(c=>c.parent_id===it.id)) return; // parents are summarized by their children
+    let s = it.start_date || it.due_date, e = it.due_date || it.start_date;
+    if(!s) return;
+    if(pmIsMilestone(it.type) || it.type==='deliverable'){ s = e = (it.due_date||it.start_date); }
+    for(let d=s, n=0; d<=e && n<370; d=pmShift(d,1), n++){
+      const wd = pmD(d).getDay(); if(s!==e && (wd===0||wd===6||closures.has(d))) continue;
+      (entries[d] = entries[d]||[]).push({ it, p: projs.get(it.project_id), first: d===s, last: d===e, span: s!==e });
+    }
+  });
+  const today = pmToday();
+  const monthName = first.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+  const cell = d=>{
+    const inMonth = d.slice(0,7)===pm.calMonth, wd = pmD(d).getDay(), wknd = wd===0||wd===6, cl = closures.get(d);
+    const list = (entries[d]||[]).sort((a,b)=>(b.it.type!=='task')-(a.it.type!=='task'));
+    return `<div style="min-height:96px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);padding:4px;background:${cl?'#f3f4f6':wknd?'var(--bg)':'transparent'};${inMonth?'':'opacity:.45'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px">
+        <span style="${d===today?'background:#2563eb;color:#fff;border-radius:99px;padding:0 6px;font-weight:700':'color:var(--text-3)'}">${pmD(d).getDate()}</span>
+        ${cl?`<span style="color:var(--text-3);font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:70%">${pmEsc(cl)}</span>`:''}
+      </div>
+      ${list.slice(0,5).map(({it,p,first,span})=>`<div onclick="pmEditItem('${it.id}')" title="${pmEsc(p.name)} · ${pmEsc(it.title)}${it.owner?' · '+pmEsc(it.owner):''}"
+        style="margin-top:3px;font-size:11px;line-height:1.3;padding:2px 5px;border-radius:4px;cursor:pointer;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+        background:${pmIsMilestone(it.type)||it.type==='deliverable'?pmEsc(p.color):pmTint(p.color,.15)};color:${pmIsMilestone(it.type)||it.type==='deliverable'?'#fff':'var(--text)'};border-left:3px solid ${pmEsc(p.color)};${it.status==='done'?'opacity:.5;text-decoration:line-through':''}">
+        ${PM_TYPES[it.type].icon==='•'?'':PM_TYPES[it.type].icon+' '}${span&&!first?'↳ ':''}${pmEsc(it.title)}</div>`).join('')}
+      ${list.length>5?`<div style="font-size:10px;color:var(--text-3);margin-top:2px">+${list.length-5} more</div>`:''}
+    </div>`;
+  };
+  const legend = [...projs.values()].map(p=>`<span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;margin-right:12px"><span class="pm-dot" style="margin:0;background:${pmEsc(p.color)}"></span>${pmEsc(p.name)}</span>`).join('');
+  const go = n=>{ const d = new Date(y, m-1+n, 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; };
+  return `<div class="pm-card">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <button class="pm-btn" onclick="pm.calMonth='${go(-1)}';pmRender()">‹</button>
+      <div style="font-size:16px;font-weight:700;min-width:150px;text-align:center">${monthName}</div>
+      <button class="pm-btn" onclick="pm.calMonth='${go(1)}';pmRender()">›</button>
+      <button class="pm-btn" onclick="pm.calMonth=pmToday().slice(0,7);pmRender()">Today</button>
+      <span style="margin-left:auto"></span>
+      ${pmProjectFilterSel(pm.calProject, "pm.calProject=this.value;pmRender()")}
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${pm.calKeyOnly?'checked':''} onchange="pm.calKeyOnly=this.checked;pmRender()"> Milestones &amp; deliverables only</label>
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${pm.calHideDone?'checked':''} onchange="pm.calHideDone=this.checked;pmRender()"> Hide done</label>
+    </div>
+    <div style="margin-bottom:8px">${legend}</div>
+    <div style="overflow-x:auto"><div style="min-width:720px;border-top:1px solid var(--border);border-left:1px solid var(--border)">
+      <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr))">${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=>`<div style="font-size:11px;font-weight:700;color:var(--text-3);padding:4px;border-right:1px solid var(--border);border-bottom:1px solid var(--border)">${d}</div>`).join('')}</div>
+      <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr))">${days.map(cell).join('')}</div>
+    </div></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px">Solid chips are milestones (◆ client, ◇ internal) and deliverables (■); tinted chips are tasks across their work days. Grey days are holidays or office closures. Click anything to edit it.</div>
+  </div>`;
+}
+
+// ── Timeline (Gantt) ──
+const PM_ZOOM = { day:{px:30,label:'Days'}, week:{px:14,label:'Weeks'}, month:{px:5,label:'Months'} };
+function pmGanttHtml(){
+  const px = PM_ZOOM[pm.ganttZoom].px;
+  const projs = pmVisibleProjects(pm.ganttProject);
+  const rows = [];
+  projs.forEach(p=>{
+    rows.push({ kind:'project', p });
+    if(pm.collapsed['proj-'+p.id]) return;
+    const walk = (pid, depth)=>pmKids(p.id, pid).forEach(it=>{
+      if(pm.ganttHideDone && it.status==='done' && it.type!=='phase') return;
+      rows.push({ kind:'item', p, it, depth, hasKids: pm.items.some(c=>c.parent_id===it.id) });
+      if(!pm.collapsed[it.id]) walk(it.id, depth+1);
+    });
+    walk(null, 0);
+  });
+  const dates = pm.items.filter(i=>projs.some(p=>p.id===i.project_id)).flatMap(i=>[i.start_date,i.due_date]).filter(Boolean).sort();
+  const today = pmToday();
+  let start = pmShift([dates[0]||today, pmShift(today,-30)].sort()[0], -7);
+  start = pmShift(start, -pmD(start).getDay()); // start on a Sunday
+  let end = pmShift([dates[dates.length-1]||today, pmShift(today, 240)].sort().reverse()[0], 30);
+  const nDays = Math.min(1500, Math.round((pmD(end)-pmD(start))/864e5)+1);
+  const W = nDays*px, X = d=>Math.round((pmD(d)-pmD(start))/864e5)*px;
+  const closures = new Map(pm.closures.map(c=>[c.date,c.label]));
+  const RH = 30, LW = 300, HH = 44;
+
+  // header: months on top, days/weeks below
+  let months = '', ticks = '', shade = '';
+  for(let i=0;i<nDays;i++){
+    const d = pmShift(start,i), dt = pmD(d), wd = dt.getDay();
+    if(dt.getDate()===1 || i===0) months += `<div style="position:absolute;left:${i*px}px;top:0;height:22px;border-left:1px solid var(--border-2);padding-left:4px;font-size:11px;font-weight:700;color:var(--text-2);white-space:nowrap">${dt.toLocaleDateString('en-US',{month:'short',year:'numeric'})}</div>`;
+    if(pm.ganttZoom==='day') ticks += `<div style="position:absolute;left:${i*px}px;top:22px;width:${px}px;text-align:center;font-size:10px;color:${wd===0||wd===6?'var(--text-3)':'var(--text-2)'}">${dt.getDate()}</div>`;
+    else if(pm.ganttZoom==='week' && wd===1) ticks += `<div style="position:absolute;left:${i*px}px;top:22px;font-size:10px;color:var(--text-3);border-left:1px solid var(--border);padding-left:2px">${dt.getDate()}</div>`;
+    if(pm.ganttZoom!=='month' && (wd===0||wd===6||closures.has(d))) shade += `<div title="${pmEsc(closures.get(d)||'')}" style="position:absolute;left:${i*px}px;top:0;bottom:0;width:${px}px;background:${closures.has(d)?'rgba(107,114,128,.16)':'rgba(107,114,128,.06)'}"></div>`;
+  }
+  const todayX = X(today) + px/2;
+
+  const label = r=>{
+    if(r.kind==='project') return `<div style="height:${RH}px;display:flex;align-items:center;gap:6px;padding:0 8px;font-weight:700;font-size:13px;background:${pmTint(r.p.color,.12)};border-bottom:1px solid var(--border);cursor:pointer" onclick="pm.collapsed['proj-${r.p.id}']=!pm.collapsed['proj-${r.p.id}'];pmSaveCollapsed();pmRender()">
+      <span style="color:var(--text-3);width:12px">${pm.collapsed['proj-'+r.p.id]?'▸':'▾'}</span><span class="pm-dot" style="margin:0;background:${pmEsc(r.p.color)}"></span><span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${pmEsc(r.p.name)}</span></div>`;
+    const it = r.it;
+    return `<div style="height:${RH}px;display:flex;align-items:center;gap:4px;padding:0 6px 0 ${10+r.depth*16}px;font-size:12px;border-bottom:1px solid var(--border);${it.type==='phase'?'font-weight:600':''}${it.status==='done'?';opacity:.55':''}">
+      <span style="width:12px;color:var(--text-3);cursor:pointer;flex-shrink:0" onclick="${r.hasKids?`pm.collapsed['${it.id}']=!pm.collapsed['${it.id}'];pmSaveCollapsed();pmRender()`:''}">${r.hasKids?(pm.collapsed[it.id]?'▸':'▾'):''}</span>
+      <span style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis;cursor:pointer" onclick="pmEditItem('${it.id}')" title="${pmEsc(it.title)}">${it.type==='phase'?'':PM_TYPES[it.type].icon+' '}${pmEsc(it.title)}</span></div>`;
+  };
+  const bar = r=>{
+    if(r.kind==='project'){
+      const its = pm.items.filter(i=>i.project_id===r.p.id); const ds = its.flatMap(i=>[i.start_date,i.due_date]).filter(Boolean).sort();
+      if(!ds.length) return '';
+      return `<div style="position:absolute;left:${X(ds[0])}px;width:${X(ds[ds.length-1])-X(ds[0])+px}px;top:${RH/2-3}px;height:6px;border-radius:3px;background:${pmEsc(r.p.color)};opacity:.5"></div>`;
+    }
+    const it = r.it, color = r.p.color, done = it.status==='done';
+    const tip = `${it.title} · ${PM_TYPES[it.type].label}${it.owner?' · '+it.owner:''}`;
+    if(pmIsMilestone(it.type) || (it.type==='deliverable' && !it.start_date)){
+      const d = it.due_date||it.start_date; if(!d) return '';
+      const x = X(d)+px/2-7, ext = it.type==='milestone_ext', del = it.type==='deliverable';
+      return `<div onclick="pmEditItem('${it.id}')" title="${pmEsc(tip)} · ${pmFmt(d,true)}" style="position:absolute;left:${x}px;top:${RH/2-7}px;width:14px;height:14px;cursor:pointer;
+          ${del?'':'transform:rotate(45deg);'}background:${ext||del?pmEsc(color):'var(--card)'};border:2px solid ${pmEsc(color)};box-sizing:border-box;${done?'opacity:.45':''}"></div>
+        <div style="position:absolute;left:${x+20}px;top:${RH/2-8}px;font-size:11px;white-space:nowrap;color:var(--text-2);pointer-events:none">${pmEsc(it.title)} · ${pmFmt(d)}</div>`;
+    }
+    const rg = r.hasKids||it.type==='phase' ? pmRange(it) : { start: it.start_date||it.due_date, end: it.due_date||it.start_date };
+    if(!rg.start) return '';
+    const x = X(rg.start), w = Math.max(px, X(rg.end)-X(rg.start)+px);
+    if(r.hasKids || it.type==='phase')
+      return `<div title="${pmEsc(tip)} · ${pmFmt(rg.start)} – ${pmFmt(rg.end)}" style="position:absolute;left:${x}px;width:${w}px;top:${RH/2-4}px;height:8px;background:${pmEsc(color)};border-radius:2px;opacity:${it.type==='phase'?.85:.6}"></div>
+        <div style="position:absolute;left:${x}px;top:${RH/2+4}px;width:0;height:0;border-left:5px solid ${pmEsc(color)};border-bottom:5px solid transparent"></div>
+        <div style="position:absolute;left:${x+w-5}px;top:${RH/2+4}px;width:0;height:0;border-right:5px solid ${pmEsc(color)};border-bottom:5px solid transparent"></div>`;
+    const inside = w > 90;
+    const pct = done ? 100 : it.status==='in_progress' ? 50 : 0;
+    return `<div onclick="pmEditItem('${it.id}')" title="${pmEsc(tip)} · ${pmFmt(rg.start)} – ${pmFmt(rg.end)}" style="position:absolute;left:${x}px;width:${w}px;top:5px;height:${RH-10}px;border-radius:5px;cursor:pointer;
+        background:${pmTint(color, done?.25:.55)};border:1px solid ${pmEsc(color)};overflow:hidden;${pmOverdue(it)?'box-shadow:0 0 0 2px #dc2626;':''}">
+        <div style="position:absolute;inset:0;width:${pct}%;background:${pmTint(color,.5)}"></div>
+        ${inside?`<div style="position:relative;font-size:11px;padding:2px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#111">${pmEsc(it.title)} · ${pmFmt(rg.end)}</div>`:''}
+      </div>
+      ${inside?'':`<div style="position:absolute;left:${x+w+5}px;top:${RH/2-8}px;font-size:11px;white-space:nowrap;color:var(--text-2);pointer-events:none">${pmEsc(it.title)} · ${pmFmt(rg.end)}</div>`}`;
+  };
+  // dependency connectors: short elbow from predecessor end to successor start
+  const rowIndex = new Map(rows.map((r,i)=>[r.kind==='item'?r.it.id:'p'+r.p.id, i]));
+  let links = '';
+  rows.forEach((r,i)=>{
+    if(r.kind!=='item' || !r.it.depends_on || !rowIndex.has(r.it.depends_on)) return;
+    const pred = pmItem(r.it.depends_on), pi = rowIndex.get(r.it.depends_on);
+    const pe = pred.due_date||pred.start_date, ss = r.it.start_date||r.it.due_date; if(!pe||!ss) return;
+    const x1 = X(pe)+px, x2 = X(ss)+ (pmIsMilestone(r.it.type)?px/2-7:0), y1 = pi*RH+RH/2, y2 = i*RH+RH/2;
+    const xm = Math.max(x1+4, Math.min(x2-4, x1+8));
+    links += `<path d="M${x1} ${y1} H${xm} V${y2} H${x2}" fill="none" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#pm-arrow)"/>`;
+  });
+  const H = rows.length*RH;
+  return `<div class="pm-card">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <div style="font-size:16px;font-weight:700">Timeline</div>
+      ${pmProjectFilterSel(pm.ganttProject, "pm.ganttProject=this.value;pmRender()")}
+      <div style="display:flex;border:1px solid var(--border-2);border-radius:6px;overflow:hidden">${Object.entries(PM_ZOOM).map(([k,z])=>`<button onclick="pm.ganttZoom='${k}';pmRender();pmGanttToday()" style="font-size:12px;padding:5px 10px;border:none;cursor:pointer;font-family:inherit;background:${pm.ganttZoom===k?'var(--green)':'var(--surface)'};color:${pm.ganttZoom===k?'#fff':'var(--text)'}">${z.label}</button>`).join('')}</div>
+      <button class="pm-btn" onclick="pmGanttToday()">Today</button>
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${pm.ganttHideDone?'checked':''} onchange="pm.ganttHideDone=this.checked;pmRender()"> Hide done</label>
+      <span style="margin-left:auto;font-size:11px;color:var(--text-3)">◆ client milestone · ◇ internal · ■ deliverable · blue line = today · grey = weekend/closure</span>
+    </div>
+    ${rows.length?`<div id="pm-gantt-scroll" style="overflow:auto;max-height:72vh;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <div style="display:flex;width:${LW+W}px">
+        <div style="position:sticky;left:0;z-index:3;width:${LW}px;flex-shrink:0;background:var(--card);border-right:1px solid var(--border-2)">
+          <div style="height:${HH}px;position:sticky;top:0;z-index:4;background:var(--card);border-bottom:1px solid var(--border-2)"></div>
+          ${rows.map(label).join('')}
+        </div>
+        <div style="position:relative;width:${W}px">
+          <div style="position:sticky;top:0;z-index:2;height:${HH}px;background:var(--card);border-bottom:1px solid var(--border-2)">${months}${ticks}</div>
+          <div style="position:relative;height:${H}px">
+            ${shade}
+            ${rows.map((r,i)=>`<div style="position:absolute;left:0;right:0;top:${i*RH}px;height:${RH}px;border-bottom:1px solid var(--border);${r.kind==='project'?`background:${pmTint(r.p.color,.06)}`:''}">${bar(r)}</div>`).join('')}
+            <svg width="${W}" height="${H}" style="position:absolute;left:0;top:0;pointer-events:none;overflow:visible"><defs><marker id="pm-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#94a3b8"/></marker></defs>${links}</svg>
+            <div style="position:absolute;left:${todayX}px;top:0;bottom:0;width:2px;background:#2563eb;z-index:1"></div>
+            <div style="position:absolute;left:${todayX-5}px;top:-5px;width:12px;height:12px;border-radius:50%;background:#2563eb;z-index:1"></div>
+          </div>
+        </div>
+      </div>
+    </div>`:`<div style="font-size:13px;color:var(--text-3)">No projects to show.</div>`}
+  </div>`;
+}
+let pmGanttScrolled = false;
+function pmGanttAfter(left, top){
+  const s = document.getElementById('pm-gantt-scroll'); if(!s) return;
+  if(left!==null && pmGanttScrolled){ s.scrollLeft = left; s.scrollTop = top; }
+  else { pmGanttToday(); pmGanttScrolled = true; }
+}
+function pmGanttToday(){
+  const s = document.getElementById('pm-gantt-scroll'); if(!s) return;
+  const line = s.querySelector('div[style*="background:#2563eb;z-index:1"]');
+  if(line) s.scrollLeft = Math.max(0, parseFloat(line.style.left) - 120);
+}
+
+// ── Settings: templates + closures ──
+function pmSettingsHtml(){
+  const count = n=>(n.children||[]).reduce((s,c)=>s+1+count(c),0);
+  const tree = (nodes, depth)=>nodes.map(n=>`<div style="font-size:12px;padding:1px 0 1px ${depth*16}px;color:${depth?'var(--text-2)':'var(--text)'};font-weight:${depth?400:600}">${depth?PM_TYPES[n.type]?.icon||'•':'▤'} ${pmEsc(n.title)}${n.duration?` <span style="color:var(--text-3)">${n.duration}wd</span>`:''}</div>${tree(n.children||[],depth+1)}`).join('');
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start">
+    <div class="pm-card">
+      <div style="font-size:15px;font-weight:700">Templates</div>
+      <div style="font-size:12px;color:var(--text-3);margin:4px 0 10px">To make or change a template: set up a project the way you want it, then use <b>Save as template</b> on that project. Templates keep phases, tasks, types, work-day lengths and hours, not dates.</div>
+      ${pm.templates.map(t=>`<details style="border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:8px">
+        <summary style="cursor:pointer;font-size:13px;font-weight:600">${pmEsc(t.name)} <span style="font-weight:400;color:var(--text-3);font-size:12px">${(t.items||[]).length} phases · ${(t.items||[]).reduce((s,p)=>s+count(p),0)} items</span></summary>
+        <div style="margin-top:8px">${tree(t.items||[],0)}</div>
+        <div style="display:flex;gap:6px;margin-top:8px"><button class="pm-btn" onclick="pmRenameTemplate('${t.id}')">Rename</button><button class="pm-btn" style="color:#b91c1c" onclick="pmDeleteTemplate('${t.id}')">Delete</button></div>
+      </details>`).join('') || '<div style="font-size:13px;color:var(--text-3)">No templates yet.</div>'}
+    </div>
+    <div class="pm-card">
+      <div style="font-size:15px;font-weight:700">Holidays &amp; office closures</div>
+      <div style="font-size:12px;color:var(--text-3);margin:4px 0 10px">These days are skipped when counting work days, and shaded on the calendar and timeline.</div>
+      <div style="display:flex;gap:6px;margin-bottom:10px"><input id="pmc-date" type="date" class="pm-in" style="width:auto"><input id="pmc-label" class="pm-in" placeholder="e.g. Office closed"><button class="pm-btn primary" onclick="pmAddClosure()">Add</button></div>
+      ${pm.closures.filter(c=>c.date>=pmShift(pmToday(),-60)).map(c=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <span><b>${pmFmt(c.date,true)}</b> <span style="color:var(--text-3)">${pmD(c.date).toLocaleDateString('en-US',{weekday:'short'})}</span> · ${pmEsc(c.label)}</span>
+        <button class="pm-ic" onclick="pmDeleteClosure('${c.id}')">🗑</button></div>`).join('')}
+    </div>
+  </div>`;
+}
+async function pmRenameTemplate(id){
+  const t = pm.templates.find(x=>x.id===id); const name = prompt('Template name:', t.name); if(!name) return;
+  try{ await sbFetch('PATCH', `/rest/v1/pm_templates?id=eq.${id}`, { name }); t.name = name; pmRender(); }catch(e){ alert(e.message); }
+}
+async function pmDeleteTemplate(id){
+  const t = pm.templates.find(x=>x.id===id); if(!confirm(`Delete the template "${t.name}"? Projects made from it aren't affected.`)) return;
+  try{ await sbFetch('DELETE', `/rest/v1/pm_templates?id=eq.${id}`); pm.templates = pm.templates.filter(x=>x.id!==id); pmRender(); }catch(e){ alert(e.message); }
+}
+async function pmAddClosure(){
+  const date = document.getElementById('pmc-date').value, label = document.getElementById('pmc-label').value.trim()||'Office closed';
+  if(!date) return;
+  try{
+    const r = await sbFetch('POST','/rest/v1/pm_closures', { date, label });
+    pm.closures.push(r[0]); pm.closures.sort((a,b)=>a.date.localeCompare(b.date));
+    const moved = (await Promise.all(pm.projects.map(p=>pmReschedule(p.id)))).reduce((a,b)=>a+b,0);
+    pmRender(); if(moved) pmToast(`${moved} scheduled item${moved===1?'':'s'} shifted around the closure`);
+  }catch(e){ alert(/duplicate|unique/i.test(e.message)?'That day is already on the list.':e.message); }
+}
+async function pmDeleteClosure(id){
+  try{ await sbFetch('DELETE', `/rest/v1/pm_closures?id=eq.${id}`); pm.closures = pm.closures.filter(c=>c.id!==id); pmRender(); }catch(e){ alert(e.message); }
+}
+
+// ── Files ──
+const PM_BUCKET = 'project-files';
+function pmOpenFiles(projectId){
+  const p = pmProject(projectId);
+  const files = pm.files.filter(f=>f.project_id===projectId);
+  const itemOpts = pm.items.filter(i=>i.project_id===projectId).sort((a,b)=>(a.sort||0)-(b.sort||0));
+  const label = id=>{ const it = id && pmItem(id); return it ? pmEsc(it.title) : ''; };
+  const size = b=>!b?'':b>1048576?(b/1048576).toFixed(1)+' MB':Math.round(b/1024)+' KB';
+  pmModal(`<div class="sheet-title">Files · ${pmEsc(p.name)}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">Drawings, survey data, photos and documents for this project. Visible to everyone logged into the tracker.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:10px;border:1px dashed var(--border-2);border-radius:var(--radius-sm)">
+      <input id="pmf-file" type="file" multiple style="font-size:12px;flex:1;min-width:180px">
+      <select id="pmf-item" class="pm-in" style="width:auto;max-width:220px;font-size:12px"><option value="">Whole project</option>${itemOpts.map(i=>`<option value="${i.id}">${i.type==='phase'?'▤ ':''}${pmEsc(i.title)}</option>`).join('')}</select>
+      <button class="pm-btn primary" id="pmf-btn" onclick="pmUploadFiles('${projectId}')">Upload</button>
+    </div>
+    <div id="pmf-status" style="font-size:12px;color:var(--text-3);margin-top:6px"></div>
+    <div style="margin-top:10px">${files.length?files.map(f=>`<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="flex:1;min-width:0;cursor:pointer;color:var(--green-dark);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" onclick="pmViewFile('${f.id}')">📄 ${pmEsc(f.file_name)}</span>
+      ${f.item_id?`<span class="pm-chip">${label(f.item_id)}</span>`:''}
+      <span style="font-size:11px;color:var(--text-3);white-space:nowrap">${size(f.size_bytes)} · ${pmFmt((f.created_at||'').slice(0,10))}${f.uploaded_by?' · '+pmEsc(f.uploaded_by.split('@')[0]):''}</span>
+      <button class="pm-ic" title="Delete" onclick="pmDeleteFile('${f.id}')">🗑</button></div>`).join(''):'<div style="font-size:13px;color:var(--text-3)">No files yet.</div>'}</div>
+    <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Close</button></div>`, 720);
+}
+async function pmUploadFiles(projectId){
+  const input = document.getElementById('pmf-file'), files = [...(input.files||[])];
+  if(!files.length) return;
+  const itemId = document.getElementById('pmf-item').value || null;
+  const btn = document.getElementById('pmf-btn'), st = document.getElementById('pmf-status');
+  btn.disabled = true;
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    for(const [i,file] of files.entries()){
+      st.textContent = `Uploading ${i+1} of ${files.length}: ${file.name}…`;
+      const path = `${projectId}/${Date.now()}-${file.name.replace(/[^\w.\- ]+/g,'_')}`;
+      const up = await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(path)}`, {
+        method:'POST', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type': file.type||'application/octet-stream', 'x-upsert':'true' },
+        body: await file.arrayBuffer(),
+      });
+      if(!up.ok) throw new Error(`${file.name}: ${up.status} ${(await up.text()).slice(0,150)}`);
+      const r = await sbFetch('POST','/rest/v1/pm_files', { project_id:projectId, item_id:itemId, file_name:file.name, file_path:path, size_bytes:file.size, uploaded_by:(currentUser&&currentUser.email)||'' });
+      pm.files.unshift(r[0]);
+    }
+    pmOpenFiles(projectId); pmRender();
+  }catch(e){ st.textContent = 'Upload failed: '+e.message; st.style.color='#b91c1c'; btn.disabled=false; }
+}
+async function pmViewFile(id){
+  const f = pm.files.find(x=>x.id===id); if(!f) return;
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    const r = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${PM_BUCKET}/${encodeURI(f.file_path)}`, {
+      method:'POST', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type':'application/json' }, body: JSON.stringify({ expiresIn: 600 }) });
+    const d = await r.json(); if(!d.signedURL) throw new Error(d.message||'no link');
+    const url = `${SUPABASE_URL}/storage/v1${d.signedURL}`;
+    const viewable = /\.(pdf|png|jpe?g|gif|webp|svg|txt)$/i.test(f.file_name);
+    if(!viewable){ window.open(url, '_blank'); return; }
+    const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='pm-file-view';
+    o.onclick = e=>{ if(e.target===o) o.remove(); };
+    o.innerHTML = `<div class="modal-sheet" style="max-width:1100px;width:100%;max-height:94vh;display:flex;flex-direction:column">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><div class="sheet-title" style="margin:0">${pmEsc(f.file_name)}</div>
+      <div style="display:flex;gap:6px"><a class="pm-btn" href="${url}" target="_blank" rel="noopener" style="text-decoration:none">Open in new tab ↗</a><button class="pm-btn" onclick="document.getElementById('pm-file-view').remove()">✕</button></div></div>
+      ${/\.(png|jpe?g|gif|webp|svg)$/i.test(f.file_name)?`<img src="${url}" style="max-width:100%;max-height:80vh;object-fit:contain;margin:auto">`:`<iframe src="${url}" style="width:100%;height:80vh;border:1px solid var(--border);border-radius:6px"></iframe>`}</div>`;
+    document.body.appendChild(o);
+  }catch(e){ alert('Could not open the file: '+e.message); }
+}
+async function pmDeleteFile(id){
+  const f = pm.files.find(x=>x.id===id); if(!f || !confirm(`Delete ${f.file_name}?`)) return;
+  try{
+    await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(f.file_path)}`, { method:'DELETE', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY } });
+    await sbFetch('DELETE', `/rest/v1/pm_files?id=eq.${id}`);
+    pm.files = pm.files.filter(x=>x.id!==id);
+    pmOpenFiles(f.project_id); pmRender();
+  }catch(e){ alert('Could not delete: '+e.message); }
+}
+// =================== END PROJECT PLANNER ===================
 
 // ── CONSULTING PORTAL ─────────────────────────────────────────
 const CONSULTING_STAGES = ['Site Discovery','Data Capture & Processing','Client Presentation','Post-Presentation'];
@@ -5303,7 +6206,7 @@ function setView(v){
   const byId = BIZOPS_TAB_IDS[v] && document.getElementById(BIZOPS_TAB_IDS[v]);
   if(byId) byId.classList.add('active');
   else { const localIdx = allIdx[v]; if(barTabs[localIdx]) barTabs[localIdx].classList.add('active'); }
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -5337,6 +6240,7 @@ function render(){
   else if(view==='pipeline') renderPipeline();
   else if(view==='po') renderPO();
   else if(view==='consulting-home') renderConsulting();
+  else if(view==='pm') pmRender();
   else if(view==='costs') renderCosts();
   else if(view==='fleet-loans') renderFleet();
   else if(view==='fuel') renderFuel();
@@ -9606,7 +10510,7 @@ function showApp(){
   // Show pipeline tab only for Jake and Ryan
   const plTab2 = document.getElementById('pipeline-tab');
   const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com'];
-  const CONSULTING_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com'];
+  const CONSULTING_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com','wes@fieldsourceohio.com'];
   const userEmail = (currentUser.email||'').toLowerCase();
   // Show portal bar
   document.getElementById('portal-bar').style.display = '';

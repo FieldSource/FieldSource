@@ -1289,25 +1289,29 @@ async function loadLaborRates(){
 }
 
 async function saveLaborRate(person, rate){
-  if(!rate && rate !== 0) return;
+  if(rate === '' || rate === null || rate === undefined) return false;
   const num = Number(rate);
-  if(isNaN(num)) return;
+  if(isNaN(num)) return false;
   try {
-    // Use Supabase upsert via POST with on-conflict header
-    await fetch(SUPABASE_URL + '/rest/v1/labor_rates?on_conflict=person', {
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    // Upsert with the logged-in user's token (the public key is blocked by the database's security rules)
+    const res = await fetch(SUPABASE_URL + '/rest/v1/labor_rates?on_conflict=person', {
       method: 'POST',
       headers: {
         'apikey': SUPABASE_KEY,
-        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'Authorization': 'Bearer ' + sbToken(),
         'Content-Type': 'application/json',
         'Prefer': 'resolution=merge-duplicates,return=minimal'
       },
       body: JSON.stringify({person, rate: num})
     });
+    if(!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0,200)}`);
     laborRates[person] = num;
-    console.log('Saved rate for', person, num);
+    return true;
   } catch(e){
     console.error('Labor rate save error:', e);
+    alert(`Couldn't save the rate for ${person}: ${e.message}`);
+    return false;
   }
 }
 
@@ -1320,7 +1324,9 @@ function getLaborFilteredReports(){
 }
 
 function renderLabor(){
-  const allCrew = [...CREW, 'Ryan','Matt'].filter((v,i,a)=>a.indexOf(v)===i);
+  // People not on the labor costs page (subcontractors / owners)
+  const LABOR_EXCLUDE = ['Sly','Penlin','Killer','Ryan'];
+  const allCrew = [...CREW, 'Matt'].filter((v,i,a)=>a.indexOf(v)===i && !LABOR_EXCLUDE.includes(v));
   const filtered = getLaborFilteredReports();
 
   // Build month buttons
@@ -1361,16 +1367,16 @@ function renderLabor(){
   // Rates editor
   html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
     <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);margin-bottom:10px">Hourly Rates</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px">
       ${allCrew.map(person=>`
         <div style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 10px">
-          <span style="font-size:13px;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${person}</span>
+          <span title="${person}" style="font-size:13px;font-weight:500;color:var(--text);flex:1;min-width:0;line-height:1.25">${person}</span>
           <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
             <span style="font-size:12px;color:var(--text-3)">$</span>
             <input type="number" id="rate-${person.replace(/\s+/g,'-')}" value="${laborRates[person]||''}" placeholder="0" min="0" step="5"
               style="width:60px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);text-align:right">
             <span style="font-size:11px;color:var(--text-3)">/hr</span>
-            <button onclick="const inp=document.getElementById('rate-${person.replace(/\s+/g,'-')}');saveLaborRate('${person}',inp.value);inp.style.borderColor='var(--green)';setTimeout(()=>inp.style.borderColor='',1500)" style="padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>
+            <button onclick="const inp=document.getElementById('rate-${person.replace(/\s+/g,'-')}');saveLaborRate('${person}',inp.value).then(ok=>{inp.style.borderColor=ok?'var(--green)':'#dc2626';setTimeout(()=>inp.style.borderColor='',1500)})" style="padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>
           </div>
         </div>`).join('')}
     </div>

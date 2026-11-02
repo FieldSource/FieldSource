@@ -2912,21 +2912,52 @@ async function pmLoad(force){
 }
 
 // ── saving ──
-const PM_ITEM_FIELDS = ['project_id','parent_id','type','title','description','owner','priority','status','start_date','due_date','duration_days','length_unit','est_hours','budget','depends_on','auto_schedule','done_at','sort'];
+const PM_ITEM_FIELDS = ['project_id','parent_id','type','title','description','owner','priority','status','start_date','due_date','duration_days','length_unit','est_hours','dep_type','dep_lag','dep_wait','started_at','budget','depends_on','auto_schedule','done_at','sort'];
 function pmClean(it){ const o={}; PM_ITEM_FIELDS.forEach(k=>{ if(k in it) o[k] = (it[k]==='' && !['title','description','owner'].includes(k)) ? null : it[k]; }); return o; }
 async function pmPatchItem(it){ await sbFetch('PATCH', `/rest/v1/pm_items?id=eq.${it.id}`, { ...pmClean(it), updated_at:new Date().toISOString() }); }
 
 // Move items that depend on others so each starts the next work day after its predecessor
 // finishes (or is due). Cascades down the chain. Returns the items that changed.
+// When can an item start, given what it's waiting on?
+//   dep_type 'finish': the work day after the other item finishes (actual finish if done, else its due date)
+//   dep_type 'start' : the day the other item starts (actual start if started, else its planned start)
+//   dep_lag: extra work days after that. dep_wait: leave unscheduled until the trigger actually happens.
+function pmTrigger(it, pred){
+  const type = it.dep_type==='start' ? 'start' : 'finish';
+  const lag = Math.max(0, parseInt(it.dep_lag)||0);
+  let anchor = null, happened = false;
+  if(type==='finish'){
+    if(pred.status==='done'){ anchor = pred.done_at || pmToday(); happened = true; }
+    else anchor = pred.due_date || pmRange(pred).end;
+  } else {
+    const started = pred.started_at || (pred.status==='in_progress' || pred.status==='done' ? (pred.done_at || pmToday()) : null);
+    if(started){ anchor = started; happened = true; }
+    else anchor = pred.start_date || pred.due_date || pmRange(pred).start;
+  }
+  if(it.dep_wait && !happened) return { waiting:true, type, happened:false };
+  if(!anchor) return { start:null, type, happened };
+  let start = type==='finish' ? pmNextWorkday(anchor) : pmFirstWorkday(anchor);
+  if(lag) start = pmNextWorkday(pmAddWorkdays(start, lag));
+  return { start, type, happened };
+}
+function pmTriggerLabel(it, pred){
+  const lag = parseInt(it.dep_lag)||0;
+  return `${it.dep_type==='start'?'when':'after'} ${pred.title}${it.dep_type==='start'?' starts':''}${lag?` +${lag} day${lag===1?'':'s'}`:''}`;
+}
 function pmComputeSchedule(projectId){
   const changed = new Map();
   for(let pass=0; pass<30; pass++){
     let moved = false;
-    pm.items.filter(i=>i.project_id===projectId && i.depends_on && i.auto_schedule!==false && i.status!=='done').forEach(it=>{
+    pm.items.filter(i=>i.project_id===projectId && i.depends_on && i.auto_schedule!==false && i.status!=='done' && !(i.status==='in_progress' && i.started_at)).forEach(it=>{
       const pred = pmItem(it.depends_on); if(!pred) return;
-      const anchor = pred.status==='done' ? (pred.done_at||pmToday()) : (pred.due_date || pmRange(pred).end);
-      if(!anchor) return;
-      const start = pmNextWorkday(anchor);
+      const trig = pmTrigger(it, pred);
+      if(trig.waiting){
+        // "Don't schedule until it happens": no dates until the trigger fires
+        if(it.start_date || it.due_date){ it.start_date = null; it.due_date = null; changed.set(it.id, it); moved = true; }
+        return;
+      }
+      if(!trig.start) return;
+      const start = trig.start;
       let due;
       if(pmIsMilestone(it.type)) due = start;
       else if(it.duration_days) due = pmAddWorkdays(start, it.duration_days);
@@ -2947,10 +2978,27 @@ async function pmReschedule(projectId){
 
 async function pmToggleDone(id){
   const it = pmItem(id); if(!it) return;
-  if(it.status==='done'){ it.status='todo'; it.done_at=null; }
-  else { it.status='done'; it.done_at=pmToday(); }
-  try{ await pmPatchItem(it); const n = await pmReschedule(it.project_id); pmRender(); if(n) pmToast(`${n} dependent item${n===1?'':'s'} rescheduled`); }
-  catch(e){ alert('Could not save: '+e.message); }
+  if(it.status==='done'){ it.status = it.started_at ? 'in_progress' : 'todo'; it.done_at=null; }
+  else { it.status='done'; it.done_at=pmToday(); if(!it.started_at) it.started_at = pmToday(); }
+  await pmSaveAndTrigger(it);
+}
+async function pmToggleStarted(id){
+  const it = pmItem(id); if(!it || it.status==='done') return;
+  if(it.status==='in_progress'){ it.status='todo'; it.started_at=null; }
+  else { it.status='in_progress'; it.started_at=pmToday(); if(!it.start_date || it.start_date>pmToday()){ it.start_date = pmFirstWorkday(pmToday()); if(it.duration_days) it.due_date = pmAddWorkdays(it.start_date, it.duration_days); } }
+  await pmSaveAndTrigger(it);
+}
+// Save an item, re-run the schedule, and say which waiting items it set off.
+async function pmSaveAndTrigger(it){
+  const before = new Map(pm.items.filter(i=>i.project_id===it.project_id).map(i=>[i.id, i.start_date||i.due_date||null]));
+  try{
+    await pmPatchItem(it);
+    const n = await pmReschedule(it.project_id);
+    pmRender();
+    const kicked = pm.items.filter(i=>i.depends_on===it.id && !before.get(i.id) && (i.start_date||i.due_date));
+    if(kicked.length) pmToast(`Triggered: ${kicked.map(k=>`${k.title} → ${pmFmt(k.start_date||k.due_date)}`).join(', ')}`);
+    else if(n) pmToast(`${n} dependent item${n===1?'':'s'} rescheduled`);
+  }catch(e){ alert('Could not save: '+e.message); }
 }
 
 async function pmMove(id, dir){
@@ -3142,6 +3190,7 @@ function pmWorkspaceHtml(p){
       <div><div style="font-size:18px;font-weight:700">${pmEsc(p.name)}</div>
         <div style="font-size:13px;color:var(--text-2)">${p.client?pmEsc(p.client)+' · ':''}${p.kind==='internal'?'Internal':'Client project'} · ${pmEsc(p.status)}${p.start_date?' · started '+pmFmt(p.start_date):''}</div></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="pm-btn" onclick="pmDeadlines('${p.id}')">⏰ Deadlines</button>
         <button class="pm-btn" onclick="pmOpenFiles('${p.id}')">📎 Files${files.length?' ('+files.length+')':''}</button>
         <button class="pm-btn" onclick="pm.calProject='${p.id}';pmShow('calendar')">📅 Calendar</button>
         <button class="pm-btn" onclick="pm.ganttProject='${p.id}';pmShow('timeline')">📊 Timeline</button>
@@ -3192,14 +3241,17 @@ function pmRowHtml(it, depth){
       <span style="${tw};flex-shrink:0;width:12px;text-align:center" title="${PM_TYPES[it.type]?.label||''}">${isPhase?'':PM_TYPES[it.type]?.icon||'•'}</span>
       <span onclick="pmEditItem('${it.id}')" style="cursor:pointer;flex:1;min-width:120px;${it.status==='done'&&!isPhase?'text-decoration:line-through':''}">${pmEsc(it.title)}
         ${it.status==='in_progress'?'<span class="pm-chip" style="background:#dbeafe;color:#1d4ed8;margin-left:4px">In progress</span>':''}
-        ${dep?`<span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:4px">↳ after ${pmEsc(dep.title)}</span>`:''}</span>
+        ${dep?`<span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:4px">↳ ${pmEsc(pmTriggerLabel(it, dep))}</span>`:''}</span>
       ${pr}
       ${it.owner?`<span class="pm-chip">${pmEsc(it.owner)}</span>`:''}
       ${r&&r.total?`<span class="pm-chip">${r.done}/${r.total}</span>`:''}
       ${r ? (r.hours?`<span class="pm-chip" title="Total estimated hours">${Math.round(r.hours)}h</span>`:'')
           : (!pmIsMilestone(it.type) ? `<span class="pm-chip" style="cursor:pointer;${pmLenValue(it)?'':'opacity:.5'}" title="Length: click to change" onclick="pmQuickLength('${it.id}',this)">${pmLenLabel(it)||'+ length'}</span>` : '')}
-      <span onclick="pmEditItem('${it.id}')" title="Click to change dates" style="cursor:pointer;font-size:12px;white-space:nowrap;min-width:90px;text-align:right;color:${late?'#dc2626':'var(--text-2)'};font-weight:${late?600:400}">${dates}</span>
+      ${dep && it.dep_wait && !(it.start_date||it.due_date) && it.status!=='done'
+        ? `<span class="pm-chip" style="background:#fef3c7;color:#92400e;min-width:90px;text-align:center" title="Gets dates when ${pmEsc(dep.title)} ${it.dep_type==='start'?'starts':'is done'}">⏳ Waiting</span>`
+        : `<span onclick="pmEditItem('${it.id}')" title="Click to change dates" style="cursor:pointer;font-size:12px;white-space:nowrap;min-width:90px;text-align:right;color:${late?'#dc2626':'var(--text-2)'};font-weight:${late?600:400}">${dates}</span>`}
       <span class="pm-acts">
+        ${!isPhase && !kids.length && it.status!=='done' && !pmIsMilestone(it.type) ? `<button class="pm-ic" title="${it.status==='in_progress'?'Mark not started':'Mark started (sets off anything waiting for this to start)'}" onclick="pmToggleStarted('${it.id}')">${it.status==='in_progress'?'⏸':'▶'}</button>` : ''}
         <button class="pm-ic" title="Add ${isPhase?'task':'subtask'}" onclick="pmEditItem(null,{project_id:'${it.project_id}',parent_id:'${it.id}',type:'task'})">＋</button>
         <button class="pm-ic" title="Move up" onclick="pmMove('${it.id}',-1)">↑</button>
         <button class="pm-ic" title="Move down" onclick="pmMove('${it.id}',1)">↓</button>
@@ -3237,6 +3289,111 @@ async function pmQuickLengthSave(id){
   try{ await pmPatchItem(it); const n = await pmReschedule(it.project_id); pmRender(); if(n) pmToast(`${n} dependent item${n===1?'':'s'} rescheduled`); }
   catch(e){ alert('Could not save: '+e.message); }
 }
+// ── Deadlines step (pops up after creating a project; also on the project's Deadlines button) ──
+// A date entered here is a fixed deadline: the item is pinned (it won't be moved by auto-scheduling),
+// and a task with a length is laid out backwards from its deadline.
+// Calendar's Deadlines button: straight to the filtered project, or pick one when showing all.
+function pmCalDeadlines(){
+  if(pm.calProject && pmProject(pm.calProject)){ pmDeadlines(pm.calProject); return; }
+  const active = pm.projects.filter(p=>p.status!=='Complete');
+  if(!active.length){ alert('No active projects yet.'); return; }
+  if(active.length===1){ pmDeadlines(active[0].id); return; }
+  const key = i=>pmIsMilestone(i.type)||i.type==='deliverable';
+  pmModal(`<div class="sheet-title">Deadlines</div>
+    <div style="font-size:12px;color:var(--text-3);margin:4px 0 10px">Pick a project to add or change its deadlines.</div>
+    ${active.map(p=>{
+      const its = pm.items.filter(i=>i.project_id===p.id && key(i) && i.status!=='done');
+      const open = its.filter(i=>!i.due_date).length;
+      const next = its.filter(i=>i.due_date && i.due_date>=pmToday()).sort((a,b)=>a.due_date.localeCompare(b.due_date))[0];
+      return `<div onclick="pmDeadlines('${p.id}')" class="pm-proj" style="border-bottom:1px solid var(--border);border-radius:0">
+        <span class="pm-dot" style="background:${pmEsc(p.color)}"></span>
+        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${pmEsc(p.name)}</div>
+        <div style="font-size:11px;color:var(--text-3)">${next?`Next: ${PM_TYPES[next.type].icon} ${pmEsc(next.title)} ${pmFmt(next.due_date)}`:'No upcoming deadlines'}${open?` · <span style="color:#b45309">${open} without a date</span>`:''}</div></div>
+        <span style="color:var(--text-3)">›</span></div>`;
+    }).join('')}
+    <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Close</button></div>`, 520);
+}
+function pmPrevWorkday(s){ const set = pmClosureSet(); let d = s; for(let i=0;i<60 && !pmIsWorkday(d,set);i++) d = pmShift(d,-1); return d; }
+function pmStartForDeadline(due, days){ const set = pmClosureSet(); let d = pmPrevWorkday(due), left = Math.max(1, days||1) - 1; for(let i=0;left>0 && i<2000;i++){ d = pmShift(d,-1); if(pmIsWorkday(d,set)) left--; } return d; }
+function pmDeadlines(projectId, opts){
+  opts = opts || {};
+  const p = pmProject(projectId); if(!p) return;
+  const showAll = !!opts.all;
+  const isKey = it=>pmIsMilestone(it.type) || it.type==='deliverable';
+  const rows = [];
+  const walk = (pid, depth)=>pmKids(projectId, pid).forEach(it=>{
+    const kids = pm.items.some(c=>c.parent_id===it.id);
+    if(it.type==='phase') rows.push({ it, depth, header:true });
+    else if(it.status!=='done' && (showAll ? !kids : isKey(it))) rows.push({ it, depth });
+    walk(it.id, depth+1);
+  });
+  walk(null, 0);
+  const visible = rows.filter((r,i)=>!r.header || rows.slice(i+1).find(x=>x.header || !x.header)?.header===false);
+  const body = visible.length ? visible.map(r=>{
+    const it = r.it;
+    if(r.header) return `<div style="font-size:12px;font-weight:700;color:var(--text-2);padding:10px 4px 4px;border-bottom:1px solid var(--border)">${pmEsc(it.title)}</div>`;
+    const icon = PM_TYPES[it.type].icon, col = it.type==='milestone_ext'?'#b91c1c':it.type==='milestone_int'?'#7c3aed':it.type==='deliverable'?'#0369a1':'var(--text-3)';
+    const len = pmLenLabel(it);
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="color:${col};width:14px;text-align:center">${icon}</span>
+      <span style="flex:1;min-width:0">${pmEsc(it.title)}${len?` <span style="color:var(--text-3);font-size:11px">${len}</span>`:''}
+        <div class="pmdl-warn" data-id="${it.id}" style="font-size:11px;color:#b45309"></div></span>
+      <input type="date" class="pm-in pmdl-date" data-id="${it.id}" data-orig="${pmEsc(it.due_date||'')}" value="${pmEsc(it.due_date||'')}" style="width:150px" onchange="pmDeadlineCheck(this)">
+    </div>`;
+  }).join('') : `<div style="padding:12px;font-size:13px;color:var(--text-3)">${showAll?'Nothing left to schedule.':'This project has no milestones or deliverables yet.'}</div>`;
+  pmModal(`
+    <div class="sheet-title">${opts.fresh?'Set deadlines for ':'Deadlines · '}${pmEsc(p.name)}</div>
+    <div style="font-size:12px;color:var(--text-3);margin:4px 0 10px">${opts.fresh?'Add dates for anything you already know: client meetings, submittals, presentations. Leave the rest blank and fill them in later from the project\'s <b>Deadlines</b> button.':'Fill in or change deadlines. Blank means no date yet.'}
+      A date here is fixed: the item stays on that date, and if it has a length, its work is scheduled to finish by then.</div>
+    <label style="font-size:12px;display:flex;gap:6px;align-items:center;margin-bottom:6px"><input type="checkbox" ${showAll?'checked':''} onchange="pmDeadlines('${projectId}',{fresh:${!!opts.fresh},all:this.checked})"> Show every task, not just milestones and deliverables</label>
+    <div style="max-height:56vh;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0 8px">${body}</div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px">◆ client milestone · ◇ internal milestone · ■ deliverable · • task</div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+      <button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">${opts.fresh?'Skip for now':'Cancel'}</button>
+      <button class="pm-btn primary" onclick="pmDeadlinesSave('${projectId}')">Save deadlines</button>
+    </div>`, 640);
+  document.querySelectorAll('.pmdl-date').forEach(pmDeadlineCheck);
+}
+// Warn (don't block) when a deadline falls on a closure or before the item it depends on is due.
+function pmDeadlineCheck(input){
+  const it = pmItem(input.dataset.id), warn = document.querySelector(`.pmdl-warn[data-id="${input.dataset.id}"]`);
+  if(!it || !warn) return;
+  const d = input.value, msgs = [];
+  if(d){
+    if(!pmIsWorkday(d)) msgs.push(pmClosureSet().has(d) ? 'Falls on an office closure' : 'Falls on a weekend');
+    const pred = it.depends_on && pmItem(it.depends_on);
+    const predEnd = pred && (document.querySelector(`.pmdl-date[data-id="${pred.id}"]`)?.value || pred.due_date);
+    if(predEnd && d <= predEnd) msgs.push(`Before "${pred.title}" is due (${pmFmt(predEnd)})`);
+    if(d < pmToday()) msgs.push('In the past');
+  }
+  warn.textContent = msgs.length ? '⚠ ' + msgs.join(' · ') : '';
+}
+async function pmDeadlinesSave(projectId){
+  const changed = [];
+  document.querySelectorAll('.pmdl-date').forEach(inp=>{
+    if(inp.value === (inp.dataset.orig||'')) return;
+    const it = pmItem(inp.dataset.id); if(!it) return;
+    const due = inp.value || null;
+    it.due_date = due;
+    if(due){
+      it.auto_schedule = false; // pinned to its deadline
+      if(!pmIsMilestone(it.type) && it.duration_days) it.start_date = pmStartForDeadline(due, it.duration_days);
+      else if(!pmIsMilestone(it.type) && it.start_date && it.start_date > due) it.start_date = null;
+    } else {
+      it.auto_schedule = true;
+      if(!pmIsMilestone(it.type)) it.start_date = null;
+    }
+    changed.push(it);
+  });
+  try{
+    await Promise.all(changed.map(pmPatchItem));
+    const moved = await pmReschedule(projectId);
+    document.getElementById('pm-overlay')?.remove();
+    pmRender();
+    if(changed.length) pmToast(`Saved ${changed.length} deadline${changed.length===1?'':'s'}${moved?`, ${moved} linked item${moved===1?'':'s'} rescheduled`:''}`);
+  }catch(e){ alert('Could not save: '+e.message); }
+}
+
 function pmCollapseAll(projectId, collapse){
   pm.items.filter(i=>i.project_id===projectId && pm.items.some(c=>c.parent_id===i.id)).forEach(i=>{ if(collapse) pm.collapsed[i.id]=true; else delete pm.collapsed[i.id]; });
   pmSaveCollapsed(); pmRender();
@@ -3295,10 +3452,18 @@ function pmEditItem(id, defaults){
       <div id="pmi-hours-wrap"><div class="pm-lbl">Hours of work (optional)</div><input id="pmi-hours" type="number" step="0.5" class="pm-in" value="${pmLenUnit(it)==='days'?v('est_hours'):''}" placeholder="for budgeting"></div>
       <div><div class="pm-lbl">Budget ($)</div><input id="pmi-budget" type="number" step="1" class="pm-in" value="${v('budget')}"></div>
     </div>
-    <div style="margin-top:10px"><div class="pm-lbl">Can't start until this is done</div>
-      <select id="pmi-dep" class="pm-in" onchange="document.getElementById('pmi-auto-wrap').style.display=this.value?'':'none'"><option value="">(nothing, schedule it myself)</option>
+    <div style="margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm)"><div class="pm-lbl">Trigger: starts based on another item</div>
+      <select id="pmi-dep" class="pm-in" onchange="document.getElementById('pmi-auto-wrap').style.display=this.value?'':'none'"><option value="">(none, I'll schedule it myself)</option>
         ${depOpts.map(d=>`<option value="${d.id}"${it.depends_on===d.id?' selected':''}>${pmEsc(path(d))}</option>`).join('')}</select>
-      <label id="pmi-auto-wrap" style="font-size:12px;color:var(--text-2);display:${it.depends_on?'flex':'none'};gap:6px;align-items:center;margin-top:6px"><input id="pmi-auto" type="checkbox" ${it.auto_schedule!==false?'checked':''}> Move this automatically when that one finishes or moves</label>
+      <div id="pmi-auto-wrap" style="display:${it.depends_on?'':'none'};margin-top:8px">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:13px">
+          Starts
+          <select id="pmi-deptype" class="pm-in" style="width:auto"><option value="finish"${it.dep_type!=='start'?' selected':''}>after it finishes</option><option value="start"${it.dep_type==='start'?' selected':''}>when it starts</option></select>
+          plus <input id="pmi-deplag" type="number" min="0" class="pm-in" style="width:60px" value="${parseInt(it.dep_lag)||0}"> work days
+        </div>
+        <label style="font-size:12px;color:var(--text-2);display:flex;gap:6px;align-items:center;margin-top:8px"><input id="pmi-depwait" type="checkbox" ${it.dep_wait?'checked':''}> Don't put it on the calendar until that actually happens (shows as "waiting")</label>
+        <label style="font-size:12px;color:var(--text-2);display:flex;gap:6px;align-items:center;margin-top:4px"><input id="pmi-auto" type="checkbox" ${it.auto_schedule!==false?'checked':''}> Move it automatically when that item moves or finishes early/late</label>
+      </div>
     </div>
     <div id="pmi-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
     <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
@@ -3344,10 +3509,13 @@ async function pmSaveItem(id, base){
     duration_days: ms ? null : pmDaysFor(g('pmi-unit'), g('pmi-dur')),
     est_hours: (!ms && g('pmi-unit')==='hours') ? (g('pmi-dur')===''?null:Number(g('pmi-dur'))) : (g('pmi-hours')===''?null:Number(g('pmi-hours'))),
     budget: g('pmi-budget')===''?null:Number(g('pmi-budget')),
-    depends_on: g('pmi-dep')||null, auto_schedule: document.getElementById('pmi-auto').checked };
+    depends_on: g('pmi-dep')||null, auto_schedule: document.getElementById('pmi-auto').checked,
+    dep_type: g('pmi-deptype'), dep_lag: Math.max(0, parseInt(g('pmi-deplag'))||0), dep_wait: document.getElementById('pmi-depwait').checked };
   if(row.start_date && row.due_date && row.due_date < row.start_date){ document.getElementById('pmi-err').textContent='Due date is before the start date.'; return; }
   const old = id ? pmItem(id) : null;
   if(row.status==='done' && (!old || old.status!=='done')) row.done_at = pmToday();
+  if((row.status==='in_progress' || row.status==='done') && !(old && old.started_at)) row.started_at = pmToday();
+  if(row.status==='todo') row.started_at = null;
   if(row.status!=='done') row.done_at = null;
   try{
     if(id){ Object.assign(old, row); await pmPatchItem(old); }
@@ -3422,6 +3590,10 @@ async function pmSaveProject(id){
         const rows = pmTemplateRows(keep, p.id, { startDate: rough ? row.start_date : null });
         if(rows.length){ const ins = await sbFetch('POST','/rest/v1/pm_items', rows.map(pmClean).map((r,i)=>({ ...r, id: rows[i].id }))); pm.items.push(...ins); }
       }
+      document.getElementById('pm-overlay').remove();
+      pmRender();
+      if(pm.items.some(i=>i.project_id===p.id && i.type!=='phase')) pmDeadlines(p.id, { fresh:true });
+      return;
     }
     document.getElementById('pm-overlay').remove();
     pmRender();
@@ -3460,7 +3632,8 @@ async function pmDoAddFromTemplate(projectId){
 // A project that was created but whose phases/tasks failed to copy is filled in on the next try.
 function pmFullRow(r){
   const base = { id:null, project_id:null, parent_id:null, type:'task', title:'', description:'', owner:'', priority:'Medium', status:'todo',
-    start_date:null, due_date:null, duration_days:null, length_unit:'days', est_hours:null, budget:null, depends_on:null, auto_schedule:true, done_at:null, sort:0 };
+    start_date:null, due_date:null, duration_days:null, length_unit:'days', est_hours:null, budget:null, depends_on:null, auto_schedule:true, done_at:null, sort:0,
+    dep_type:'finish', dep_lag:0, dep_wait:false, started_at:null };
   const o = { ...base, ...r };
   ['start_date','due_date','done_at'].forEach(k=>{ if(!o[k] || !/^\d{4}-\d{2}-\d{2}/.test(o[k])) o[k] = null; else o[k] = String(o[k]).slice(0,10); });
   if(!['High','Medium','Low'].includes(o.priority)) o.priority = 'Medium';
@@ -3560,6 +3733,7 @@ function pmCalendarHtml(){
       <div style="font-size:16px;font-weight:700;min-width:150px;text-align:center">${monthName}</div>
       <button class="pm-btn" onclick="pm.calMonth='${go(1)}';pmRender()">›</button>
       <button class="pm-btn" onclick="pm.calMonth=pmToday().slice(0,7);pmRender()">Today</button>
+      <button class="pm-btn primary" onclick="pmCalDeadlines()">⏰ Deadlines</button>
       <span style="margin-left:auto"></span>
       ${pmProjectFilterSel(pm.calProject, "pm.calProject=this.value;pmRender()")}
       <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${pm.calKeyOnly?'checked':''} onchange="pm.calKeyOnly=this.checked;pmRender()"> Milestones &amp; deliverables only</label>
@@ -3656,8 +3830,9 @@ function pmGanttHtml(){
   rows.forEach((r,i)=>{
     if(r.kind!=='item' || !r.it.depends_on || !rowIndex.has(r.it.depends_on)) return;
     const pred = pmItem(r.it.depends_on), pi = rowIndex.get(r.it.depends_on);
-    const pe = pred.due_date||pred.start_date, ss = r.it.start_date||r.it.due_date; if(!pe||!ss) return;
-    const x1 = X(pe)+px, x2 = X(ss)+ (pmIsMilestone(r.it.type)?px/2-7:0), y1 = pi*RH+RH/2, y2 = i*RH+RH/2;
+    const fromStart = r.it.dep_type==='start';
+    const pe = fromStart ? (pred.start_date||pred.due_date) : (pred.due_date||pred.start_date), ss = r.it.start_date||r.it.due_date; if(!pe||!ss) return;
+    const x1 = X(pe)+(fromStart?0:px), x2 = X(ss)+ (pmIsMilestone(r.it.type)?px/2-7:0), y1 = pi*RH+RH/2, y2 = i*RH+RH/2;
     const xm = Math.max(x1+4, Math.min(x2-4, x1+8));
     links += `<path d="M${x1} ${y1} H${xm} V${y2} H${x2}" fill="none" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#pm-arrow)"/>`;
   });

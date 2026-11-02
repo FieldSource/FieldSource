@@ -129,6 +129,7 @@ main{padding:12px 16px 100px}
 .modal-sheet{background:var(--surface);border-radius:18px 18px 0 0;padding:20px 20px 40px;width:100%;max-width:540px;max-height:92vh;overflow-y:auto;animation:slideUp .25s ease}
 @keyframes slideUp{from{transform:translateY(40px);opacity:0}to{transform:translateY(0);opacity:1}}
 .sheet-handle{width:36px;height:4px;background:var(--border-2);border-radius:2px;margin:0 auto 18px}
+@media (min-width:700px){.modal-overlay.centered{align-items:center;padding:24px}.modal-overlay.centered .modal-sheet{border-radius:18px;padding-bottom:24px}.modal-overlay.centered .sheet-handle{display:none}}
 .sheet-title{font-size:17px;font-weight:600;color:var(--text);margin-bottom:4px}
 .sheet-subtitle{font-size:12px;color:var(--text-3);margin-bottom:18px}
 .form-group{margin-bottom:14px}
@@ -474,8 +475,8 @@ main{padding:12px 16px 100px}
 </div><!-- end app-body -->
 
 <script>
-const CLIENTS=['Adena','Alder','Athens CC','Bloom Carroll','Canal Winchester','Capital','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Danville','Eastmoor','Elgin','Fairbanks','Fort Jennings','Grove City','Indian Hills','Jackson Center','Kenton','Lima Central Catholic','Logan Elm','Madison Plains High School','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Ohio State ATI','Pickerington','Reynoldsburg Schools','Sharon','Shop','SWLS','Teays Valley','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
-const SERVICES=['Applications','BB/SB Fall Clean-Up','BB/SB Field Spring Prep','Broadcast Seeding','Construction','Contract Maintenance','Core Aeration','Deep Tine Aeration','Equipment Hauling','Equipment Repair/Maintenance','Grading','Infield Laser Grading','Irrigation Check','Irrigation Installation','Irrigation Repair','Mobilization','Mowing','Off','Painting','Rolling','Shockwave','Slit Seeding','Sodding','Sweep','Synthetic Turf Maintenance','Topdressing','Verti-cut','Vent','Water Sod'];
+const CLIENTS=['Adena','Alder','Athens CC','Bloom Carroll','Canal Winchester','Capital','Centerville-Washington','Chillicothe','Circleville Schools','City of Bexley','City of Dublin','Columbus Crew','Columbus School for Girls','Danville','Eastmoor','Elgin','Fairbanks','Fort Jennings','Grove City','Indian Hills','Jackson Center','Kenton','Lima Central Catholic','Logan Elm','Madison Plains High School','McGuire\'s','Meadowbrook','Mt Gilead Schools','North Union','Oakwood','Ohio Premier','Ohio State ATI','Pickerington','Reynoldsburg Schools','Sharon','Shop','SWLS','Teays Valley','Teays Valley High School','Teays Valley West Middle School','Tree of Life','University of Dayton','Upper Arlington Schools','Washington Court House','Westfall'];
+const SERVICES=['Applications','BB/SB Fall Clean-Up','BB/SB Field Spring Prep','Broadcast Seeding','Construction','Contract Maintenance','Core Aeration','Deep Tine Aeration','Equipment Hauling','Equipment Repair/Maintenance','Grading','Infield Laser Grading','Irrigation Check','Irrigation Installation','Irrigation Repair','Mobilization','Mowing','Off','Painting','Rolling','Shockwave','Slit Seeding','Sodding','Sweep','Synthetic Turf Maintenance','Topdressing','Vent','Verti-cut','Water Sod'];
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Jeff Ziegler','Matt','Wes','Will Alterman','Cameron','Killer','Sly','Badenhop - Intern','Gase - Intern','Kaleb','Penlin'];
 
 const CLIENT_ADDRESSES = {
@@ -2300,7 +2301,7 @@ async function dbDeleteMileageLog(id){
 
 
 // ── CSV IMPORT / EXPORT ───────────────────────────────────────
-const VALID_SERVICES = ['Mowing','Aeration','Applications','Topdressing','Grading','Irrigation Check','Irrigation Installation','Irrigation Repair','Shockwave','Slit Seeding','Broadcast Seeding','Sodding','Other'];
+const VALID_SERVICES = ['Mowing','Aeration','Applications','Topdressing','Grading','Irrigation Check','Irrigation Installation','Irrigation Repair','Shockwave','Slit Seeding','Broadcast Seeding','Sodding','Infield Laser Grading','BB/SB Field Spring Prep','BB/SB Fall Clean-Up','Other'];
 
 function downloadCsvTemplate(){
   const headers = ['client','site_field','task','phase_service','start_date','duration_days','crew','equipment','notes'];
@@ -2743,13 +2744,9 @@ function setPortal(portal){
   // Navigate to default view for portal
   if(portal==='tracker') setView('week');
   else if(portal==='bizops'){
-    loadPipelines().then(()=>{ loadPO(); loadCosts(); }).then(()=>{
-      view='pipeline';
-      document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
-      const bar = document.getElementById('bizops-bar');
-      if(bar){ const tabs = bar.querySelectorAll('.vtab'); if(tabs[0]) tabs[0].classList.add('active'); }
-      renderPipeline();
-    });
+    // Default to Approvals. PO and costs still load in the background for the other tabs.
+    loadPipelines().then(()=>{ loadPO(); loadCosts(); }).catch(e=>console.error(e));
+    Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'));
   }
   else if(portal==='consulting'){
     loadConsulting().then(()=>{
@@ -3579,7 +3576,10 @@ async function deleteFleetLoan(id){
 let estimates = [];
 let estimateStatusFilter = 'All';
 let estimateTypeFilter = 'All';
-let estimateSortBy = 'due'; // 'due', 'name', 'status'
+let estimateSortBy = 'due'; // column key: name,type,amount,created,due,status,days,proposal,tips
+let estimateSortDir = 'asc';
+let estimateCreatedFrom = '';
+let estimateCreatedTo = '';
 
 async function loadEstimates(){
   try {
@@ -3597,6 +3597,19 @@ async function loadEstimates(){
       proposalNeeded: r.proposal_needed||false,
       tips: r.tips||false,
       createdAt: r.created_at||'',
+      createdDate: r.est_created_date || (r.created_at||'').slice(0,10),
+      qbNumber: r.qb_estimate_number||'',
+      amount: r.amount!=null ? Number(r.amount) : null,
+      client: r.client||'',
+      qbStatus: r.qb_status||'',
+      invoicedToDate: r.invoiced_to_date!=null ? Number(r.invoiced_to_date) : null,
+      unbilledBalance: r.unbilled_balance!=null ? Number(r.unbilled_balance) : null,
+      acceptedDate: r.accepted_date||'',
+      source: r.source||'manual',
+      qbLink: r.qb_link||'',
+      lineItems: Array.isArray(r.line_items)?r.line_items:[],
+      priorInvoices: Array.isArray(r.prior_invoices)?r.prior_invoices:[],
+      qbSyncedAt: r.qb_synced_at||'',
     }));
   } catch(e){ estimates = []; }
 }
@@ -3664,19 +3677,33 @@ function renderEstimates(){
   let filtered = [...estimates];
   if(estimateStatusFilter!=='All') filtered = filtered.filter(e=>e.status===estimateStatusFilter);
   if(estimateTypeFilter!=='All') filtered = filtered.filter(e=>e.type===estimateTypeFilter);
+  if(estimateCreatedFrom) filtered = filtered.filter(e=>e.createdDate && e.createdDate>=estimateCreatedFrom);
+  if(estimateCreatedTo) filtered = filtered.filter(e=>e.createdDate && e.createdDate<=estimateCreatedTo);
 
-  filtered.sort((a,b)=>{
-    if(estimateSortBy==='name') return (a.projectName||'').localeCompare(b.projectName||'');
-    if(estimateSortBy==='status'){
-      const pa = STATUS_PRIORITY[a.status]??99;
-      const pb = STATUS_PRIORITY[b.status]??99;
-      if(pa!==pb) return pa-pb;
-      return (a.projectName||'').localeCompare(b.projectName||'');
+  // Column sort. Blank values always sink to the bottom, whichever direction.
+  const sortVal = e=>{
+    switch(estimateSortBy){
+      case 'name': return (e.projectName||'').toLowerCase()||null;
+      case 'type': return e.type||null;
+      case 'amount': return e.amount??null;
+      case 'created': return e.createdDate||null;
+      case 'due': return e.estDueDate||null;
+      case 'status': return STATUS_PRIORITY[e.status]??99;
+      case 'days': { const d=parseFloat(e.days); return isNaN(d)?null:d; }
+      case 'proposal': return e.proposalNeeded?1:0;
+      case 'tips': return e.tips?1:0;
     }
-    // due date (default)
-    const aDate = a.estDueDate || 'ZZZZ';
-    const bDate = b.estDueDate || 'ZZZZ';
-    if(aDate!==bDate) return aDate.localeCompare(bDate);
+    return null;
+  };
+  const dir = estimateSortDir==='desc'?-1:1;
+  filtered.sort((a,b)=>{
+    const av=sortVal(a), bv=sortVal(b);
+    if(av===null && bv!==null) return 1;
+    if(bv===null && av!==null) return -1;
+    if(av!==null && bv!==null && av!==bv){
+      const c = (typeof av==='number'&&typeof bv==='number') ? av-bv : String(av).localeCompare(String(bv));
+      if(c) return c*dir;
+    }
     return (a.projectName||'').localeCompare(b.projectName||'');
   });
 
@@ -3685,17 +3712,24 @@ function renderEstimates(){
   let html = `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
     <div style="font-size:18px;font-weight:700;color:var(--text)">Estimate Tracker</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span style="font-size:12px;color:var(--text-3)">Sort:</span>
-      ${[['due','Due Date'],['name','Name'],['status','Status']].map(([val,label])=>`<button onclick="estimateSortBy='${val}';renderEstimates()" class="site-chip${estimateSortBy===val?' active':''}" style="padding:4px 10px">${label}</button>`).join('')}
-      ${canEdit?`<button onclick="openEstimateModal()" class="btn-save" style="font-size:13px;padding:6px 14px;margin-left:8px">+ Add Estimate</button>`:''}
+      ${canEdit?`<button onclick="openQuoteBuilder()" class="btn-save" style="font-size:13px;padding:6px 14px;margin-left:8px">✍️ New quote</button><button onclick="openEstimateModal()" class="site-chip" style="font-size:13px;padding:6px 14px;margin-left:6px">+ Add Estimate</button>`:''}
     </div>
   </div>
 
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
     ${['All',...ESTIMATE_STATUSES].map(s=>`<button onclick="estimateStatusFilter='${s}';renderEstimates()" class="site-chip${estimateStatusFilter===s?' active':''}">${s}</button>`).join('')}
   </div>
-  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
     ${['All',...ESTIMATE_TYPES].map(t=>`<button onclick="estimateTypeFilter='${t}';renderEstimates()" class="site-chip${estimateTypeFilter===t?' active':''}">${t}</button>`).join('')}
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+    <span style="font-size:12px;color:var(--text-3)">Created:</span>
+    ${[['30','Last 30 days'],['90','Last 90 days'],['ytd','This year']].map(([k,l])=>`<button onclick="setEstimateCreatedPreset('${k}')" class="site-chip" style="padding:4px 10px">${l}</button>`).join('')}
+    <input type="date" value="${estimateCreatedFrom}" onchange="estimateCreatedFrom=this.value;renderEstimates()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg)">
+    <span style="font-size:12px;color:var(--text-3)">to</span>
+    <input type="date" value="${estimateCreatedTo}" onchange="estimateCreatedTo=this.value;renderEstimates()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg)">
+    ${(estimateCreatedFrom||estimateCreatedTo)?`<button onclick="estimateCreatedFrom='';estimateCreatedTo='';renderEstimates()" class="site-chip" style="padding:4px 10px">Clear</button>`:''}
+    <span style="font-size:12px;color:var(--text-3);margin-left:auto">${filtered.length} of ${estimates.length} · <b style="color:var(--text)">${fmtEstMoney(filtered.reduce((t,e)=>t+(e.amount||0),0))}</b></span>
   </div>`;
 
   if(!filtered.length){
@@ -3704,26 +3738,34 @@ function renderEstimates(){
     html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">`;
 
     // Header
-    html += `<div style="display:grid;grid-template-columns:2fr 100px 100px 110px 80px 80px 60px;gap:0;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border)">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Project</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Type</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Due Date</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Status</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Days</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Proposal</div>
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">TIPS</div>
+    html += `<div style="display:grid;grid-template-columns:2fr 100px 110px 100px 100px 110px 70px 70px 50px;gap:0;padding:10px 14px;background:var(--accent);border-bottom:1px solid var(--border)">
+      <div onclick="sortEstimatesBy('name')" title="Sort by Project" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='name'?'color:var(--text)':''}">Project${estimateSortBy==='name'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('type')" title="Sort by Type" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='type'?'color:var(--text)':''}">Type${estimateSortBy==='type'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('amount')" title="Sort by Amount" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='amount'?'color:var(--text)':''}">Amount${estimateSortBy==='amount'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('created')" title="Sort by Created" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='created'?'color:var(--text)':''}">Created${estimateSortBy==='created'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('due')" title="Sort by Due Date" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='due'?'color:var(--text)':''}">Due Date${estimateSortBy==='due'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('status')" title="Sort by Status" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='status'?'color:var(--text)':''}">Status${estimateSortBy==='status'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('days')" title="Sort by Days" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='days'?'color:var(--text)':''}">Days${estimateSortBy==='days'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('proposal')" title="Sort by Proposal" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='proposal'?'color:var(--text)':''}">Proposal${estimateSortBy==='proposal'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
+      <div onclick="sortEstimatesBy('tips')" title="Sort by TIPS" style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);cursor:pointer;user-select:none;${estimateSortBy==='tips'?'color:var(--text)':''}">TIPS${estimateSortBy==='tips'?(estimateSortDir==='asc'?' ▲':' ▼'):''}</div>
     </div>`;
 
     filtered.forEach(e=>{
       const sc = ESTIMATE_STATUS_COLORS[e.status]||{bg:'#f1f5f9',text:'#475569'};
       const overdue = e.estDueDate && e.estDueDate < today && e.status!=='Estimate In Progress';
-      html += `<div onclick="${canEdit?`openEstimateModal('${e.id}')`:''}" style="display:grid;grid-template-columns:2fr 100px 100px 110px 80px 80px 60px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);${canEdit?'cursor:pointer;':''}align-items:start">
+      html += `<div onclick="openEstimateDetail('${e.id}')" style="display:grid;grid-template-columns:2fr 100px 110px 100px 100px 110px 70px 70px 50px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);cursor:pointer;align-items:start">
         <div>
           <div style="font-size:13px;font-weight:600;color:var(--text)">${e.projectName}</div>
+          ${(e.qbNumber||e.client)?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.qbNumber?`Est #${e.qbNumber}`:''}${e.qbNumber&&e.client?' · ':''}${e.client}${e.qbStatus?` · QB ${e.qbStatus}`:''}</div>`:''}
           ${e.scope?`<div style="font-size:11px;color:var(--text-2);margin-top:2px">${e.scope}</div>`:''}
           ${e.notes?`<div style="font-size:11px;color:var(--text-3);margin-top:2px;font-style:italic">${e.notes}</div>`:''}
         </div>
         <div style="font-size:12px;color:var(--text-2)">${e.type}</div>
+        <div style="font-size:12px;color:var(--text)">
+          <div style="font-weight:600">${e.amount!=null?fmtEstMoney(e.amount):'<span style="color:var(--text-3);font-weight:400">—</span>'}</div>
+          ${e.unbilledBalance!=null&&e.qbStatus==='Accepted'?`<div style="font-size:10px;color:var(--text-3)">${fmtEstMoney(e.unbilledBalance)} unbilled</div>`:''}
+        </div>
+        <div style="font-size:12px;color:var(--text-2)">${e.createdDate||'—'}</div>
         <div style="font-size:12px;color:${overdue?'#dc2626':'var(--text-2)'};font-weight:${overdue?'600':'400'}">${e.estDueDate||'TBD'}</div>
         <div><span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:${sc.bg};color:${sc.text}">${e.status}</span></div>
         <div style="font-size:12px;color:var(--text-2)">${e.days||'—'}</div>
@@ -3735,6 +3777,957 @@ function renderEstimates(){
   }
 
   document.getElementById('main-content').innerHTML = html;
+}
+
+// Click a header: same column flips direction; a new column starts in its natural order
+// (A–Z for text, soonest due first, newest/largest first for created and amount).
+function sortEstimatesBy(key){
+  if(estimateSortBy===key) estimateSortDir = estimateSortDir==='asc'?'desc':'asc';
+  else { estimateSortBy = key; estimateSortDir = ['amount','created','proposal','tips'].includes(key)?'desc':'asc'; }
+  renderEstimates();
+}
+
+function escEst(v){
+  return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtEstMoney2(n){
+  return (n<0?'-$':'$')+Math.abs(Number(n||0)).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+// Read-only detail view: opens when you click an estimate row.
+function openEstimateDetail(id){
+  const e = estimates.find(x=>x.id===id);
+  if(!e) return;
+  const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
+  const canEdit = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com'].includes(userEmail);
+  const sc = ESTIMATE_STATUS_COLORS[e.status]||{bg:'#f1f5f9',text:'#475569'};
+  const lines = e.lineItems||[];
+  const invs = e.priorInvoices||[];
+  const earned = lines.reduce((t,l)=>t+(Number(l.earned)||0),0);
+  const lineTotal = lines.reduce((t,l)=>t+(Number(l.value)||0),0);
+  const pctAll = lineTotal ? Math.round(earned/lineTotal*100) : null;
+  const invTotal = invs.reduce((t,i)=>t+(Number(i.amount)||0),0);
+  const over = e.amount!=null && e.invoicedToDate!=null && e.invoicedToDate > e.amount;
+
+  const card = (label,val,sub='',warn=false)=>`<div style="flex:1;min-width:120px;background:var(--bg);border:1px solid ${warn?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:10px 12px">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">${label}</div>
+      <div style="font-size:16px;font-weight:700;color:${warn?'#dc2626':'var(--text)'};margin-top:2px">${val}</div>
+      ${sub?`<div style="font-size:11px;color:var(--text-3)">${sub}</div>`:''}
+    </div>`;
+  const field = (label,val)=>`<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3)">${label}</div><div style="font-size:13px;color:var(--text);margin-top:2px">${val||'—'}</div></div>`;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);padding:6px 8px;text-align:left;white-space:nowrap;background:var(--accent)';
+  const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border);vertical-align:top';
+
+  let body = `
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+      <div>
+        <div class="sheet-title" style="margin-bottom:2px">${escEst(e.projectName)}</div>
+        <div style="font-size:12px;color:var(--text-3)">${[e.qbNumber?`Est #${escEst(e.qbNumber)}`:'',escEst(e.client),e.qbStatus?`QB ${escEst(e.qbStatus)}`:''].filter(Boolean).join(' · ')||'Entered manually'}</div>
+      </div>
+      <span style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text};white-space:nowrap">${escEst(e.status)}</span>
+    </div>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      ${card('Estimate total', e.amount!=null?fmtEstMoney2(e.amount):'—')}
+      ${e.invoicedToDate!=null?card('Invoiced to date', fmtEstMoney2(e.invoicedToDate), over?'More than the estimate total':'', over):''}
+      ${e.unbilledBalance!=null?card('Unbilled', fmtEstMoney2(e.unbilledBalance), '', e.unbilledBalance<0):''}
+      ${lines.length?card('Earned to date', fmtEstMoney2(earned), pctAll!=null?`${pctAll}% complete`:''):''}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;margin-top:14px">
+      ${field('Type', escEst(e.type))}
+      ${field('Created', escEst(e.createdDate))}
+      ${field('Accepted', escEst(e.acceptedDate))}
+      ${field('Est. due', escEst(e.estDueDate))}
+      ${field('Days', escEst(e.days))}
+      ${field('Proposal / TIPS', `${e.proposalNeeded?'Proposal':''}${e.proposalNeeded&&e.tips?' · ':''}${e.tips?'TIPS':''}`)}
+    </div>
+    ${e.scope?`<div style="margin-top:12px">${field('Scope', escEst(e.scope))}</div>`:''}
+    ${e.notes?`<div style="margin-top:12px">${field('Notes', `<span style="font-style:italic">${escEst(e.notes)}</span>`)}</div>`:''}
+
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Breakdown</div>`;
+
+  if(lines.length){
+    body += `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="${th}">Item</th><th style="${th};text-align:right">Qty</th><th style="${th};text-align:right">Rate</th>
+          <th style="${th};text-align:right">Value</th><th style="${th};text-align:right">% done</th><th style="${th};text-align:right">Earned</th>
+        </tr></thead>
+        <tbody>
+          ${lines.map(l=>`<tr>
+            <td style="${td}"><div style="font-weight:600">${escEst(l.item)}</div>${l.description?`<div style="font-size:11px;color:var(--text-2)">${escEst(l.description)}</div>`:''}${l.notes?`<div style="font-size:11px;color:var(--text-3);font-style:italic">${escEst(l.notes)}</div>`:''}</td>
+            <td style="${td};text-align:right">${l.qty??''}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${l.rate!=null?fmtEstMoney2(l.rate):''}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${l.value!=null?fmtEstMoney2(l.value):''}</td>
+            <td style="${td};text-align:right;${Number(l.pct)>100?'color:#dc2626;font-weight:600':''}">${l.pct!=null&&l.pct!==''?Math.round(Number(l.pct))+'%':'—'}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${fmtEstMoney2(l.earned)}</td>
+          </tr>`).join('')}
+          <tr>
+            <td style="${td};font-weight:700">Total</td><td style="${td}"></td><td style="${td}"></td>
+            <td style="${td};text-align:right;font-weight:700;white-space:nowrap">${fmtEstMoney2(lineTotal)}</td>
+            <td style="${td};text-align:right;font-weight:700">${pctAll!=null?pctAll+'%':''}</td>
+            <td style="${td};text-align:right;font-weight:700;white-space:nowrap">${fmtEstMoney2(earned)}</td>
+          </tr>
+        </tbody>
+      </table></div>`;
+  } else {
+    body += e.qbNumber
+      ? `<div id="qb-lines-slot" style="font-size:12px;color:var(--text-3);padding:12px;border:1px dashed var(--border-2);border-radius:var(--radius-sm)">Loading line items from QuickBooks…</div>`
+      : `<div style="font-size:12px;color:var(--text-3);background:var(--bg);border:1px dashed var(--border-2);border-radius:var(--radius-sm);padding:12px">No breakdown for this estimate. It was entered by hand and isn't linked to a QuickBooks estimate number.</div>`;
+  }
+
+  if(invs.length){
+    body += `<div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Invoices on this estimate</div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th style="${th}">Invoice #</th><th style="${th}">Date</th><th style="${th};text-align:right">Amount</th><th style="${th}">Notes</th></tr></thead>
+        <tbody>
+          ${invs.map(i=>`<tr><td style="${td}">${escEst(i.number)}</td><td style="${td}">${escEst(i.date)}</td><td style="${td};text-align:right;white-space:nowrap">${fmtEstMoney2(i.amount)}</td><td style="${td};color:var(--text-3)">${escEst(i.notes)}</td></tr>`).join('')}
+          <tr><td style="${td};font-weight:700">Total</td><td style="${td}"></td><td style="${td};text-align:right;font-weight:700;white-space:nowrap">${fmtEstMoney2(invTotal)}</td><td style="${td}"></td></tr>
+        </tbody>
+      </table></div>`;
+  }
+
+  body += `
+    ${e.qbSyncedAt?`<div style="font-size:11px;color:var(--text-3);margin-top:12px">Last synced from the Billing Tracker ${new Date(e.qbSyncedAt).toLocaleString()}</div>`:''}
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:16px">
+      ${e.qbNumber&&canEdit?`<button id="handoff-btn" onclick="openHandoff('${e.id}')" class="site-chip" style="padding:8px 14px">🚀 Push to tracker</button>`:''}
+      ${e.qbNumber?`<button id="qb-pdf-btn" onclick="previewQbEstimatePdf('${escEst(e.qbNumber)}')" class="site-chip" style="padding:8px 14px">📄 Preview estimate PDF</button>`:''}
+      ${e.qbLink?`<a href="${escEst(e.qbLink)}" target="_blank" rel="noopener" class="site-chip" style="text-decoration:none;padding:8px 14px">Open in QuickBooks ↗</a>`:''}
+      ${canEdit?`<button onclick="document.getElementById('est-detail-overlay').remove();openEstimateModal('${e.id}')" class="site-chip" style="padding:8px 14px">✏️ Edit</button>`:''}
+      <button onclick="document.getElementById('est-detail-overlay').remove()" class="btn-save" style="padding:8px 16px">Close</button>
+    </div>`;
+
+  document.getElementById('est-detail-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay centered';
+  overlay.id = 'est-detail-overlay';
+  overlay.onclick = ev=>{ if(ev.target===overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:760px;max-height:90vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
+  document.body.appendChild(overlay);
+  if(e.qbNumber && !lines.length) loadQbLines(e.qbNumber);
+  if(e.qbNumber && canEdit) checkTrackerJob(e.qbNumber);
+}
+
+// QuickBooks line items, from the qb_estimates / qb_estimate_lines tables kept fresh by qb-sync.
+async function loadQbLines(docNumber){
+  const slot = document.getElementById('qb-lines-slot');
+  if(!slot) return;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);padding:6px 8px;text-align:left;white-space:nowrap;background:var(--accent)';
+  const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border);vertical-align:top';
+  try{
+    const est = await sbFetch('GET', `/rest/v1/qb_estimates?estimate_number=eq.${encodeURIComponent(docNumber)}&select=id,total,qb_status,synced_at&limit=1`);
+    if(!est || !est.length){
+      slot.textContent = 'This estimate number isn\'t in the QuickBooks sync yet. It should appear after the next sync.';
+      return;
+    }
+    const qlines = await sbFetch('GET', `/rest/v1/qb_estimate_lines?estimate_id=eq.${est[0].id}&select=line_number,description,quantity,unit_price,amount,item_type&order=line_number`);
+    if(!qlines || !qlines.length){ slot.textContent = 'QuickBooks has no line items on this estimate.'; return; }
+    const total = qlines.reduce((t,l)=>t+(Number(l.amount)||0),0);
+    slot.removeAttribute('style');
+    slot.innerHTML = `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr><th style="${th}">Description</th><th style="${th};text-align:right">Qty</th><th style="${th};text-align:right">Rate</th><th style="${th};text-align:right">Amount</th></tr></thead>
+        <tbody>
+          ${qlines.map(l=>`<tr>
+            <td style="${td}">${escEst(l.description)}</td>
+            <td style="${td};text-align:right">${l.item_type==='DescriptionOnly'?'':(Number(l.quantity)||0).toLocaleString('en-US')}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${l.item_type==='DescriptionOnly'?'':fmtEstMoney2(l.unit_price)}</td>
+            <td style="${td};text-align:right;white-space:nowrap">${l.item_type==='DescriptionOnly'?'':fmtEstMoney2(l.amount)}</td>
+          </tr>`).join('')}
+          <tr><td style="${td};font-weight:700">Total</td><td style="${td}"></td><td style="${td}"></td><td style="${td};text-align:right;font-weight:700;white-space:nowrap">${fmtEstMoney2(total)}</td></tr>
+        </tbody>
+      </table></div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:6px">From QuickBooks · synced ${new Date(est[0].synced_at).toLocaleString()}</div>`;
+  } catch(err){
+    console.error(err);
+    slot.textContent = 'Couldn\'t load line items from QuickBooks.';
+  }
+}
+
+// Opens the real QuickBooks estimate PDF in a new tab.
+async function previewQbEstimatePdf(docNumber){
+  const btn = document.getElementById('qb-pdf-btn');
+  const win = window.open('', '_blank');
+  if(win) win.document.write('<p style="font-family:system-ui;padding:20px">Loading estimate from QuickBooks…</p>');
+  if(btn){ btn.disabled = true; btn.textContent = 'Loading PDF…'; }
+  try{
+    const r = await fetch(`/.netlify/functions/qb-estimate-pdf?doc=${encodeURIComponent(docNumber)}`, {
+      headers: { 'Authorization': 'Bearer '+(currentToken||'') },
+    });
+    if(!r.ok){
+      const err = await r.json().catch(()=>({}));
+      throw new Error(err.error || `Error ${r.status}`);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    if(win) win.location.href = url; else window.open(url, '_blank');
+  } catch(err){
+    if(win) win.close();
+    alert('Could not load the estimate PDF: ' + err.message);
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '📄 Preview estimate PDF'; }
+  }
+}
+
+// ===================== TRACKER HANDOFF (Ryan's tracker-handoff spec, steps 2-6) =====================
+// Accepted QB estimate -> tracker_jobs + tracker_work_items (one per QB line) + tracker_visits.
+// Nothing is written until the PM clicks Confirm. Allocation gaps are flagged, never silently fixed.
+let handoff = null;
+const HANDOFF_UNITS = ['LS','EA','SF','AC','TON','CY','LF','HR','DAY','VISIT','APP'];
+const HANDOFF_EDITORS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com'];
+
+async function checkTrackerJob(qbNumber){
+  const slot = document.getElementById('handoff-btn');
+  if(!slot) return;
+  try{
+    const j = await sbFetch('GET', `/rest/v1/tracker_jobs?estimate_number=eq.${encodeURIComponent(qbNumber)}&select=estimate_number,status`);
+    if(j && j.length){
+      const v = await sbFetch('GET', `/rest/v1/tracker_visits?estimate_number=eq.${encodeURIComponent(qbNumber)}&select=visit_id`);
+      slot.outerHTML = `<span class="site-chip" style="padding:8px 14px;cursor:default;background:#dcfce7;color:#166534">✓ In tracker · ${(v||[]).length} visit${(v||[]).length===1?'':'s'}</span>`;
+    }
+  }catch(err){ console.error(err); }
+}
+
+async function openHandoff(estId){
+  const e = estimates.find(x=>x.id===estId);
+  if(!e || !e.qbNumber) return;
+  const num = e.qbNumber;
+  try{
+    const ex = await sbFetch('GET', `/rest/v1/tracker_jobs?estimate_number=eq.${encodeURIComponent(num)}&select=estimate_number`);
+    if(ex && ex.length){ alert(`Estimate #${num} is already in the tracker. One estimate, one job.`); return; }
+    const qe = await sbFetch('GET', `/rest/v1/qb_estimates?estimate_number=eq.${encodeURIComponent(num)}&select=id,total,customer_name,qb_status&limit=1`);
+    if(!qe || !qe.length){ alert(`Estimate #${num} isn't in the QuickBooks sync yet. Run the sync, then try again.`); return; }
+    if(qe[0].qb_status!=='Accepted' && !confirm(`QuickBooks shows estimate #${num} as "${qe[0].qb_status}", not Accepted. Ryan's flow pushes only accepted estimates. Push it anyway?`)) return;
+    const ql = await sbFetch('GET', `/rest/v1/qb_estimate_lines?estimate_id=eq.${qe[0].id}&item_type=eq.SalesItemLineDetail&select=line_number,description,quantity,unit_price,amount&order=line_number`);
+    if(!ql || !ql.length){ alert(`QuickBooks has no priced lines on estimate #${num}.`); return; }
+
+    const items = ql.map((l,i)=>{
+      const qty = Number(l.quantity)||1, lump = qty===1;
+      return { line:i+1, description:l.description||'', qty, unit: lump?'LS':'EA', rate:Number(l.unit_price)||0,
+               value:Math.round((Number(l.amount)||0)*100)/100, method: lump?'lump_sum':'unit', milestone:'' };
+    });
+    handoff = {
+      num, estId, qbTotal: Math.round((Number(qe[0].total)||0)*100)/100,
+      job: { job_name: e.projectName||'', client: qe[0].customer_name||e.client||'', site:'', po_number:'',
+             accepted_date: e.acceptedDate||'', job_type: e.type==='Maintenance'?'Maintenance':'Project',
+             billing_mode:'billed', closeout_mode:'turnkey', pm:'', pm_email:'', billing_contact:'', billing_email:'', notes:'' },
+      items, pattern:'single_day',
+      sched:{ date:'', start:'', end:'', weekdaysOnly:true, days:[2], every:1, dates:'', window:'', count:1 },
+      visits: [],
+    };
+    document.getElementById('est-detail-overlay')?.remove();
+    renderHandoff();
+  }catch(err){ alert('Could not start the handoff: '+err.message); }
+}
+
+function handoffGenDates(){
+  const s = handoff.sched, p = handoff.pattern, out = [];
+  const D = x=>new Date(x+'T12:00:00'), F = x=>x.toLocaleDateString('en-CA');
+  if(p==='single_day'){ if(s.date) out.push(s.date); }
+  else if(p==='contiguous' || p==='recurring'){
+    if(!s.start || !s.end || D(s.end) < D(s.start)) return null;
+    const start = D(s.start);
+    for(let t=D(s.start); t<=D(s.end) && out.length<400; t.setDate(t.getDate()+1)){
+      const w = t.getDay();
+      if(p==='contiguous'){ if(s.weekdaysOnly && (w===0||w===6)) continue; out.push(F(t)); }
+      else {
+        const wk = Math.floor((t - start)/(7*864e5));
+        if(wk % (Number(s.every)||1)===0 && s.days.includes(w)) out.push(F(t));
+      }
+    }
+  }
+  else if(p==='specific_dates'){
+    s.dates.split(/[\n,;]+/).map(x=>x.trim()).filter(Boolean).forEach(x=>{
+      let m = x.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/), y, mo, d;
+      if(m){ y=+m[1]; mo=+m[2]; d=+m[3]; }
+      else if((m = x.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/))){ mo=+m[1]; d=+m[2]; y=+m[3]; if(y<100) y+=2000; }
+      if(y) out.push(`${y}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
+    });
+    out.sort();
+  }
+  else if(p==='window_tbd'){ for(let i=0;i<Math.max(1,Math.min(60,Number(s.count)||1));i++) out.push(null); }
+  return out;
+}
+
+function handoffGenerate(){
+  const dates = handoffGenDates();
+  if(!dates || !dates.length){ alert('Fill in the schedule so at least one visit can be created.'); return; }
+  const n = dates.length;
+  handoff.visits = dates.map((d,i)=>({
+    planned_date: d, target_window: handoff.pattern==='window_tbd' ? (handoff.sched.window||'') : '',
+    alloc: handoff.items.map(it=>{
+      if(it.method==='milestone') return i===n-1;
+      const total = it.method==='unit' ? it.qty : 100;
+      const step = it.method==='unit' ? Math.round(total/n*100)/100 : Math.round(total/n*10)/10;
+      return i<n-1 ? step : Math.round((total - step*(n-1))*100)/100;
+    }),
+  }));
+  renderHandoff();
+}
+
+function handoffChecks(){
+  const res = handoff.items.map((it,li)=>{
+    if(it.method==='milestone'){
+      const c = handoff.visits.filter(v=>v.alloc[li]===true).length;
+      return { ok: c===1, text: c===1?'milestone on 1 visit':`milestone on ${c} visits (needs exactly 1)` };
+    }
+    const sum = Math.round(handoff.visits.reduce((t,v)=>t+(Number(v.alloc[li])||0),0)*100)/100;
+    const target = it.method==='unit' ? it.qty : 100;
+    const lab = it.method==='unit' ? `${sum} of ${target} ${it.unit}` : `${sum}% of 100%`;
+    return { ok: Math.abs(sum-target)<0.005, text: Math.abs(sum-target)<0.005 ? lab : `${lab} (${sum<target?'under':'over'})` };
+  });
+  const lineTotal = Math.round(handoff.items.reduce((t,i)=>t+i.value,0)*100)/100;
+  const empty = handoff.visits.filter(v=>!v.alloc.some(a=>a===true || Number(a)>0)).length;
+  return { lines: res, lineTotal, totalOk: Math.abs(lineTotal-handoff.qbTotal)<0.005, empty };
+}
+
+function handoffRefreshChecks(){
+  const c = handoffChecks();
+  c.lines.forEach((r,i)=>{ const el=document.getElementById('ho-chk-'+i); if(el){ el.textContent=r.text; el.style.color=r.ok?'#15803d':'#b91c1c'; } });
+  const tot = document.getElementById('ho-total');
+  if(tot){ tot.textContent = `Lines ${fmtEstMoney2(c.lineTotal)} vs QuickBooks ${fmtEstMoney2(handoff.qbTotal)}${c.totalOk?' ✓':' ✗ does not match'}`; tot.style.color = c.totalOk?'#15803d':'#b91c1c'; }
+  const em = document.getElementById('ho-empty');
+  if(em) em.textContent = c.empty ? `${c.empty} visit${c.empty===1?'':'s'} cover no work items.` : '';
+}
+
+function hoSet(path, val){
+  const [a,b] = path.split('.');
+  if(b===undefined) handoff[a]=val; else handoff[a][b]=val;
+}
+
+function renderHandoff(){
+  const h = handoff, j = h.job, s = h.sched;
+  const lbl = t=>`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:3px">${t}</div>`;
+  const inp = (path,val,type='text',ph='')=>`<input type="${type}" value="${escEst(val)}" placeholder="${escEst(ph)}" oninput="hoSet('${path}',this.value)" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);box-sizing:border-box">`;
+  const sel = (path,val,opts,rerender=false)=>`<select onchange="hoSet('${path}',this.value)${rerender?';renderHandoff()':''}" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">${opts.map(([v,l])=>`<option value="${v}"${v===val?' selected':''}>${l}</option>`).join('')}</select>`;
+  const field = (t,html)=>`<div>${lbl(t)}${html}</div>`;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);padding:6px;text-align:left;white-space:nowrap;background:var(--accent)';
+  const td = 'font-size:12px;color:var(--text);padding:5px 6px;border-top:1px solid var(--border);vertical-align:top';
+  const cell = 'width:70px;font-size:12px;padding:4px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text);text-align:right';
+  const checks = handoffChecks();
+  const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  let schedHtml = '';
+  if(h.pattern==='single_day') schedHtml = field('Date', inp('sched.date',s.date,'date'));
+  else if(h.pattern==='contiguous') schedHtml = field('Start',inp('sched.start',s.start,'date'))+field('End',inp('sched.end',s.end,'date'))+
+      `<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin-top:16px"><input type="checkbox" ${s.weekdaysOnly?'checked':''} onchange="handoff.sched.weekdaysOnly=this.checked"> Weekdays only</label>`;
+  else if(h.pattern==='recurring') schedHtml = field('Start',inp('sched.start',s.start,'date'))+field('End',inp('sched.end',s.end,'date'))+
+      field('Every', `<select onchange="handoff.sched.every=+this.value" style="font-size:13px;padding:6px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text)">${[1,2,3,4].map(n=>`<option value="${n}"${s.every===n?' selected':''}>${n===1?'week':n+' weeks'}</option>`).join('')}</select>`)+
+      field('On', DOW.map((d,i)=>`<label style="font-size:12px;margin-right:6px;white-space:nowrap"><input type="checkbox" ${s.days.includes(i)?'checked':''} onchange="handoff.sched.days=this.checked?[...handoff.sched.days,${i}]:handoff.sched.days.filter(x=>x!==${i})"> ${d}</label>`).join(''));
+  else if(h.pattern==='specific_dates') schedHtml = `<div style="grid-column:1/-1">${lbl('Dates (one per line, or comma-separated)')}<textarea oninput="hoSet('sched.dates',this.value)" rows="3" placeholder="3/10/2027, 4/14/2027, 5/19/2027" style="width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);box-sizing:border-box">${escEst(s.dates)}</textarea></div>`;
+  else if(h.pattern==='window_tbd') schedHtml = `<div style="grid-column:span 2">${lbl('Target window')}${inp('sched.window',s.window,'text','Early April, when soil temps reach 55F')}</div>`+field('Number of visits',inp('sched.count',s.count,'number'));
+
+  const body = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">Push estimate #${escEst(h.num)} to the tracker</div>
+      <div style="font-size:12px;color:var(--text-3)">Nothing is saved until you click Confirm at the bottom.</div></div>
+      <button onclick="if(confirm('Close without saving?')){document.getElementById('handoff-overlay').remove();handoff=null;}" class="site-chip" style="padding:6px 12px">✕</button>
+    </div>
+
+    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">1. Job</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+      ${field('Job name *', inp('job.job_name',j.job_name))}
+      ${field('Client *', inp('job.client',j.client))}
+      ${field('Site / field', inp('job.site',j.site,'text','Varsity soccer field'))}
+      ${field('PO #', inp('job.po_number',j.po_number,'text','blank = email approval'))}
+      ${field('Accepted date', inp('job.accepted_date',j.accepted_date,'date'))}
+      ${field('Job type', sel('job.job_type',j.job_type,[['Project','Project (one-time scope)'],['Maintenance','Maintenance (recurring program)']]))}
+      ${field('Billed or tracked', sel('job.billing_mode',j.billing_mode,[['billed','Billed (one-off, invoice on closeout)'],['tracked','Tracked (contract program, count progress)']]))}
+      ${field('Closeout', sel('job.closeout_mode',j.closeout_mode,[['turnkey','Turnkey (bill when done)'],['qc','QC / owner approved (sign-off first)']]))}
+      ${field('PM / lead', inp('job.pm',j.pm))}
+      ${field('PM email', inp('job.pm_email',j.pm_email,'email'))}
+      ${field('Billing contact', inp('job.billing_contact',j.billing_contact))}
+      ${field('Billing email', inp('job.billing_email',j.billing_email,'email'))}
+    </div>
+    <div style="margin-top:10px">${field('Notes', inp('job.notes',j.notes))}</div>
+
+    <div style="font-size:13px;font-weight:700;margin:18px 0 8px">2. Work items <span style="font-weight:400;color:var(--text-3);font-size:12px">one per QuickBooks line; confirm how each one is measured</span></div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="${th}">#</th><th style="${th}">Description</th><th style="${th};text-align:right">Qty</th><th style="${th}">Unit</th><th style="${th};text-align:right">Value</th><th style="${th}">Completion</th></tr></thead>
+      <tbody>${h.items.map((it,i)=>`<tr>
+        <td style="${td}">${it.line}</td>
+        <td style="${td};min-width:200px">${escEst(it.description)}</td>
+        <td style="${td};text-align:right">${it.qty}</td>
+        <td style="${td}"><select onchange="handoff.items[${i}].unit=this.value;handoffRefreshChecks()" style="font-size:12px;padding:3px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text)">${HANDOFF_UNITS.map(u=>`<option${u===it.unit?' selected':''}>${u}</option>`).join('')}</select></td>
+        <td style="${td};text-align:right;white-space:nowrap">${fmtEstMoney2(it.value)}</td>
+        <td style="${td};white-space:nowrap">
+          <select onchange="handoff.items[${i}].method=this.value;handoff.visits=[];renderHandoff()" style="font-size:12px;padding:3px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text)">
+            ${[['unit','Unit (qty done)'],['lump_sum','Lump sum (% done)'],['milestone','Milestone']].map(([v,l])=>`<option value="${v}"${v===it.method?' selected':''}>${l}</option>`).join('')}
+          </select>
+          ${it.method==='milestone'?`<input value="${escEst(it.milestone)}" placeholder="Milestone, e.g. laser grade complete" oninput="handoff.items[${i}].milestone=this.value" style="margin-top:4px;width:100%;font-size:12px;padding:3px 5px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text);box-sizing:border-box">`:''}
+        </td></tr>`).join('')}</tbody>
+    </table></div>
+    <div id="ho-total" style="font-size:12px;margin-top:6px"></div>
+
+    <div style="font-size:13px;font-weight:700;margin:18px 0 8px">3. Schedule</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;align-items:start">
+      ${field('Pattern', sel('pattern',h.pattern,[['single_day','Single day'],['contiguous','Block of days'],['recurring','Recurring'],['specific_dates','Specific dates'],['window_tbd','Window / TBD']],true))}
+      ${schedHtml}
+    </div>
+    <button onclick="if(!handoff.visits.length||confirm('Replace the current visits and their allocations?')) handoffGenerate()" class="site-chip" style="padding:7px 14px;margin-top:10px">Create visits</button>
+
+    ${h.visits.length?`
+    <div style="font-size:13px;font-weight:700;margin:18px 0 4px">4. Visits and allocation <span style="font-weight:400;color:var(--text-3);font-size:12px">how much of each line is planned on each visit; edit any cell</span></div>
+    <div style="overflow:auto;max-height:340px;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="border-collapse:collapse;width:100%">
+      <thead><tr><th style="${th};position:sticky;top:0">Visit</th><th style="${th};position:sticky;top:0">Date</th>
+        ${h.items.map(it=>`<th style="${th};position:sticky;top:0;text-align:right" title="${escEst(it.description)}">L${it.line} <span style="font-weight:400">${it.method==='unit'?escEst(it.unit):it.method==='lump_sum'?'%':'✓'}</span></th>`).join('')}
+        <th style="${th};position:sticky;top:0"></th></tr></thead>
+      <tbody>${h.visits.map((v,vi)=>`<tr>
+        <td style="${td};white-space:nowrap">${escEst(h.num)}-V${String(vi+1).padStart(2,'0')}</td>
+        <td style="${td}"><input type="date" value="${v.planned_date||''}" onchange="handoff.visits[${vi}].planned_date=this.value||null" style="font-size:12px;padding:3px;border:1px solid var(--border-2);border-radius:4px;background:var(--bg);color:var(--text)">${!v.planned_date&&v.target_window?`<div style="font-size:10px;color:var(--text-3)">${escEst(v.target_window)}</div>`:''}</td>
+        ${h.items.map((it,li)=>`<td style="${td};text-align:right">${it.method==='milestone'
+          ? `<input type="checkbox" ${v.alloc[li]===true?'checked':''} onchange="handoff.visits[${vi}].alloc[${li}]=this.checked;handoffRefreshChecks()">`
+          : `<input type="number" step="any" value="${v.alloc[li]||''}" oninput="handoff.visits[${vi}].alloc[${li}]=this.value===''?0:+this.value;handoffRefreshChecks()" style="${cell}">`}</td>`).join('')}
+        <td style="${td}"><button onclick="handoff.visits.splice(${vi},1);renderHandoff()" title="Remove visit" style="border:none;background:none;cursor:pointer;color:var(--text-3)">✕</button></td>
+      </tr>`).join('')}
+      <tr><td style="${td};font-weight:700" colspan="2">Check</td>${checks.lines.map((r,i)=>`<td id="ho-chk-${i}" style="${td};font-size:11px;text-align:right;color:${r.ok?'#15803d':'#b91c1c'}">${r.text}</td>`).join('')}<td style="${td}"></td></tr>
+      </tbody></table></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:10px;flex-wrap:wrap">
+      <button onclick="handoff.visits.push({planned_date:null,target_window:'',alloc:handoff.items.map(it=>it.method==='milestone'?false:0)});renderHandoff()" class="site-chip" style="padding:5px 12px">+ Add visit</button>
+      <span id="ho-empty" style="font-size:12px;color:#b91c1c"></span>
+    </div>`:''}
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px;border-top:1px solid var(--border);padding-top:14px">
+      <button onclick="if(confirm('Close without saving?')){document.getElementById('handoff-overlay').remove();handoff=null;}" class="site-chip" style="padding:8px 14px">Cancel</button>
+      <button id="ho-save" onclick="saveHandoff()" class="btn-save" style="padding:8px 16px" ${h.visits.length?'':'disabled title="Create visits first"'}>Confirm and push to tracker</button>
+    </div>`;
+
+  let overlay = document.getElementById('handoff-overlay');
+  if(!overlay){
+    overlay = document.createElement('div');
+    overlay.className = 'modal-overlay centered';
+    overlay.id = 'handoff-overlay';
+    document.body.appendChild(overlay);
+  }
+  const prevScroll = overlay.firstElementChild ? overlay.firstElementChild.scrollTop : 0;
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:1000px;max-height:92vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
+  overlay.firstElementChild.scrollTop = prevScroll;
+  handoffRefreshChecks();
+}
+
+async function saveHandoff(){
+  const h = handoff, j = h.job;
+  if(!j.job_name.trim() || !j.client.trim()){ alert('Job name and client are required.'); return; }
+  if(!h.visits.length){ alert('Create at least one visit.'); return; }
+  const c = handoffChecks();
+  const problems = [];
+  c.lines.forEach((r,i)=>{ if(!r.ok) problems.push(`Line ${h.items[i].line}: ${r.text}`); });
+  if(!c.totalOk) problems.push(`Line total ${fmtEstMoney2(c.lineTotal)} doesn't match QuickBooks ${fmtEstMoney2(h.qbTotal)}`);
+  if(c.empty) problems.push(`${c.empty} visit(s) cover no work items`);
+  h.items.forEach(it=>{ if(it.method==='milestone' && !it.milestone.trim()) problems.push(`Line ${it.line}: milestone needs a name`); });
+  const summary = `Push estimate #${h.num} to the tracker?\n\n${j.job_name} · ${j.client}\n${j.job_type} · ${j.billing_mode==='tracked'?'Tracked':'Billed'} · ${j.closeout_mode==='qc'?'QC / owner approved':'Turnkey'}\n${h.items.length} work items · ${h.visits.length} visits · ${fmtEstMoney2(h.qbTotal)}`
+    + (problems.length ? `\n\nFLAGGED:\n- ${problems.join('\n- ')}\n\nSave anyway?` : '');
+  if(!confirm(summary)) return;
+
+  const btn = document.getElementById('ho-save');
+  btn.disabled = true; btn.textContent = 'Saving…';
+  const num = h.num, wid = it=>`${num}-L${String(it.line).padStart(2,'0')}`;
+  let jobCreated = false;
+  try{
+    const dup = await sbFetch('GET', `/rest/v1/tracker_jobs?estimate_number=eq.${encodeURIComponent(num)}&select=estimate_number`);
+    if(dup && dup.length) throw new Error(`Estimate #${num} was pushed by someone else in the meantime.`);
+    await sbFetch('POST', '/rest/v1/tracker_jobs', {
+      estimate_number: num, job_name: j.job_name.trim(), client: j.client.trim(), site: j.site, po_number: j.po_number,
+      accepted_date: j.accepted_date || null, contract_total: h.qbTotal, job_type: j.job_type, status: 'Scheduled',
+      pm: j.pm, pm_email: j.pm_email, foreman: '', billing_contact: j.billing_contact, billing_email: j.billing_email,
+      qb_link: '', billing_tab: '', notes: j.notes, billing_mode: j.billing_mode, closeout_mode: j.closeout_mode,
+      created_by: (currentUser&&currentUser.email)||'',
+    });
+    jobCreated = true;
+    await sbFetch('POST', '/rest/v1/tracker_work_items', h.items.map(it=>({
+      work_item_id: wid(it), estimate_number: num, line: it.line, qb_item: '', description: it.description,
+      contract_qty: it.qty, unit: it.unit, rate: it.rate, contract_value: it.value,
+      completion_method: it.method, milestone: it.method==='milestone' ? it.milestone.trim() : '',
+    })));
+    await sbFetch('POST', '/rest/v1/tracker_visits', h.visits.map((v,vi)=>({
+      visit_id: `${num}-V${String(vi+1).padStart(2,'0')}`, estimate_number: num,
+      planned_date: v.planned_date || null, target_window: v.target_window || '',
+      status: v.planned_date ? 'Planned' : 'Unscheduled', crew: '',
+      planned: h.items.map((it,li)=>{
+        const a = v.alloc[li];
+        if(it.method==='milestone') return a===true ? { work_item_id: wid(it), planned_qty:null, planned_pct:null, milestone:true } : null;
+        if(!(Number(a)>0)) return null;
+        return it.method==='unit'
+          ? { work_item_id: wid(it), planned_qty: Number(a), planned_pct: null, milestone: null }
+          : { work_item_id: wid(it), planned_qty: null, planned_pct: Number(a), milestone: null };
+      }).filter(Boolean),
+      actuals: {},
+    })));
+    document.getElementById('handoff-overlay')?.remove();
+    const first = h.visits.map(v=>v.planned_date).filter(Boolean).sort()[0];
+    handoff = null;
+    alert(`Estimate #${num} is in the tracker.\n${h.items.length} work items, ${h.visits.length} visits${first?`, first visit ${first}`:''}.`);
+    openEstimateDetail(h.estId);
+  }catch(err){
+    if(jobCreated){
+      try{
+        await sbFetch('DELETE', `/rest/v1/tracker_visits?estimate_number=eq.${encodeURIComponent(num)}`);
+        await sbFetch('DELETE', `/rest/v1/tracker_work_items?estimate_number=eq.${encodeURIComponent(num)}`);
+        await sbFetch('DELETE', `/rest/v1/tracker_jobs?estimate_number=eq.${encodeURIComponent(num)}`);
+      }catch(e2){ console.error('Rollback failed', e2); }
+    }
+    alert('Nothing was saved: ' + err.message);
+    btn.disabled = false; btn.textContent = 'Confirm and push to tracker';
+  }
+}
+// =================== END TRACKER HANDOFF ===================
+
+// ===================== QUOTE BUILDER (Option B of Ryan's field-source-client-quote skill) =====================
+// Type the job -> Claude drafts it with QuickBooks prices -> edit / ask for changes -> customer-facing PDF
+// -> on approval, create the QuickBooks estimate (internal only) -> final PDF with "Quote No. <number>".
+let qq = null;            // current quote builder state
+let qqFsLogo = null;      // {data, w, h} Field Source logo, loaded from /fs-logo.png
+const QQ_KEY = 'fs_quote_builder_draft';
+
+function qqSaveLocal(){ try{ localStorage.setItem(QQ_KEY, JSON.stringify(qq)); }catch(e){} }
+
+async function qqLoadScript(src){
+  if(document.querySelector(`script[src="${src}"]`)) return;
+  await new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=()=>rej(new Error('Could not load '+src)); document.head.appendChild(s); });
+}
+
+function qqImgInfo(dataUrl){
+  return new Promise((res,rej)=>{ const im=new Image(); im.onload=()=>res({w:im.naturalWidth,h:im.naturalHeight,im}); im.onerror=rej; im.src=dataUrl; });
+}
+
+// Shrink an uploaded logo to a white-backed JPEG (like Ryan's prep_logo) and pick its dominant colour.
+async function qqPrepLogo(file){
+  const raw = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+  const {im} = await qqImgInfo(raw);
+  const scale = Math.min(1, 360/Math.max(im.naturalWidth, im.naturalHeight));
+  const c = document.createElement('canvas'); c.width=Math.round(im.naturalWidth*scale); c.height=Math.round(im.naturalHeight*scale);
+  const x = c.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,c.width,c.height); x.drawImage(im,0,0,c.width,c.height);
+  const s = document.createElement('canvas'); s.width=s.height=120; s.getContext('2d').drawImage(c,0,0,120,120);
+  const px = s.getContext('2d').getImageData(0,0,120,120).data, counts = {};
+  for(let i=0;i<px.length;i+=4){
+    const r=px[i],g=px[i+1],b=px[i+2], mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+    if(mx-mn>60 && mx>70){ const k=[r,g,b].map(v=>Math.floor(v/16)*16+8).join(','); counts[k]=(counts[k]||0)+1; }
+  }
+  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+  const color = top ? '#'+top[0].split(',').map(v=>(+v).toString(16).padStart(2,'0')).join('').toUpperCase() : null;
+  return { data: c.toDataURL('image/jpeg',0.85), color };
+}
+
+async function qqLoadFsLogo(){
+  if(qqFsLogo !== null) return;
+  try{
+    const r = await fetch('/fs-logo.png'); if(!r.ok) throw 0;
+    const b = await r.blob();
+    const d = await new Promise(res=>{ const fr=new FileReader(); fr.onload=()=>res(fr.result); fr.readAsDataURL(b); });
+    const i = await qqImgInfo(d); qqFsLogo = { data:d, w:i.w, h:i.h };
+  }catch(e){ qqFsLogo = false; }
+}
+
+async function qqLoadClientProfile(client){
+  if(!client) return;
+  try{
+    const rows = await sbFetch('GET', `/rest/v1/client_profiles?client=eq.${encodeURIComponent(client)}&select=*`);
+    const p = rows && rows[0];
+    if(!p) return;
+    qq.logo = p.logo || qq.logo; qq.color = p.primary_color || qq.color; qq.dark = p.dark_color || qq.dark;
+    ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ if(!qq.d[k] && p[k]) qq.d[k]=p[k]; });
+  }catch(e){ console.warn('client profile', e); }
+}
+
+async function qqSaveClientProfile(){
+  const d = qq.d; if(!d.client) return;
+  try{
+    await fetch(`${SUPABASE_URL}/rest/v1/client_profiles?on_conflict=client`, {
+      method:'POST',
+      headers:{ apikey:SUPABASE_KEY, Authorization:'Bearer '+currentToken, 'Content-Type':'application/json', Prefer:'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ client:d.client, logo:qq.logo||null, primary_color:qq.color||null, dark_color:qq.dark||null,
+        contact_name:d.contact_name||'', contact_title:d.contact_title||'', street:d.street||'', city_line:d.city_line||'',
+        contact_email:d.contact_email||'', updated_at:new Date().toISOString() }),
+    });
+  }catch(e){ console.warn('save profile', e); }
+}
+
+function openQuoteBuilder(){
+  let saved = null;
+  try{ saved = JSON.parse(localStorage.getItem(QQ_KEY)||'null'); }catch(e){}
+  if(saved && saved.d && !saved.docNumber && confirm('You have an unfinished quote. Pick up where you left off?\n\n(Cancel starts a new one.)')) qq = saved;
+  else {
+    const email = (currentUser&&currentUser.email)||'';
+    const guess = email.split('@')[0]; 
+    qq = { request:'', d:null, qbItems:[], logo:null, color:null, dark:null, docNumber:null, qbId:null, busy:false,
+           client:null, prefill:{},
+           preparedBy: guess==='ryan'?'Ryan DeMay':guess.charAt(0).toUpperCase()+guess.slice(1), preparedEmail: email,
+           candidates:null, status:'' };
+  }
+  qqLoadFsLogo();
+  renderQuoteBuilder();
+  qqLoadCustomers();
+}
+
+let qqCustomers = null;
+async function qqLoadCustomers(){
+  if(qqCustomers) return;
+  try{
+    const r = await fetch('/.netlify/functions/qb-customers', { headers:{ 'Authorization':'Bearer '+(currentToken||'') } });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error||r.status);
+    qqCustomers = d.customers || [];
+  }catch(e){ console.warn('customers', e); qqCustomers = []; }
+  if(document.getElementById('quote-overlay')) renderQuoteBuilder();
+}
+
+// Pick the client: fills logo/colors/contact from the client library, then address/email from QuickBooks.
+async function qqPickClient(name){
+  name = (name||'').trim();
+  const c = (qqCustomers||[]).find(x=>x.name.toLowerCase()===name.toLowerCase());
+  qq.client = name ? { id: c?c.id:null, name: c?c.name:name } : null;
+  qq.logo = null; qq.color = null; qq.dark = null; qq.prefill = {};
+  if(qq.client){
+    try{
+      const rows = await sbFetch('GET', `/rest/v1/client_profiles?client=eq.${encodeURIComponent(qq.client.name)}&select=*`);
+      const p = rows && rows[0];
+      if(p){ qq.logo=p.logo||null; qq.color=p.primary_color||null; qq.dark=p.dark_color||null;
+             ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ if(p[k]) qq.prefill[k]=p[k]; }); }
+    }catch(e){ console.warn(e); }
+    if(c){ if(!qq.prefill.street && c.street) qq.prefill.street=c.street; if(!qq.prefill.city_line && c.city_line) qq.prefill.city_line=c.city_line;
+           if(!qq.prefill.contact_email && c.email) qq.prefill.contact_email=c.email; }
+  }
+  if(qq.d){
+    qq.d.client = qq.client ? qq.client.name : '';
+    ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ qq.d[k] = qq.prefill[k] || ''; });
+  }
+  qqSaveLocal(); renderQuoteBuilder();
+}
+
+function qqSet(k,v){ qq.d[k]=v; qqSaveLocal(); }
+function qqSetItem(i,k,v){ qq.d.items[i][k]=v; qqSaveLocal(); qqRefreshTotal(); }
+function qqTotal(){ return (qq.d&&qq.d.items||[]).reduce((t,i)=>t+(Number(i.qty)||0)*(Number(i.unit_price)||0),0); }
+function qqRefreshTotal(){ const el=document.getElementById('qq-total'); if(el) el.textContent=fmtEstMoney2(qqTotal()); }
+
+async function qqDraft(change){
+  if(qq.busy) return;
+  const req = change ? null : (document.getElementById('qq-request')||{}).value || qq.request;
+  if(!change && !req.trim()){ alert('Describe the work first.'); return; }
+  if(!change) qq.request = req;
+  qq.busy = true; qq.status = change ? 'Applying your change…' : 'Drafting the quote and looking up QuickBooks prices…'; renderQuoteBuilder();
+  try{
+    const r = await fetch('/.netlify/functions/quote-draft', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(currentToken||'') },
+      body: JSON.stringify({ request: qq.request, draft: change ? qq.d : null, change: change||null, client: qq.client ? qq.client.name : null, clients: (typeof CLIENTS!=='undefined'?CLIENTS:[]) }),
+    });
+    const data = await r.json().catch(()=>({error:`Error ${r.status}`}));
+    if(!r.ok) throw new Error(data.error || `Error ${r.status}`);
+    const keep = qq.d || {};
+    qq.d = Object.assign({ contact_name:'', contact_title:'', street:'', city_line:'', contact_email:'' }, data.draft);
+    ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ if(keep[k]) qq.d[k]=keep[k]; else if(!qq.d[k] && qq.prefill && qq.prefill[k]) qq.d[k]=qq.prefill[k]; });
+    qq.d.items = (qq.d.items||[]).map(it=>({ ...it, bullets: Array.isArray(it.bullets)?it.bullets.filter(Boolean):[] }));
+    qq.d.notes = (qq.d.notes||[]).filter(Boolean); qq.d.flags = (qq.d.flags||[]).filter(Boolean);
+    qq.qbItems = data.items || qq.qbItems;
+    if(!qq.client && qq.d.client){ await qqPickClient(qq.d.client); }
+    qq.status = '';
+  }catch(err){ qq.status = '⚠️ ' + err.message; }
+  qq.busy = false; qqSaveLocal(); renderQuoteBuilder();
+}
+
+function renderQuoteBuilder(){
+  const d = qq.d;
+  const lbl = t=>`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:3px">${t}</div>`;
+  const box = 'width:100%;font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);box-sizing:border-box';
+  const f = (t,k,ph='')=>`<div>${lbl(t)}<input value="${escEst(d[k]||'')}" placeholder="${escEst(ph)}" oninput="qqSet('${k}',this.value)" style="${box}"></div>`;
+  const locked = !!qq.docNumber;
+
+  let body = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">New quote${qq.docNumber?` · Quote No. ${escEst(qq.docNumber)}`:''}</div>
+      <div style="font-size:12px;color:var(--text-3)">Prices come from you or from QuickBooks, never made up. Nothing goes to QuickBooks until you click Create.</div></div>
+      <button onclick="document.getElementById('quote-overlay').remove()" class="site-chip" style="padding:6px 12px">✕</button>
+    </div>
+    <datalist id="qq-customers">${(qqCustomers||[]).map(c=>`<option value="${escEst(c.name)}">`).join('')}</datalist>
+    <div style="margin-top:14px;display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">${lbl('Client')}
+        <input list="qq-customers" value="${escEst(qq.client?qq.client.name:'')}" ${locked?'disabled':''} placeholder="${qqCustomers===null?'Loading QuickBooks customers…':'Start typing a client name'}" onchange="qqPickClient(this.value)" style="${box}">
+      </div>
+      ${qq.client?`<div style="display:flex;align-items:center;gap:8px;padding-bottom:4px">
+        ${qq.logo?`<img src="${qq.logo}" style="height:40px;border:1px solid var(--border);border-radius:4px;padding:2px;background:#fff">`:`<span style="font-size:12px;color:#b91c1c">No logo saved</span>`}
+        <span style="font-size:11px;color:${qq.client.id?'#15803d':'#b45309'}">${qq.client.id?'✓ In QuickBooks':'Not a QuickBooks customer yet'}</span>
+      </div>`:''}
+    </div>
+    <div style="margin-top:12px">${lbl('Describe the work')}
+      <textarea id="qq-request" rows="3" ${locked?'disabled':''} placeholder="e.g. Logan Elm stadium field: topdress 50 tons of sand and deep tine on tight spacing, 2 acres, week of Nov 10. Make it out to Steve McAfee, Treasurer." style="${box}">${escEst(qq.request)}</textarea>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+        <button onclick="qqDraft()" class="btn-save" style="padding:7px 14px" ${qq.busy||locked?'disabled':''}>${d?'Redraft from scratch':'Draft quote'}</button>
+        <span style="font-size:12px;color:var(--text-3)">${escEst(qq.status)}</span>
+      </div>
+    </div>`;
+
+  if(d){
+    const flags = (d.flags||[]);
+    body += `
+    ${flags.length?`<div style="margin-top:14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius-sm);padding:10px 12px;font-size:12px;color:#713f12">
+      <b>Check these:</b><ul style="margin:4px 0 0 18px;padding:0">${flags.map(x=>`<li>${escEst(x)}</li>`).join('')}</ul></div>`:''}
+
+    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">Client</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
+      ${f('Contact name','contact_name')}${f('Contact title','contact_title','Treasurer')}
+      ${f('Street','street')}${f('City, ST ZIP','city_line')}${f('Contact email','contact_email')}
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:10px">
+      <div>${lbl('Client logo')}
+        ${qq.logo?`<img src="${qq.logo}" style="height:46px;border:1px solid var(--border);border-radius:4px;padding:2px;background:#fff;vertical-align:middle">`:'<span style="font-size:12px;color:#b91c1c">Required before the PDF. </span>'}
+        <label class="site-chip" style="padding:5px 10px;cursor:pointer;margin-left:6px">${qq.logo?'Replace':'Upload'} logo<input type="file" accept="image/*" style="display:none" onchange="qqUploadLogo(this.files[0])"></label>
+      </div>
+      <div>${lbl('Accent color')}<input type="color" value="${qq.color||'#1B5E20'}" onchange="qq.color=this.value;qqSaveLocal()"></div>
+      <div>${lbl('Dark color')}<input type="color" value="${qq.dark||'#111111'}" onchange="qq.dark=this.value;qqSaveLocal()"></div>
+      <div style="font-size:11px;color:var(--text-3);max-width:260px">Logo, colors, contact and address are saved for this client and filled in automatically next time.</div>
+    </div>
+
+    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">Quote</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+      ${f('Title','title')}${f('Subtitle','subtitle','Client  |  Field')}${f('Service period','service_period','Nov. 10-14, 2026')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">${f('Intro (one sentence)','intro')}${f('Program goal (optional)','goal')}</div>
+
+    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">Line items</div>
+    <datalist id="qq-items">${(qq.qbItems||[]).map(i=>`<option value="${escEst(i.name)}">${i.price!=null?'$'+i.price:''}</option>`).join('')}</datalist>
+    ${d.items.map((it,i)=>`
+      <div style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;margin-bottom:8px;background:${i%2?'var(--bg)':'transparent'}">
+        <div style="display:grid;grid-template-columns:2fr 2fr 80px 110px auto;gap:8px;align-items:end">
+          <div>${lbl(`Line ${i+1} title`)}<input value="${escEst(it.title)}" oninput="qqSetItem(${i},'title',this.value)" style="${box}"></div>
+          <div>${lbl('QuickBooks item')}<input list="qq-items" value="${escEst(it.qb_item_name||'')}" onchange="qqPickItem(${i},this.value)" placeholder="Pick a product/service" style="${box};${it.qb_item_id?'':'border-color:#dc2626'}"></div>
+          <div>${lbl('Qty')}<input type="number" step="any" value="${it.qty??''}" oninput="qqSetItem(${i},'qty',this.value===''?'':+this.value)" style="${box};text-align:right"></div>
+          <div>${lbl('Unit price')}<input type="number" step="any" value="${it.unit_price??''}" oninput="qqSetItem(${i},'unit_price',this.value===''?null:+this.value);qq.d.items[${i}].price_source='staff'" style="${box};text-align:right;${it.unit_price==null?'border-color:#dc2626':''}"></div>
+          <button onclick="if(confirm('Remove this line?')){qq.d.items.splice(${i},1);qqSaveLocal();renderQuoteBuilder()}" title="Remove line" style="border:none;background:none;cursor:pointer;color:var(--text-3);padding-bottom:8px">✕</button>
+        </div>
+        <div style="font-size:11px;color:${it.price_source==='none'?'#b91c1c':'var(--text-3)'};margin:4px 0">Price from: ${escEst(it.price_source||'—')} · Amount ${fmtEstMoney2((Number(it.qty)||0)*(Number(it.unit_price)||0))}</div>
+        ${lbl('Scope bullets (one per line)')}<textarea rows="${Math.max(2,(it.bullets||[]).length)}" oninput="qqSetItem(${i},'bullets',this.value.split('\\n'))" style="${box};font-size:12px">${escEst((it.bullets||[]).join('\n'))}</textarea>
+      </div>`).join('')}
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <button onclick="qq.d.items.push({title:'',qb_item_id:'',qb_item_name:'',qty:1,unit_price:null,price_source:'staff',bullets:[]});qqSaveLocal();renderQuoteBuilder()" class="site-chip" style="padding:5px 12px">+ Add line</button>
+      <div style="font-size:14px">Total <b id="qq-total">${fmtEstMoney2(qqTotal())}</b></div>
+    </div>
+    <div style="margin-top:10px">${lbl('Notes: exclusions and assumptions (one per line)')}<textarea rows="3" oninput="qqSet('notes',this.value.split('\\n'))" style="${box};font-size:12px">${escEst((d.notes||[]).join('\n'))}</textarea></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div>${lbl('Prepared by')}<input value="${escEst(qq.preparedBy)}" oninput="qq.preparedBy=this.value;qqSaveLocal()" style="${box}"></div>
+      <div>${lbl('Prepared by email')}<input value="${escEst(qq.preparedEmail)}" oninput="qq.preparedEmail=this.value;qqSaveLocal()" style="${box}"></div>
+    </div>
+
+    ${locked?'':`<div style="margin-top:16px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      ${lbl('Ask for a change')}
+      <div style="display:flex;gap:8px"><input id="qq-change" placeholder="e.g. make it 60 tons, add a line for 2 hours of laser grading at $175/hr, drop the goal" style="${box}" onkeydown="if(event.key==='Enter'&&this.value.trim())qqDraft(this.value)">
+      <button onclick="const v=document.getElementById('qq-change').value;if(v.trim())qqDraft(v)" class="site-chip" style="padding:6px 12px;white-space:nowrap" ${qq.busy?'disabled':''}>Apply</button></div>
+    </div>`}
+
+    ${qq.candidates?`<div style="margin-top:14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius-sm);padding:10px 12px;font-size:12px">
+      <b>Which QuickBooks customer is this?</b><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+      ${qq.candidates.length?qq.candidates.map(c=>`<button onclick="qqCreateEstimate('${escEst(c.id)}')" class="site-chip" style="padding:5px 10px">${escEst(c.name)}</button>`).join(''):'None close. Add the customer in QuickBooks first, or fix the client name.'}</div></div>`:''}
+
+    <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
+      <button onclick="qqPdf(false)" class="site-chip" style="padding:8px 14px">📄 Preview PDF</button>
+      ${locked
+        ? `<button onclick="qqPdf(true)" class="btn-save" style="padding:8px 16px">⬇ Download final PDF</button>
+           <button onclick="if(confirm('Start a new quote?')){localStorage.removeItem(QQ_KEY);openQuoteBuilder()}" class="site-chip" style="padding:8px 14px">New quote</button>`
+        : `<button onclick="qqCreateEstimate()" class="btn-save" style="padding:8px 16px" ${qq.busy?'disabled':''}>Approve and create QuickBooks estimate</button>`}
+    </div>`;
+  }
+
+  let overlay = document.getElementById('quote-overlay');
+  if(!overlay){ overlay=document.createElement('div'); overlay.className='modal-overlay centered'; overlay.id='quote-overlay'; document.body.appendChild(overlay); }
+  const prev = overlay.firstElementChild ? overlay.firstElementChild.scrollTop : 0;
+  overlay.innerHTML = `<div class="modal-sheet" style="max-width:920px;max-height:92vh;overflow-y:auto"><div class="sheet-handle"></div>${body}</div>`;
+  overlay.firstElementChild.scrollTop = prev;
+}
+
+function qqPickItem(i, name){
+  const it = (qq.qbItems||[]).find(x=>x.name===name);
+  const row = qq.d.items[i];
+  if(!it){ row.qb_item_id=''; row.qb_item_name=name; qqSaveLocal(); renderQuoteBuilder(); return; }
+  row.qb_item_id = it.id; row.qb_item_name = it.name;
+  if(it.price!=null && (row.unit_price==null || row.price_source!=='staff' || confirm(`Use the QuickBooks price for ${it.name} ($${it.price}) instead of $${row.unit_price}?`))){
+    row.unit_price = it.price; row.price_source = 'QuickBooks: '+it.name;
+  }
+  qqSaveLocal(); renderQuoteBuilder();
+}
+
+async function qqUploadLogo(file){
+  if(!file) return;
+  try{ const r = await qqPrepLogo(file); qq.logo = r.data; if(r.color) qq.color = r.color;
+       else alert('The logo is only black, white or grey. Set the school colors with the color pickers.');
+       qqSaveLocal(); renderQuoteBuilder(); }
+  catch(e){ alert('Could not read that image.'); }
+}
+
+async function qqCreateEstimate(customerId){
+  const d = qq.d;
+  const bad = d.items.filter(i=>!i.qb_item_id || i.unit_price==null || i.unit_price==='');
+  if(bad.length){ alert('Every line needs a QuickBooks item and a price before it can go to QuickBooks:\n- '+bad.map(i=>i.title||'(untitled line)').join('\n- ')); return; }
+  if(!customerId && !confirm(`Create the QuickBooks estimate for ${d.client}, ${fmtEstMoney2(qqTotal())}?\n\nIt stays internal: nothing is sent to the client from QuickBooks.`)) return;
+  qq.busy = true; qq.status = 'Creating the QuickBooks estimate…'; qq.candidates = null; renderQuoteBuilder();
+  try{
+    const r = await fetch('/.netlify/functions/quote-to-qb', {
+      method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(currentToken||'') },
+      body: JSON.stringify({ draft: d, customerId: customerId || (qq.client && qq.client.id) || null }),
+    });
+    const data = await r.json().catch(()=>({error:`Error ${r.status}`}));
+    if(r.status===409){ qq.candidates = data.candidates||[]; qq.status = data.error; qq.busy=false; renderQuoteBuilder(); return; }
+    if(!r.ok) throw new Error(data.error||`Error ${r.status}`);
+    if(data.warning) alert(data.warning);
+    qq.docNumber = data.docNumber; qq.qbId = data.id; qq.status = '';
+    // Add it to the Estimates tab right away (the hourly syncs fill in the rest).
+    if(qq.docNumber){
+      try{
+        await sbFetch('POST', '/rest/v1/estimates', {
+          project_name: d.title || d.client, type: 'Construction', status: 'Estimate In Progress', notes: '',
+          qb_estimate_number: String(qq.docNumber), amount: Math.round(qqTotal()*100)/100, client: d.client,
+          qb_status: 'Pending', est_created_date: new Date().toLocaleDateString('en-CA'), source: 'quickbooks',
+          updated_at: new Date().toISOString(),
+        });
+        if(typeof loadEstimates==='function') loadEstimates();
+      }catch(e){ console.warn('estimates row', e); }
+    }
+    await qqSaveClientProfile();
+    qqSaveLocal();
+    alert(`QuickBooks estimate ${qq.docNumber?'#'+qq.docNumber+' ':''}created (${fmtEstMoney2(data.total)}).\n\nDownload the final PDF, then email it to the client yourself.`);
+  }catch(err){ qq.status = '⚠️ ' + err.message; }
+  qq.busy = false; renderQuoteBuilder();
+}
+
+// Customer-facing PDF, laid out like Ryan's build_quote.py.
+async function qqPdf(final){
+  const d = qq.d;
+  if(!qq.logo){ alert("Upload the client's logo first. The quote isn't built without it."); return; }
+  await qqLoadFsLogo();
+  await qqLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'letter' });
+  const W = 612, H = 792, M = 46, FOOT = 40;
+  const hex = h=>{ h=(h||'').replace('#',''); return [0,2,4].map(i=>parseInt(h.substr(i,2),16)||0); };
+  const P = hex(qq.color||'#1B5E20'), DK = hex(qq.dark||'#111111'), INK=[17,17,17], GREY=[90,90,90], TINT=[246,246,246];
+  const money = v=>(v<0?'-':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const email = qq.preparedEmail || '';
+  const fill = c=>doc.setFillColor(c[0],c[1],c[2]), ink = c=>doc.setTextColor(c[0],c[1],c[2]);
+  const font = (b,s)=>{ doc.setFont('helvetica', b?'bold':'normal'); doc.setFontSize(s); };
+
+  function chrome(){
+    fill(DK); doc.rect(0,0,W,10,'F'); fill(P); doc.rect(0,10,W,4,'F');
+    fill(DK); doc.rect(0,H-24,W,24,'F'); fill(P); doc.rect(0,H-27,W,3,'F');
+    ink([255,255,255]); font(false,8);
+    doc.text('Field Source  |  Sports Field Design-Build, Construction and Consulting', M, H-9);
+    doc.text(email, W-M, H-9, {align:'right'});
+  }
+  let y;
+  function newPage(){ doc.addPage(); chrome(); y = 40; }
+  function need(h){ if(y + h > H - FOOT){ newPage(); return true; } return false; }
+
+  chrome();
+  const top = 34;
+  const ci = await qqImgInfo(qq.logo);
+  let lh = 84, lw = Math.min(lh*ci.w/ci.h, 150); lh = lw*ci.h/ci.w;
+  doc.addImage(qq.logo, 'JPEG', M, top+42-lh/2, lw, lh);
+  if(qqFsLogo){ const fw=106, fh=fw*qqFsLogo.h/qqFsLogo.w; doc.addImage(qqFsLogo.data, 'PNG', W-M-fw, top+42-fh/2, fw, fh); }
+  else { ink(GREY); font(true,11); doc.text('FIELD SOURCE', W-M, top+46, {align:'right'}); }
+  const tx = M + lw + 17;
+  ink(INK); font(true,25); doc.text('QUOTE', tx-1, top+38);
+  ink(P); font(true,10.5);
+  const tl = doc.splitTextToSize(String(d.title||'').toUpperCase(), W-M-tx-120);
+  doc.text(tl, tx, top+55);
+  const subY = top + 55 + tl.length*13 + 1;
+  ink(GREY); font(false,9.5);
+  const sl = doc.splitTextToSize(String(d.subtitle||''), W-M-tx-120);
+  doc.text(sl, tx, subY);
+  y = Math.max(top + 96, subY + (sl.length-1)*12 + 14);
+  doc.setDrawColor(P[0],P[1],P[2]); doc.setLineWidth(1.6); doc.line(M, y, W-M, y);
+
+  // parties
+  y += 18;
+  const today = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+  const details = [ ...(qq.docNumber?[`Quote No. ${qq.docNumber}`]:[]), today, ...(d.service_period?['Service period:', d.service_period]:[]) ];
+  const blocks = [
+    ['PREPARED FOR', [d.contact_name, d.contact_title, d.client, d.street, d.city_line].filter(Boolean)],
+    ['PREPARED BY', [qq.preparedBy, 'Field Source', 'Dublin, Ohio', email].filter(Boolean)],
+    ['QUOTE DETAILS', details],
+  ];
+  [M, M+200, M+385].forEach((x,bi)=>{
+    const [lab, lines] = blocks[bi];
+    ink(P); font(true,7.5); doc.text(lab, x, y);
+    lines.forEach((t,i)=>{ font(i===0,9.5); ink(i===0?INK:GREY); doc.text(String(t), x, y+14+i*12.5, {maxWidth: bi===2?W-M-x:180}); });
+  });
+  y += 14 + Math.max(...blocks.map(b=>b[1].length)) * 12.5 + 8;
+
+  if(d.intro){ font(false,9.6); ink(INK); const t=doc.splitTextToSize(d.intro, W-2*M); doc.text(t, M, y+8); y += t.length*13 + 10; }
+  if(d.goal){
+    font(true,10); const t = doc.splitTextToSize(d.goal, W-2*M-104); const gh = t.length*13.8 + 14;
+    fill(TINT); doc.rect(M, y, W-2*M, gh, 'F'); fill(P); doc.rect(M, y, 4, gh, 'F');
+    ink(P); font(true,7.5); doc.text('PROGRAM GOAL', M+14, y+16);
+    ink(INK); font(true,10); doc.text(t, M+92, y+16);
+    y += gh + 10;
+  }
+
+  // line items
+  const X0 = M, X4 = W-M, cQ = X4-190, cR = X4-85, dw = cQ-30-(X0+34);
+  function thead(){
+    fill(DK); doc.rect(X0, y, X4-X0, 20, 'F');
+    ink([255,255,255]); font(true,8);
+    doc.text('DESCRIPTION', X0+10, y+13.5); doc.text('QTY', cQ, y+13.5, {align:'center'});
+    doc.text('UNIT PRICE', cR, y+13.5, {align:'right'}); doc.text('AMOUNT', X4-10, y+13.5, {align:'right'});
+    y += 20;
+  }
+  thead();
+  let total = 0;
+  d.items.forEach((it,n)=>{
+    font(false,8.9);
+    const bl = (it.bullets||[]).filter(Boolean).map(b=>doc.splitTextToSize(b, dw-10));
+    const hh = 26 + bl.reduce((t,l)=>t+l.length*12.3,0) + 6;
+    if(need(hh)) thead();
+    if(n%2){ fill(TINT); doc.rect(X0, y, X4-X0, hh, 'F'); }
+    const qty = Number(it.qty)||0, up = Number(it.unit_price)||0, amt = qty*up; total += amt;
+    ink(P); font(true,11); doc.text(String(n+1), X0+10, y+19);
+    ink(INK); font(true,10.5); doc.text(String(it.title||''), X0+34, y+19, {maxWidth: dw});
+    font(false,9.8); doc.text(String(qty), cQ, y+19, {align:'center'}); doc.text(money(up), cR, y+19, {align:'right'});
+    font(true,10); doc.text(money(amt), X4-10, y+19, {align:'right'});
+    let by = y + 33; ink(GREY); font(false,8.9);
+    bl.forEach(lines=>{ doc.text('•', X0+34, by); doc.text(lines, X0+43, by); by += lines.length*12.3; });
+    y += hh;
+  });
+  need(34);
+  doc.setDrawColor(P[0],P[1],P[2]); doc.setLineWidth(1.2); doc.line(cR-60, y+6, X4, y+6);
+  ink(INK); font(true,11); doc.text('TOTAL', cR, y+22, {align:'right'}); doc.text(money(total), X4-10, y+22, {align:'right'});
+  y += 36;
+
+  const notes = (d.notes||[]).filter(Boolean);
+  if(notes.length){
+    need(30); ink(P); font(true,7.5); doc.text('NOTES', M, y+8); y += 18;
+    notes.forEach(nt=>{ font(false,8.9); const t=doc.splitTextToSize(nt, W-2*M-12); need(t.length*12.3+2); ink(GREY); doc.text('•', M, y); doc.text(t, M+9, y); y += t.length*12.3 + 2; });
+    y += 6;
+  }
+
+  // acceptance
+  need(90);
+  ink(P); font(true,7.5); doc.text('ACCEPTANCE', M, y+10); y += 44;
+  doc.setDrawColor(150,150,150); doc.setLineWidth(0.6);
+  [[M, [d.contact_name&&d.contact_title?`${d.contact_name}, ${d.contact_title}`:(d.contact_name||'Authorized signature'), d.client]],
+   [W/2+10, [qq.preparedBy, 'Field Source']]].forEach(([x,lines])=>{
+    doc.line(x, y, x+220, y);
+    ink(INK); font(true,9); doc.text(String(lines[0]||''), x, y+13);
+    ink(GREY); font(false,8.5); doc.text(String(lines[1]||''), x, y+25); doc.text('Date: ____________', x+130, y+25);
+  });
+
+  doc.setProperties({ title: 'Quote - '+(d.title||''), author: 'Field Source' });
+  const name = `${new Date().toLocaleDateString('en-CA')} ${d.client||''} Quote${qq.docNumber?' '+qq.docNumber:''} - ${d.title||''}`.replace(/[\\/:*?"<>|]/g,'').trim()+'.pdf';
+  if(final) doc.save(name);
+  else window.open(URL.createObjectURL(doc.output('blob')), '_blank');
+}
+// =================== END QUOTE BUILDER ===================
+
+function fmtEstMoney(n){
+  return '$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0});
+}
+
+function setEstimateCreatedPreset(k){
+  const d = new Date();
+  const fmt = x=>x.toLocaleDateString('en-CA');
+  estimateCreatedTo = fmt(d);
+  if(k==='ytd') estimateCreatedFrom = d.getFullYear()+'-01-01';
+  else { const f=new Date(d); f.setDate(f.getDate()-parseInt(k)); estimateCreatedFrom = fmt(f); }
+  renderEstimates();
 }
 
 function openEstimateModal(id=null){
@@ -3760,6 +4753,21 @@ function openEstimateModal(id=null){
         <select id="est-status">${ESTIMATE_STATUSES.map(s=>`<option value="${s}"${est&&est.status===s?' selected':(!est&&s==='Not Started'?' selected':'')}>${s}</option>`).join('')}</select>
       </div>
     </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Date Created</label>
+        <input type="date" id="est-created" value="${est?(est.createdDate||''):new Date().toLocaleDateString('en-CA')}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">Amount ($)</label>
+        <input type="text" inputmode="decimal" id="est-amount" placeholder="e.g. 14750" value="${est&&est.amount!=null?est.amount:''}">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">QB Estimate #</label>
+        <input type="text" id="est-qbnum" placeholder="e.g. 1854" value="${est?(est.qbNumber||''):''}">
+      </div>
+    </div>
+    ${est&&est.source==='quickbooks'?`<div style="font-size:11px;color:var(--text-3);margin-top:6px">Amount, date and client sync from QuickBooks daily; edits to them here get overwritten.</div>`:''}
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
       <div class="form-group" style="margin-bottom:0">
         <label class="form-label">Project Year</label>
@@ -3819,16 +4827,23 @@ async function saveEstimate(id){
     notes: document.getElementById('est-notes').value.trim(),
     proposal_needed: document.getElementById('est-proposal')?.checked||false,
     tips: document.getElementById('est-tips')?.checked||false,
+    est_created_date: document.getElementById('est-created').value || null,
+    amount: (v=>v===''?null:(isNaN(parseFloat(v))?null:parseFloat(v)))(document.getElementById('est-amount').value.replace(/[$,\s]/g,'')),
+    qb_estimate_number: document.getElementById('est-qbnum').value.trim() || null,
     updated_at: new Date().toISOString(),
   };
+  if(row.qb_estimate_number){
+    const dup = estimates.find(e=>e.qbNumber===row.qb_estimate_number && e.id!==id);
+    if(dup){ errEl.textContent=`Estimate #${row.qb_estimate_number} is already on "${dup.projectName}". Delete one of them first.`; btn.disabled=false; btn.textContent='Save'; return; }
+  }
   try {
     if(id){
       await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, row);
       const est = estimates.find(e=>e.id===id);
-      if(est) Object.assign(est, {projectName:row.project_name, type:row.type, status:row.status, projectDate:row.project_date, estDueDate:row.est_due_date||'', days:row.days, scope:row.scope, notes:row.notes, proposalNeeded:row.proposal_needed, tips:row.tips});
+      if(est) Object.assign(est, {projectName:row.project_name, type:row.type, status:row.status, projectDate:row.project_date, estDueDate:row.est_due_date||'', days:row.days, scope:row.scope, notes:row.notes, proposalNeeded:row.proposal_needed, tips:row.tips, createdDate:row.est_created_date||'', amount:row.amount, qbNumber:row.qb_estimate_number||''});
     } else {
       const res = await sbFetch('POST', '/rest/v1/estimates', row);
-      if(res&&res[0]) estimates.push({...row, id:res[0].id, projectName:row.project_name, estDueDate:row.est_due_date||'', projectDate:row.project_date, createdAt:new Date().toISOString()});
+      if(res&&res[0]) estimates.push({...row, id:res[0].id, projectName:row.project_name, estDueDate:row.est_due_date||'', projectDate:row.project_date, proposalNeeded:row.proposal_needed, createdAt:new Date().toISOString(), createdDate:row.est_created_date||'', amount:row.amount, qbNumber:row.qb_estimate_number||'', source:'manual'});
     }
     document.getElementById('est-overlay').remove();
     renderEstimates();
@@ -4242,8 +5257,11 @@ function setView(v){
   const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
-  const localIdx = allIdx[v];
-  if(barTabs[localIdx]) barTabs[localIdx].classList.add('active');
+  // Business Ops tabs are highlighted by id (button order no longer matches index)
+  const BIZOPS_TAB_IDS={po:'po-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab'};
+  const byId = BIZOPS_TAB_IDS[v] && document.getElementById(BIZOPS_TAB_IDS[v]);
+  if(byId) byId.classList.add('active');
+  else { const localIdx = allIdx[v]; if(barTabs[localIdx]) barTabs[localIdx].classList.add('active'); }
   const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
@@ -5999,7 +7017,7 @@ async function approveInvoice(id){
       const base64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
       const dropRes = await fetch('/.netlify/functions/upload-to-dropbox', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
         body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
       });
       const dropData = await dropRes.json();
@@ -6087,7 +7105,7 @@ async function extractInvoiceData(file){
     console.log('Sending to extract-invoice, payload size:', payload.length, 'fileType:', mimeType);
     const response = await fetch('/.netlify/functions/extract-invoice', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
       body: payload,
     });
     console.log('extract-invoice response status:', response.status);
@@ -6239,7 +7257,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
         });
         await fetch('/.netlify/functions/upload-to-dropbox', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
           body: JSON.stringify({ fileData: base64, fileName: file.name, projectName, vendorName: vendor }),
         });
       } catch(e){ console.warn('Dropbox upload failed:', e); }
@@ -6551,7 +7569,7 @@ async function retryDropboxUpload(id, silent=false){
     // Upload to Dropbox
     const dropRes = await fetch('/.netlify/functions/upload-to-dropbox', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
       body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
     });
     const dropData = await dropRes.json();
@@ -6588,7 +7606,7 @@ async function retryAllDropbox(){
       const base64 = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
       const dropRes = await fetch('/.netlify/functions/upload-to-dropbox', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer '+(currentToken||'') },
         body: JSON.stringify({ fileData: base64, fileName: f.fileName, projectName: f.projectName, vendorName: f.vendorName }),
       });
       const dropData = await dropRes.json();

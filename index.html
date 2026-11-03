@@ -6800,52 +6800,92 @@ function fillQbPlaceholders(text, info){
   return String(text||'').replace(/\[([^\]]+)\]/g, (m,k)=>{ const v = map[k.trim().toLowerCase()]; return v!=null && v!=='' ? v : m; });
 }
 async function openSendInvoice(qbInvoiceId, banner, reminder){
-  billOverlay('send-overlay', `<div style="padding:30px;text-align:center;color:var(--text-3)">Loading invoice from QuickBooks…</div>`, 640);
+  billOverlay('send-overlay', `<div style="padding:30px;text-align:center;color:var(--text-3)">Loading invoice from QuickBooks…</div>`, 680);
   try{
     const info = await invAction({ action:'email_info', qb_invoice_id:qbInvoiceId });
-    sendState = { id:qbInvoiceId, info, reminder:!!reminder };
-    const sent = info.email_status==='EmailSent';
-    billOverlay('send-overlay', `
-      ${banner?`<div style="background:#dcfce7;color:#166534;border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:10px">✓ ${arEsc(banner)}</div>`:''}
-      <div class="sheet-title" style="margin-bottom:2px">${reminder?'Send reminder':'Send invoice'} #${arEsc(info.doc_number)}</div>
-      <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">${arEsc(info.customer)} · ${arMoney(info.total)}${info.balance!==info.total?` · ${arMoney(info.balance)} still owed`:''}${info.due_date?' · due '+arFmt(info.due_date):''}${sent?` · <span style="color:#166534">already emailed${info.last_sent?' '+new Date(info.last_sent).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}</span>`:' · not emailed yet'}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div><div style="${billLbl}">To</div><input id="send-to" style="${billInput}" value="${arEsc(info.to)}" placeholder="customer@school.org"></div>
-        <div><div style="${billLbl}">CC (optional)</div><input id="send-cc" style="${billInput}" value="${arEsc(info.cc)}" placeholder="e.g. accounts@…"></div>
-      </div>
-      ${!info.to?'<div style="font-size:12px;color:#b45309;margin-top:4px">No email on file for this customer in QuickBooks. Type one above.</div>':''}
-      <div style="font-size:11px;color:var(--text-3);margin-top:4px">Separate multiple addresses with commas. These are saved on the invoice in QuickBooks.</div>
-      <div style="margin-top:14px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
-        <div style="background:var(--accent);padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2)">The email they'll get</div>
-        <div style="padding:10px 12px;font-size:13px">
-          <div style="margin-bottom:6px"><span style="color:var(--text-3)">Subject:</span> <b>${arEsc(fillQbPlaceholders(info.subject||`Invoice ${info.doc_number} from Field Source LLC`, info))}</b></div>
-          <div style="white-space:pre-wrap;color:var(--text);background:var(--bg);border-radius:6px;padding:8px 10px;max-height:180px;overflow-y:auto">${arEsc(fillQbPlaceholders(info.message||'(QuickBooks standard invoice message)', info))}</div>
-          <div style="margin-top:8px;font-size:12px">📎 Invoice #${arEsc(info.doc_number)} (PDF), with QuickBooks' <b>Pay now</b> link · <a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${qbInvoiceId}','${arEsc(info.doc_number)}')">View the PDF</a></div>
-        </div>
-      </div>
-      <div style="font-size:11px;color:var(--text-3);margin-top:6px">The subject and message come from your QuickBooks invoice email template (QuickBooks → Settings → Account and settings → Sales → Messages). The message below goes on this invoice itself.</div>
-      <div style="margin-top:10px"><div style="${billLbl}">Message on invoice</div><textarea id="send-memo" rows="2" style="${billInput}">${arEsc(info.memo)}</textarea></div>
-      <div id="send-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:8px">
-        <button class="btn-cancel" onclick="document.getElementById('send-overlay').remove()">${banner?'Send later':'Cancel'}</button>
-        ${info.can_send?`<button class="btn-save" id="send-go" onclick="sendInvoiceConfirm()">${reminder||sent?'Send again…':'Send…'}</button>`:'<span style="font-size:12px;color:var(--text-3)">Only Jake, Ryan and Ali can send.</span>'}
-      </div>`, 640);
+    const prev = sendState && sendState.id===qbInvoiceId ? sendState : null;
+    sendState = { id:qbInvoiceId, info, reminder:!!reminder, banner,
+      via: prev ? prev.via : (info.gmail_from ? 'gmail' : 'qb'),
+      to: prev ? prev.to : info.to, cc: prev ? prev.cc : info.cc,
+      subject: prev ? prev.subject : gmailDefaultSubject(info, reminder), body: prev ? prev.body : gmailDefaultBody(info, reminder), memo: prev ? prev.memo : info.memo };
+    renderSendDialog();
   }catch(err){ billOverlay('send-overlay', `<div class="sheet-title">Couldn't load the invoice</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('send-overlay').remove()">Close</button></div>`, 520); }
 }
+function gmailDefaultSubject(info, reminder){ return `${reminder?'Reminder: ':''}Invoice ${info.doc_number} from Field Source LLC${info.customer?' – '+info.customer:''}`; }
+function gmailDefaultBody(info, reminder){
+  const due = info.due_date ? new Date(info.due_date+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}) : '';
+  const me = (typeof getDisplayName==='function' ? getDisplayName(currentUser&&currentUser.email) : '') || '';
+  return `Hello,\n\n${reminder ? `This is a friendly reminder that invoice #${info.doc_number} for ${arMoney(info.balance)}${due?` was due ${due}`:' is past due'}. A copy is attached.` : `Attached is invoice #${info.doc_number} for ${arMoney(info.total)}${due?`, due ${due}`:''}.`}\n\n${info.pay_link?`You can view and pay it online here:\n${info.pay_link}\n\n`:''}Please let me know if you have any questions.\n\nThank you,\n${me}\nField Source LLC`;
+}
+function sendSaveInputs(){
+  const g = id=>document.getElementById(id);
+  if(g('send-to')) sendState.to = g('send-to').value; if(g('send-cc')) sendState.cc = g('send-cc').value;
+  if(g('send-subj')) sendState.subject = g('send-subj').value; if(g('send-body')) sendState.body = g('send-body').value;
+  if(g('send-memo')) sendState.memo = g('send-memo').value;
+}
+function renderSendDialog(){
+  const st = sendState, info = st.info, sent = info.email_status==='EmailSent', gm = st.via==='gmail';
+  const tab = (v,l)=>`<button onclick="sendSaveInputs();sendState.via='${v}';renderSendDialog()" class="site-chip${st.via===v?' active':''}" style="padding:5px 12px;font-size:12px">${l}</button>`;
+  const gmailBlock = !info.gmail_ready
+    ? `<div style="padding:12px;background:#fef9c3;border-radius:8px;font-size:13px">Gmail sending isn't set up yet: Google sign-in needs to be configured for the tracker first (see the setup notes). Use <b>QuickBooks</b> for now.</div>`
+    : !info.gmail_from
+    ? `<div style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px">To send from your own address, connect your Gmail once. The tracker can only <b>send</b> email as you; it can't read your inbox.
+        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn-save" style="flex:none" onclick="connectGmail()">Connect Gmail</button><button class="btn-cancel" style="flex:none" onclick="sendSaveInputs();openSendInvoice(sendState.id, sendState.banner, sendState.reminder)">I've connected, refresh</button></div></div>`
+    : `<div style="font-size:12px;color:var(--text-3);margin:10px 0 4px">From: <b style="color:var(--text)">${arEsc(info.gmail_from)}</b> (your Gmail)</div>
+       <div><div style="${billLbl}">Subject</div><input id="send-subj" style="${billInput}" value="${arEsc(st.subject)}"></div>
+       <div style="margin-top:8px"><div style="${billLbl}">Message</div><textarea id="send-body" rows="11" style="${billInput};line-height:1.45">${arEsc(st.body)}</textarea></div>
+       <div style="margin-top:6px;font-size:12px">📎 Field Source Invoice ${arEsc(info.doc_number)}.pdf (the QuickBooks invoice) · <a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${st.id}','${arEsc(info.doc_number)}')">View it</a>${info.pay_link?'':' · <span style="color:var(--text-3)">no online pay link (online payments aren\u2019t on for this invoice)</span>'}</div>`;
+  const qbBlock = `
+      <div style="margin-top:12px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+        <div style="background:var(--accent);padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2)">The email they'll get (from QuickBooks)</div>
+        <div style="padding:10px 12px;font-size:13px">
+          <div style="margin-bottom:6px"><span style="color:var(--text-3)">Subject:</span> <b>${arEsc(fillQbPlaceholders(info.subject||`Invoice ${info.doc_number} from Field Source LLC`, info))}</b></div>
+          <div style="white-space:pre-wrap;background:var(--bg);border-radius:6px;padding:8px 10px;max-height:160px;overflow-y:auto">${arEsc(fillQbPlaceholders(info.message||'(QuickBooks standard invoice message)', info))}</div>
+          <div style="margin-top:8px;font-size:12px">📎 Invoice #${arEsc(info.doc_number)} (PDF), with QuickBooks' <b>Pay now</b> link · <a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${st.id}','${arEsc(info.doc_number)}')">View the PDF</a></div>
+        </div></div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:6px">Sent from QuickBooks' address using your QuickBooks invoice email template (QuickBooks → Settings → Account and settings → Sales → Messages).</div>
+      <div style="margin-top:10px"><div style="${billLbl}">Message on invoice</div><textarea id="send-memo" rows="2" style="${billInput}">${arEsc(st.memo)}</textarea></div>`;
+  billOverlay('send-overlay', `
+    ${st.banner?`<div style="background:#dcfce7;color:#166534;border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:10px">✓ ${arEsc(st.banner)}</div>`:''}
+    <div class="sheet-title" style="margin-bottom:2px">${st.reminder?'Send reminder':'Send invoice'} #${arEsc(info.doc_number)}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">${arEsc(info.customer)} · ${arMoney(info.total)}${info.balance!==info.total?` · ${arMoney(info.balance)} still owed`:''}${info.due_date?' · due '+arFmt(info.due_date):''}${sent?' · <span style="color:#166534">already emailed</span>':' · not emailed yet'}</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px"><span style="font-size:12px;color:var(--text-2)">Send via:</span>${tab('gmail','✉ Gmail (from you)')}${tab('qb','QuickBooks')}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><div style="${billLbl}">To</div><input id="send-to" style="${billInput}" value="${arEsc(st.to)}" placeholder="customer@school.org"></div>
+      <div><div style="${billLbl}">CC (optional)</div><input id="send-cc" style="${billInput}" value="${arEsc(st.cc)}" placeholder="e.g. accounts@…"></div>
+    </div>
+    ${!info.to?'<div style="font-size:12px;color:#b45309;margin-top:4px">No email on file for this customer in QuickBooks. Type one above.</div>':''}
+    <div style="font-size:11px;color:var(--text-3);margin-top:4px">Separate multiple addresses with commas. The To address is saved on the invoice in QuickBooks.</div>
+    ${gm ? gmailBlock : qbBlock}
+    <div id="send-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:8px">
+      <button class="btn-cancel" onclick="document.getElementById('send-overlay').remove()">${st.banner?'Send later':'Cancel'}</button>
+      ${!info.can_send?'<span style="font-size:12px;color:var(--text-3)">Only Jake, Ryan and Ali can send.</span>' : gm && !(info.gmail_ready && info.gmail_from) ? '' : `<button class="btn-save" id="send-go" onclick="sendInvoiceConfirm()">${st.reminder||sent?'Send again…':'Send…'}</button>`}
+    </div>`, 680);
+}
+async function connectGmail(){
+  sendSaveInputs();
+  if(typeof ensureFreshToken==='function') await ensureFreshToken();
+  window.open('/.netlify/functions/gmail-connect?t=' + encodeURIComponent(sbToken()), '_blank');
+}
 function sendInvoiceConfirm(){
-  const to = document.getElementById('send-to').value.trim(), cc = document.getElementById('send-cc').value.trim();
+  sendSaveInputs();
+  const st = sendState, to = (st.to||'').trim(), cc = (st.cc||'').trim();
   if(!to){ document.getElementById('send-err').textContent = 'Enter who it goes to.'; return; }
+  if(st.via==='gmail' && (!st.subject.trim() || !st.body.trim())){ document.getElementById('send-err').textContent = 'The subject and message can\u2019t be empty.'; return; }
   const btn = document.getElementById('send-go');
-  if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent = `Yes, email it to ${to}${cc?' (cc '+cc+')':''}`; btn.style.background = '#b45309'; return; }
+  if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent = `Yes, email it${st.via==='gmail'?' from '+st.info.gmail_from:' via QuickBooks'} to ${to}${cc?' (cc '+cc+')':''}`; btn.style.background = '#b45309'; return; }
   sendInvoiceNow(to, cc);
 }
 async function sendInvoiceNow(to, cc){
-  const btn = document.getElementById('send-go'); btn.disabled = true; btn.textContent = 'Sending…';
+  const st = sendState, btn = document.getElementById('send-go'); btn.disabled = true; btn.textContent = 'Sending…';
   try{
-    const res = await invAction({ action:'send', qb_invoice_id:sendState.id, to, cc, memo:document.getElementById('send-memo').value, reminder:sendState.reminder });
+    const res = st.via==='gmail'
+      ? await invAction({ action:'send_gmail', qb_invoice_id:st.id, to, cc, subject:st.subject, body:st.body, reminder:st.reminder })
+      : await invAction({ action:'send', qb_invoice_id:st.id, to, cc, memo:st.memo||'', reminder:st.reminder });
     document.getElementById('send-overlay').remove();
     await loadQbInvoices(true); if(view==='receivables') renderReceivables();
-    alert(`✓ Invoice #${sendState.info.doc_number} was emailed to ${res.sent_to}.`);
+    alert(`✓ Invoice #${st.info.doc_number} was emailed to ${res.sent_to}${res.from?' from '+res.from:' via QuickBooks'}.`);
   }catch(err){ document.getElementById('send-err').textContent = 'Not sent: ' + err.message; btn.disabled = false; btn.dataset.armed=''; btn.style.background=''; btn.textContent = 'Send…'; }
 }
 async function viewInvoicePdf(qbInvoiceId, doc){

@@ -436,8 +436,8 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
     <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()" style="display:none">Clients</button>
     <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'));loadQbInvoices().then(()=>{ if(view==='estimates') renderEstimates(); })">Estimates</button>
-    <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Invoices</button>
-    <button class="vtab" id="receivables-tab" onclick="setView('receivables');loadQbInvoices(true).then(()=>{ if(view==='receivables') renderReceivables(); })">Receivables</button>
+    <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Accounts Payable</button>
+    <button class="vtab" id="receivables-tab" onclick="setView('receivables');loadQbInvoices(true).then(()=>{ if(view==='receivables') renderReceivables(); })">Accounts Receivable</button>
     <button class="vtab" id="inv-approval-tab" onclick="Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="materials-tab" onclick="loadMaterials().then(()=>setView('materials'))">Materials</button>
   </div>
@@ -6517,11 +6517,55 @@ async function unlinkInvoice(invId, estNum){
   catch(err){ alert(err.message); }
 }
 
+// Accepted estimates = contracts to bill (shown at the top of Accounts Receivable)
+let arHideFullyBilled = true, arContractSort = 'left', arEstTried = false;
+function arContractsHtml(){
+  const accepted = (typeof estimates!=='undefined'?estimates:[]).filter(e=>e.qbNumber && (e.qbStatus==='Accepted' || e.status==='Approved' || e.status==='Scheduled' || e.status==='In Progress'));
+  const rows = accepted.map(e=>({ e, b: estimateBilling(e) })).filter(x=>!arHideFullyBilled || x.b.remaining > 0.5 || x.b.open > 0.005 || !x.b.inv.length);
+  rows.sort(arContractSort==='pct' ? (a,b)=>a.b.pct-b.b.pct : arContractSort==='date' ? (a,b)=>(b.e.acceptedDate||b.e.createdDate||'').localeCompare(a.e.acceptedDate||a.e.createdDate||'') : (a,b)=>b.b.remaining-a.b.remaining);
+  const tot = rows.reduce((t,x)=>({ c:t.c+x.b.contract, bl:t.bl+x.b.billed, col:t.col+x.b.collected, ow:t.ow+x.b.open, left:t.left+Math.max(0,x.b.remaining) }), { c:0, bl:0, col:0, ow:0, left:0 });
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)!important';
+  const td = 'font-size:13px;color:var(--text);padding:8px 10px;border-top:1px solid var(--border);vertical-align:top';
+  const sel = 'font-size:13px;padding:6px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-family:inherit';
+  return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:14px">
+    <div style="padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <b>Accepted estimates</b><span style="font-size:12px;color:var(--text-3)">contracts to bill · added automatically when an estimate is accepted</span>
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center;margin-left:auto"><input type="checkbox" ${arHideFullyBilled?'checked':''} onchange="arHideFullyBilled=this.checked;renderReceivables()"> Hide fully billed and paid</label>
+      <select style="${sel}" onchange="arContractSort=this.value;renderReceivables()">${[['left','Most left to bill'],['pct','Least billed %'],['date','Newest accepted']].map(([v,l])=>`<option value="${v}"${arContractSort===v?' selected':''}>${l}</option>`).join('')}</select>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;padding:0 12px 10px">
+      ${[['Contract value',tot.c,''],['Billed',tot.bl,tot.c?Math.round(tot.bl/tot.c*100)+'% of contracts':''],['Collected',tot.col,''],['Still owed',tot.ow,''],['Left to bill',tot.left,'']].map(([l,v,sub])=>`<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${l}</div><div style="font-size:16px;font-weight:700">${arMoney0(v)}</div>${sub?`<div style="font-size:11px;color:var(--text-3)">${sub}</div>`:''}</div>`).join('')}
+    </div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:680px" class="pm-tbl"><thead><tr>
+      <th style="${th}">Estimate</th><th style="${th};text-align:right">Contract</th><th style="${th};width:150px">Billed</th><th style="${th};text-align:right">Collected</th><th style="${th};text-align:right">Owed</th><th style="${th};text-align:right">Left to bill</th></tr></thead><tbody>
+      ${rows.map(({e,b})=>{ const over = b.contract && b.billed > b.contract + 0.5; return `<tr style="cursor:pointer" onclick="openEstimateDetail('${e.id}')">
+        <td style="${td}"><b>#${arEsc(e.qbNumber)}</b> · ${arEsc(e.projectName)}<div style="font-size:11px;color:var(--text-3)">${arEsc(e.client||'')}${e.acceptedDate?' · accepted '+arFmt(e.acceptedDate):''}</div></td>
+        <td style="${td};text-align:right">${arMoney0(b.contract)}</td>
+        <td style="${td}"><div style="font-size:12px;${over?'color:#dc2626;font-weight:600':''}">${arMoney0(b.billed)} <span style="color:var(--text-3)">${b.contract?Math.round(b.pct)+'%':''}</span></div>
+          <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:3px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>
+          ${!b.inv.length?'<div style="font-size:11px;color:#b45309;margin-top:2px">Not billed yet</div>':over?'<div style="font-size:11px;color:#dc2626;margin-top:2px">Over the contract</div>':''}</td>
+        <td style="${td};text-align:right">${arMoney0(b.collected)}</td>
+        <td style="${td};text-align:right;${b.open>0.005?'color:#1d4ed8;font-weight:600':''}">${arMoney0(b.open)}</td>
+        <td style="${td};text-align:right;font-weight:600">${arMoney0(Math.max(0,b.remaining))}</td></tr>`; }).join('') || `<tr><td colspan="6" style="${td};color:var(--text-3)">No accepted estimates${arHideFullyBilled?' still being billed':''}.</td></tr>`}
+    </tbody></table></div>
+    <div style="padding:8px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border)">Click an estimate to see its invoices, line-by-line billing, and to link invoices QuickBooks didn't connect.</div>
+  </div>`;
+}
+
 // Receivables: open invoices, aging, by customer
 let arCustomer = '', arOverdueOnly = false, arSort = 'days';
 function renderReceivables(){
   const el = document.getElementById('main-content');
-  if(!qbInvLoaded){ el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-3)">Loading invoices…</div>'; loadQbInvoices().then(()=>{ if(view==='receivables') renderReceivables(); }); return; }
+  if(!qbInvLoaded || (!estimates.length && !arEstTried)){
+    el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-3)">Loading…</div>';
+    arEstTried = true;
+    Promise.all([loadQbInvoices(), estimates.length ? null : loadEstimates()]).then(()=>{ if(view==='receivables') renderReceivablesInner(); });
+    return;
+  }
+  renderReceivablesInner();
+}
+function renderReceivablesInner(){
+  const el = document.getElementById('main-content');
   const open = qbInvoices.filter(i=>Number(i.balance)>0.005);
   const est = num=>estimates.find(x=>x.qbNumber===num);
   const estFor = i=>{ const nums = [...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id).map(l=>l.estimate_number)]; return nums.map(n=>({ n, e:est(n) })); };
@@ -6539,14 +6583,15 @@ function renderReceivables(){
   const lastSync = qbInvoices.reduce((m,i)=>i.synced_at>m?i.synced_at:m,'');
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
-      <div style="font-size:18px;font-weight:700">Receivables</div>
+      <div style="font-size:18px;font-weight:700">Accounts Receivable</div>
       <div style="font-size:12px;color:var(--text-3)">From QuickBooks${lastSync?' · updated '+new Date(lastSync).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''} · refreshes hourly</div>
     </div>
     ${!qbInvoices.length?`<div style="padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:14px">No QuickBooks invoices yet. Run <b>qb-invoice-setup.sql</b> and the invoice sync once (see setup notes), then refresh.</div>`:`
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px">
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid var(--green)"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">Total owed</div><div style="font-size:20px;font-weight:700">${arMoney0(total)}</div><div style="font-size:11px;color:var(--text-3)">${open.length} open invoice${open.length===1?'':'s'}</div></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid var(--green)"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">Total owed (open invoices)</div><div style="font-size:20px;font-weight:700">${arMoney0(total)}</div><div style="font-size:11px;color:var(--text-3)">${open.length} open invoice${open.length===1?'':'s'}</div></div>
       ${buckets.map(([l,f],k)=>{ const v = sum(open.filter(f)); return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${['#3b82f6','#f59e0b','#f97316','#ef4444','#991b1b'][k]}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${l}${k?' days late':''}</div><div style="font-size:18px;font-weight:700;color:${v&&k?'#b91c1c':'var(--text)'}">${arMoney0(v)}</div><div style="font-size:11px;color:var(--text-3)">${open.filter(f).length} invoices</div></div>`; }).join('')}
     </div>
+    ${arContractsHtml()}
     <div style="display:grid;grid-template-columns:1fr;gap:14px;align-items:start" class="ar-grid">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
         <div style="padding:10px 12px;font-weight:700">By customer</div>
@@ -9746,7 +9791,7 @@ function openApprovalPanel(){
         <button onclick="approveTimeOff('${e.id}')" style="flex:1;padding:7px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">✓ Approve</button>
         <button onclick="denyTimeOff('${e.id}')" style="flex:1;padding:7px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;color:#dc2626">✕ Deny</button>
       </div>
-    </div>`).join('') + (pending.length?`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Invoices</div>`:'') : '';
+    </div>`).join('') + (pending.length?`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>`:'') : '';
 
   const panel = document.createElement('div');
   panel.id = 'approval-panel';
@@ -10866,7 +10911,7 @@ function renderInvoiceReports(){
 
   document.getElementById('main-content').innerHTML = `<div style="margin-bottom:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div style="font-size:18px;font-weight:700">Invoice Reports</div>
+      <div style="font-size:18px;font-weight:700">Accounts Payable Reports</div>
       <div style="display:flex;gap:8px;align-items:center">
         <button onclick="downloadInvoiceReport('csv')" style="padding:6px 14px;background:none;border:1px solid var(--green);color:var(--green-dark);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">⬇ Excel / CSV</button>
         <button onclick="downloadInvoiceReport('pdf')" style="padding:6px 14px;background:none;border:1px solid var(--green);color:var(--green-dark);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">⬇ PDF</button>
@@ -10911,7 +10956,7 @@ function renderInvoices(){
 
   let html = `<div style="margin-bottom:20px">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:16px">
-      <div style="font-size:18px;font-weight:700;color:var(--text)">Invoices</div>
+      <div style="font-size:18px;font-weight:700;color:var(--text)">Accounts Payable</div>
       <button onclick="invoiceView='reports';renderInvoiceReports()" style="padding:6px 14px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">📊 Reports</button>
     </div>
 

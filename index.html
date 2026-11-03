@@ -6217,6 +6217,7 @@ async function loadEstimates(){
       createdAt: r.created_at||'',
       createdDate: r.est_created_date || (r.created_at||'').slice(0,10),
       qbNumber: r.qb_estimate_number||'',
+      qbId: r.qb_estimate_id||'',
       amount: r.amount!=null ? Number(r.amount) : null,
       client: r.client||'',
       qbStatus: r.qb_status||'',
@@ -6388,7 +6389,7 @@ function renderEstimates(){
       html += `<div onclick="openEstimateDetail('${e.id}')" style="display:grid;grid-template-columns:2fr 100px 110px 100px 100px 110px 70px 70px 50px;gap:0;padding:12px 14px;border-bottom:1px solid var(--border);cursor:pointer;align-items:start">
         <div>
           <div style="font-size:13px;font-weight:600;color:var(--text)">${e.projectName}</div>
-          ${(e.qbNumber||e.client)?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.qbNumber?`Est #${e.qbNumber}`:''}${e.qbNumber&&e.client?' · ':''}${e.client}${e.qbStatus?` · QB ${e.qbStatus}`:''}</div>`:''}
+          ${(e.qbNumber||e.client)?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.qbNumber?`Est #${e.qbNumber}`:(e.qbId?'<span style="color:#b45309;font-weight:600">No estimate # yet</span>':'')}${(e.qbNumber||e.qbId)&&e.client?' · ':''}${e.client}${e.qbStatus?` · QB ${e.qbStatus}`:''}</div>`:''}
           ${e.scope?`<div style="font-size:11px;color:var(--text-2);margin-top:2px">${e.scope}</div>`:''}
           ${e.notes?`<div style="font-size:11px;color:var(--text-3);margin-top:2px;font-style:italic">${e.notes}</div>`:''}
         </div>
@@ -6421,6 +6422,24 @@ function sortEstimatesBy(key){
   renderEstimates();
 }
 
+const EST_ADMINS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+function canEstAdmin(){ return EST_ADMINS.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
+async function estAssignNumber(id){
+  const e = estimates.find(x=>x.id===id); if(!e || !e.qbId) return;
+  try{ const r = await invAction({ action:'estimate_number', qb_estimate_id:e.qbId });
+    e.qbNumber = r.doc_number; alert(r.already ? `It already has number ${r.doc_number}.` : `✓ Estimate #${r.doc_number} assigned in QuickBooks.`);
+    document.querySelector('.modal-overlay')?.remove(); renderEstimates(); openEstimateDetail(id); }
+  catch(err){ alert('Could not assign a number: '+err.message); }
+}
+async function estDeleteInQb(id){
+  const e = estimates.find(x=>x.id===id); if(!e || !e.qbId) return;
+  if(!confirm(`Delete ${e.qbNumber?'estimate #'+e.qbNumber:'this estimate'} for ${e.client||''} (${fmtEstMoney2(e.amount)}) in QuickBooks?\n\nThis removes it from QuickBooks and the tracker. It can't be undone.`)) return;
+  try{ await invAction({ action:'estimate_delete', qb_estimate_id:e.qbId });
+    estimates = estimates.filter(x=>x.id!==id);
+    document.querySelectorAll('.modal-overlay').forEach(o=>o.remove()); renderEstimates();
+    alert('✓ Deleted in QuickBooks and removed from Estimates.'); }
+  catch(err){ alert('Not deleted: '+err.message); }
+}
 function escEst(v){
   return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -6456,7 +6475,7 @@ function openEstimateDetail(id){
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
       <div>
         <div class="sheet-title" style="margin-bottom:2px">${escEst(e.projectName)}</div>
-        <div style="font-size:12px;color:var(--text-3)">${[e.qbNumber?`Est #${escEst(e.qbNumber)}`:'',escEst(e.client),e.qbStatus?`QB ${escEst(e.qbStatus)}`:''].filter(Boolean).join(' · ')||'Entered manually'}</div>
+        <div style="font-size:12px;color:var(--text-3)">${[e.qbNumber?`Est #${escEst(e.qbNumber)}`:(e.qbId?'<span style="color:#b45309">No estimate # in QuickBooks</span>':''),escEst(e.client),e.qbStatus?`QB ${escEst(e.qbStatus)}`:''].filter(Boolean).join(' · ')||'Entered manually'}</div>
       </div>
       <span style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text};white-space:nowrap">${escEst(e.status)}</span>
     </div>
@@ -6479,6 +6498,9 @@ function openEstimateDetail(id){
     ${e.scope?`<div style="margin-top:12px">${field('Scope', escEst(e.scope))}</div>`:''}
     ${e.notes?`<div style="margin-top:12px">${field('Notes', `<span style="font-style:italic">${escEst(e.notes)}</span>`)}</div>`:''}
 
+    ${e.qbId && !e.qbNumber ? `<div style="display:flex;align-items:center;gap:10px;margin-top:12px;padding:10px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-sm);font-size:13px">
+      <span>⚠ <b>QuickBooks gave this estimate no number.</b> <span style="color:var(--text-3)">Billing, invoices and approvals need one.</span></span>
+      ${canEstAdmin()?`<button class="site-chip active" style="margin-left:auto;padding:4px 12px;font-size:12px" onclick="estAssignNumber('${e.id}')">Assign next number</button>`:''}</div>` : ''}
     <div id="est-pm-slot"></div>
     ${e.qbNumber?'<div id="est-billing-slot"><div style="font-size:12px;color:var(--text-3);margin-top:16px">Loading billing…</div></div>':''}
     <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Breakdown</div>`;
@@ -6531,6 +6553,7 @@ function openEstimateDetail(id){
       ${e.qbNumber&&canEdit?`<button id="handoff-btn" onclick="openHandoff('${e.id}')" class="site-chip" style="padding:8px 14px">🚀 Push to tracker</button>`:''}
       ${e.qbNumber?`<button id="qb-pdf-btn" onclick="previewQbEstimatePdf('${escEst(e.qbNumber)}')" class="site-chip" style="padding:8px 14px">📄 Preview estimate PDF</button>`:''}
       ${e.qbLink?`<a href="${escEst(e.qbLink)}" target="_blank" rel="noopener" class="site-chip" style="text-decoration:none;padding:8px 14px">Open in QuickBooks ↗</a>`:''}
+      ${e.qbId && canEstAdmin() && !['Accepted','Closed'].includes(e.qbStatus) ? `<button onclick="estDeleteInQb('${e.id}')" class="site-chip" style="padding:8px 14px;color:#b91c1c">🗑 Delete in QuickBooks</button>` : ''}
       ${canEdit?`<button onclick="document.getElementById('est-detail-overlay').remove();openEstimateModal('${e.id}')" class="site-chip" style="padding:8px 14px">✏️ Edit</button>`:''}
       <button onclick="document.getElementById('est-detail-overlay').remove()" class="btn-save" style="padding:8px 16px">Close</button>
     </div>`;
@@ -7812,11 +7835,11 @@ async function qqCreateEstimate(customerId){
     if(data.warning) alert(data.warning);
     qq.docNumber = data.docNumber; qq.qbId = data.id; qq.status = '';
     // Add it to the Estimates tab right away (the hourly syncs fill in the rest).
-    if(qq.docNumber){
+    if(qq.docNumber || qq.qbId){
       try{
-        await sbFetch('POST', '/rest/v1/estimates', {
+        await sbFetch('POST', '/rest/v1/estimates', { qb_estimate_id: qq.qbId ? String(qq.qbId) : null,
           project_name: d.title || d.client, type: 'Construction', status: 'Estimate In Progress', notes: '',
-          qb_estimate_number: String(qq.docNumber), amount: Math.round(qqTotal()*100)/100, client: d.client,
+          qb_estimate_number: qq.docNumber ? String(qq.docNumber) : null, amount: Math.round(qqTotal()*100)/100, client: d.client,
           qb_status: 'Pending', est_created_date: new Date().toLocaleDateString('en-CA'), source: 'quickbooks',
           updated_at: new Date().toISOString(),
         });

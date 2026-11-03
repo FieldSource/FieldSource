@@ -10705,25 +10705,27 @@ function renderReports(){
   const visibleReports = canSeeAll ? reports : reports.filter(r=>r.filedBy===myName||r.filedBy===emailFallback);
 
   const allClients = ['All', ...new Set(visibleReports.map(r=>r.client).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
-  const allEmployees = ['All', ...new Set(visibleReports.map(r=>r.filedBy).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
+  // People = whoever filed a report or was listed on one's crew
+  const allEmployees = ['All', ...new Set(visibleReports.flatMap(r=>[r.filedBy, ...(r.additionalCrew||[])]).filter(Boolean))].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
 
   if(!allClients.includes(reportSiteFilter)) reportSiteFilter='All';
   if(!allEmployees.includes(reportEmployeeFilter)) reportEmployeeFilter='All';
 
-  let afterEmployee = reportEmployeeFilter==='All' ? visibleReports : visibleReports.filter(r=>r.filedBy===reportEmployeeFilter);
+  let afterEmployee = reportEmployeeFilter==='All' ? visibleReports : visibleReports.filter(r=>r.filedBy===reportEmployeeFilter || (r.additionalCrew||[]).includes(reportEmployeeFilter));
   const filtered = reportSiteFilter==='All' ? afterEmployee : afterEmployee.filter(r=>r.client===reportSiteFilter);
 
-  let html = `<div class="site-filter-row">${allClients.map(c=>{
-    const safe = c.replace(/'/g,"\\'");
-    return `<button class="site-chip${reportSiteFilter===c?' active':''}" onclick="setReportSite('${safe}')">${c}</button>`;
-  }).join('')}</div>`;
-
-  if(canSeeAll && allEmployees.length > 1){
-    html += `<div class="site-filter-row" style="margin-top:4px">${allEmployees.map(e=>{
-      const safe = e.replace(/'/g,"\\'");
-      return `<button class="site-chip${reportEmployeeFilter===e?' active':''}" onclick="setReportEmployee('${safe}')">${e}</button>`;
-    }).join('')}</div>`;
-  }
+  const ddEsc = v=>String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+  const ddStyle = 'font-size:13px;padding:7px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-family:inherit;min-width:180px;max-width:100%';
+  const siteCount = c=>afterEmployee.filter(r=>r.client===c).length;
+  const personCount = e=>(reportSiteFilter==='All'?visibleReports:visibleReports.filter(r=>r.client===reportSiteFilter)).filter(r=>r.filedBy===e||(r.additionalCrew||[]).includes(e)).length;
+  let html = `<div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:4px 0 14px">
+    <div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin-bottom:3px">Site</div>
+      <select onchange="setReportSite(this.value)" style="${ddStyle}">${allClients.map(c=>`<option value="${ddEsc(c)}"${reportSiteFilter===c?' selected':''}>${c==='All'?'All sites':ddEsc(c)+' ('+siteCount(c)+')'}</option>`).join('')}</select></div>
+    ${canSeeAll && allEmployees.length > 1 ? `<div><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin-bottom:3px">Person</div>
+      <select onchange="setReportEmployee(this.value)" style="${ddStyle}">${allEmployees.map(e=>`<option value="${ddEsc(e)}"${reportEmployeeFilter===e?' selected':''}>${e==='All'?'Everyone':ddEsc(e)+' ('+personCount(e)+')'}</option>`).join('')}</select></div>` : ''}
+    ${reportSiteFilter!=='All'||reportEmployeeFilter!=='All'?`<button onclick="reportSiteFilter='All';reportEmployeeFilter='All';renderReports()" style="font-size:12px;padding:7px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--text-2);font-family:inherit">Clear</button>`:''}
+    <span style="font-size:12px;color:var(--text-3);margin-left:auto">${filtered.length} report${filtered.length===1?'':'s'}</span>
+  </div>`;
 
 
   if(!filtered.length){

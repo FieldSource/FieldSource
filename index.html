@@ -522,7 +522,7 @@ const CLIENT_ADDRESSES = {
   'Westfall': '19463 Pherson Pike, Williamsport, OH 43164',
 };
 
-const TIME_OFF_CREW=['Ryan','Matt','Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Jeff Ziegler','Wes','Will Alterman','Cameron','Killer','Sly','Gase - Intern','Kaleb','Luanne','Penlin'];
+const TIME_OFF_CREW=['Ryan','Matt','Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Jeff Ziegler','Wes','Will Alterman','Cameron','Killer','Sly','Gase - Intern','Kaleb','Luanne','Penlin','Jake','Brian','Ali','Dan Haller'];
 const EQUIPMENT={
   Trailers:['Riverside Landscape','Liberty Landscape 2025','PJ Deck Over 2024','Haulmark Enclosed - ABI Trailer 2010','Impact Enclosed - Paint Trailer 2025','2025 Big Tex 22GN','2025 Big Tex 25GM'],
   Carts:['John Deere Gator TX #1','John Deere Gator TX #2','John Deere Gator HPX #1','2017 Gator John Deere HPX #2','Toro GTX','2019 Toro Workman HDX','John Deere Gator TX #3','2026 Kubota RTVX2 #1','2025 Kubota RTVX2 #2'],
@@ -11770,12 +11770,14 @@ const USER_DISPLAY_NAMES = {
   'jake@fieldsourceohio.com': 'Jake',
   'ryan@fieldsourceohio.com': 'Ryan',
   'matt@fieldsourceohio.com': 'Matt',
-  'gibson@fieldsourceohio.com': 'Gibson',
+  'gibson@fieldsourceohio.com': 'Ali',
   'jones@fieldsourceohio.com': 'Cameron',
   'abadenhop24@gmail.com': 'Badenhop',
   'kaleb@fieldsourceohio.com': 'Kaleb',
   'gase@fieldsourceohio.com': 'Gase',
-  'alterman@fieldsourceohio.com': 'Will Alterman'
+  'alterman@fieldsourceohio.com': 'Will Alterman',
+  'brian@fieldsourceohio.com': 'Brian',
+  'luanne@fieldsourceohio.com': 'Luanne'
 };
 function getDisplayName(email){
   if(!email) return 'Unknown';
@@ -11891,7 +11893,7 @@ function showApp(){
   const timeoffTab = document.getElementById('timeoff-tab');
   const woTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes('workorders'));
   const equipTab = allTabs.find(b=>(b.getAttribute('onclick')||'').includes("'equipment'"));
-  if(timeoffTab) timeoffTab.style.display = isReportOnly ? 'none' : '';
+  if(timeoffTab) timeoffTab.style.display = ''; // everyone can request their own time off
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start

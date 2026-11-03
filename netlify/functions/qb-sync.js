@@ -105,6 +105,7 @@ function lineRows(est, dbId) {
       qb_line_id: String(line.Id || i),
       line_number: i + 1,
       description: line.Description || (d.ItemRef && d.ItemRef.name) || '',
+      item_name: (d.ItemRef && d.ItemRef.name) || '',
       quantity: parseFloat(d.Qty || 1),
       unit_price: parseFloat(d.UnitPrice || 0),
       amount: parseFloat(line.Amount || 0),

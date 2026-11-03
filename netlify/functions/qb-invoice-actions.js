@@ -7,6 +7,8 @@
 //   POST { action:'email_info', qb_invoice_id }       -> who it would go to + QuickBooks' invoice email subject/message
 //   POST { action:'send', qb_invoice_id, to, cc }     -> sets the email addresses on the invoice and emails it via QuickBooks
 //   POST { action:'pdf', qb_invoice_id }              -> the invoice PDF (base64)
+//   POST { action:'send_gmail', qb_invoice_id, to, cc, subject, body }
+//                                                     -> emails it from YOUR Gmail with the QuickBooks PDF attached, then marks it sent in QuickBooks
 //
 // Security: login token required. create and send: Jake, Ryan and Ali only.
 
@@ -47,6 +49,24 @@ async function qbAuth() {
   };
   return { call, realm };
 }
+async function gmailAccess(userEmail) {
+  const rows = await sb('GET', `gmail_tokens?user_email=eq.${encodeURIComponent(userEmail.toLowerCase())}&select=refresh_token,google_email`);
+  if (!rows || !rows.length) return null;
+  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET, refresh_token: rows[0].refresh_token, grant_type: 'refresh_token' }).toString() });
+  const t = await r.json().catch(() => ({}));
+  if (!t.access_token) throw new Error('Gmail permission expired or was removed. Click Connect Gmail again.');
+  return { token: t.access_token, from: rows[0].google_email };
+}
+function mimeMessage({ from, to, cc, subject, body, filename, pdf }) {
+  const boundary = 'fs_' + Date.now().toString(36);
+  const enc = s => /[^\x20-\x7E]/.test(s) ? '=?UTF-8?B?' + Buffer.from(s).toString('base64') + '?=' : s;
+  const lines = [`From: ${from}`, `To: ${to}`, ...(cc ? [`Cc: ${cc}`] : []), `Subject: ${enc(subject)}`, 'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '',
+    Buffer.from(body).toString('base64').replace(/(.{76})/g, '$1\r\n'), '', `--${boundary}`, `Content-Type: application/pdf; name="${filename}"`,
+    `Content-Disposition: attachment; filename="${filename}"`, 'Content-Transfer-Encoding: base64', '', pdf.toString('base64').replace(/(.{76})/g, '$1\r\n'), '', `--${boundary}--`];
+  return Buffer.from(lines.join('\r\n')).toString('base64url');
+}
 const money = n => Math.round((Number(n) || 0) * 100) / 100;
 async function logActivity(action, user, details) { try { await sb('POST', 'invoice_activity', { action, user_email: user.email, details }, 'return=minimal'); } catch (e) { console.warn('log', e.message); } }
 async function refreshInvoice(qb, id) {
@@ -62,7 +82,7 @@ exports.handler = async function (event) {
   if (!user) return json(401, { error: 'Please sign in again.' });
   let b; try { b = JSON.parse(event.body || '{}'); } catch (e) { return json(400, { error: 'Bad request' }); }
   const canBill = BILLERS.includes(String(user.email).toLowerCase());
-  if (['create', 'send'].includes(b.action) && !canBill) return json(403, { error: 'Only Jake, Ryan and Ali can create or send invoices.' });
+  if (['create', 'send', 'send_gmail'].includes(b.action) && !canBill) return json(403, { error: 'Only Jake, Ryan and Ali can create or send invoices.' });
 
   try {
     const qb = await qbAuth();
@@ -121,7 +141,12 @@ exports.handler = async function (event) {
         const m = p && p.EmailMessagesPrefs && p.EmailMessagesPrefs.InvoiceMessage;
         subject = (m && m.Subject) || ''; message = (m && m.Message) || '';
       } catch (e) {}
-      return json(200, { doc_number: inv.DocNumber, customer: inv.CustomerRef.name, total: Number(inv.TotalAmt || 0), balance: Number(inv.Balance || 0),
+      let payLink = '';
+      try { const li = (await qb.call(`invoice/${b.qb_invoice_id}?include=invoiceLink`)).Invoice; payLink = li.InvoiceLink || ''; } catch (e) {}
+      let gmailFrom = '';
+      try { const g = await sb('GET', `gmail_tokens?user_email=eq.${encodeURIComponent(user.email.toLowerCase())}&select=google_email`); gmailFrom = g && g[0] ? g[0].google_email : ''; } catch (e) {}
+      return json(200, { pay_link: payLink, gmail_from: gmailFrom, gmail_ready: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+        doc_number: inv.DocNumber, customer: inv.CustomerRef.name, total: Number(inv.TotalAmt || 0), balance: Number(inv.Balance || 0),
         due_date: inv.DueDate || '', email_status: inv.EmailStatus || '', last_sent: (inv.DeliveryInfo && inv.DeliveryInfo.DeliveryTime) || '',
         to, cc: (inv.BillEmailCc && inv.BillEmailCc.Address) || '', bcc: (inv.BillEmailBcc && inv.BillEmailBcc.Address) || '',
         subject, message, memo: (inv.CustomerMemo && inv.CustomerMemo.value) || '', can_send: canBill });
@@ -142,6 +167,28 @@ exports.handler = async function (event) {
       const inv = await refreshInvoice(qb, cur.Id);
       await logActivity(b.reminder ? 'reminder' : 'sent', user, { qb_invoice_id: String(cur.Id), doc_number: cur.DocNumber, to: toList.join(', '), cc: ccList.join(', ') });
       return json(200, { ok: true, email_status: inv.EmailStatus || 'EmailSent', sent_to: toList.join(', ') });
+    }
+
+    if (b.action === 'send_gmail') {
+      const ok = e => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e);
+      const toList = String(b.to || '').split(/[,;]\s*/).map(s => s.trim()).filter(Boolean), ccList = String(b.cc || '').split(/[,;]\s*/).map(s => s.trim()).filter(Boolean);
+      if (!toList.length || !toList.every(ok)) throw new Error('Check the To email address.');
+      if (ccList.length && !ccList.every(ok)) throw new Error('Check the CC email address.');
+      if (!String(b.subject || '').trim() || !String(b.body || '').trim()) throw new Error('The subject and message can\'t be empty.');
+      const g = await gmailAccess(user.email);
+      if (!g) throw new Error('Connect your Gmail first.');
+      const cur = (await qb.call(`invoice/${b.qb_invoice_id}`)).Invoice;
+      const pdfRes = await qb.call(`invoice/${cur.Id}/pdf`, { raw: true, headers: { Accept: 'application/pdf' } });
+      const pdf = Buffer.from(await pdfRes.arrayBuffer());
+      const raw = mimeMessage({ from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), body: String(b.body), filename: `Field Source Invoice ${cur.DocNumber}.pdf`, pdf });
+      const gr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: `Bearer ${g.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
+      const gd = await gr.json().catch(() => ({}));
+      if (!gr.ok) throw new Error(`Gmail didn't send it: ${(gd.error && gd.error.message) || gr.status}`);
+      // Keep QuickBooks in step: save the address and mark it emailed
+      try { await qb.call('invoice', { method: 'POST', body: JSON.stringify({ Id: cur.Id, SyncToken: cur.SyncToken, sparse: true, BillEmail: { Address: toList.join(', ') }, EmailStatus: 'EmailSent' }) }); } catch (e) { console.warn('mark sent', e.message); }
+      await refreshInvoice(qb, cur.Id);
+      await logActivity(b.reminder ? 'reminder_gmail' : 'sent_gmail', user, { qb_invoice_id: String(cur.Id), doc_number: cur.DocNumber, from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), gmail_id: gd.id });
+      return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
     }
 
     if (b.action === 'pdf') {

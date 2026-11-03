@@ -6450,7 +6450,8 @@ async function renderEstimateBilling(e){
   slot.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 6px">
       <div style="font-size:13px;font-weight:700;color:var(--text)">Billing</div>
-      <button onclick="openLinkInvoices('${arEsc(e.qbNumber)}','${arEsc(e.client||'').replace(/'/g,"\\'")}')" class="site-chip" style="padding:4px 10px;font-size:12px">+ Link an invoice</button>
+      <span style="display:flex;gap:6px">${canBillInvoices()?`<button onclick="openInvoiceBuilder('${arEsc(e.qbNumber)}')" class="site-chip active" style="padding:4px 10px;font-size:12px">🧾 Create invoice</button>`:''}
+      <button onclick="openLinkInvoices('${arEsc(e.qbNumber)}','${arEsc(e.client||'').replace(/'/g,"\\'")}')" class="site-chip" style="padding:4px 10px;font-size:12px">+ Link an invoice</button></span>
     </div>
     ${b.contract?`<div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>`:''}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -6462,7 +6463,7 @@ async function renderEstimateBilling(e){
     ${b.inv.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:10px"><table style="width:100%;border-collapse:collapse">
       <thead><tr><th style="${th}">Invoice</th><th style="${th}">Date</th><th style="${th}">Due</th><th style="${th};text-align:right">Amount</th><th style="${th};text-align:right">Balance</th><th style="${th}">Status</th><th style="${th}"></th></tr></thead>
       <tbody>${b.inv.sort((x,y)=>(x.txn_date||'').localeCompare(y.txn_date||'')).map(i=>`<tr>
-        <td style="${td}"><b>#${arEsc(i.doc_number)}</b></td><td style="${td}">${arFmt(i.txn_date)}</td><td style="${td}">${arFmt(i.due_date)}</td>
+        <td style="${td}"><b>#${arEsc(i.doc_number)}</b>${i._unsynced?'':`<div style="font-size:11px"><a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${i.qb_invoice_id}','${arEsc(i.doc_number)}')">View</a>${canBillInvoices()&&Number(i.balance)>0.005?` · <a style="cursor:pointer;color:var(--green-dark)" onclick="openSendInvoice('${i.qb_invoice_id}',null,${invDaysPast(i)>0})">${i.email_status==='EmailSent'?'Send again':'Send'}</a>`:''}</div>`}</td><td style="${td}">${arFmt(i.txn_date)}</td><td style="${td}">${arFmt(i.due_date)}</td>
         <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right">${arMoney(i.balance)}</td><td style="${td}">${invChip(i)}</td>
         <td style="${td};font-size:11px;color:var(--text-3)">${manual.has(i.qb_invoice_id)?`linked by hand · <a style="cursor:pointer;color:#b91c1c" onclick="unlinkInvoice('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">unlink</a>`:i._via?`${i._via==='auto'?'matched automatically'+(i._how?' ('+arEsc(i._how)+')':''):'matched by Billing Tracker'}${i._unsynced?'':` · <a style="cursor:pointer;color:#b91c1c" onclick="notThisEstimate('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">not this estimate</a>`}`:'linked in QuickBooks'}</td></tr>`).join('')}
       </tbody></table></div>
@@ -6573,14 +6574,14 @@ function arContractsHtml(){
           ${!b.inv.length?'<div style="font-size:11px;color:#b45309;margin-top:2px">Not billed yet</div>':over?'<div style="font-size:11px;color:#dc2626;margin-top:2px">Over the contract</div>':''}</td>
         <td style="${td};text-align:right">${arMoney0(b.collected)}</td>
         <td style="${td};text-align:right;${b.open>0.005?'color:#1d4ed8;font-weight:600':''}">${arMoney0(b.open)}</td>
-        <td style="${td};text-align:right;font-weight:600">${arMoney0(Math.max(0,b.remaining))}</td></tr>`; }).join('') || `<tr><td colspan="6" style="${td};color:var(--text-3)">No accepted estimates${arHideFullyBilled?' still being billed':''}.</td></tr>`}
+        <td style="${td};text-align:right;font-weight:600">${arMoney0(Math.max(0,b.remaining))}${canBillInvoices() && b.remaining>0.5 ? `<div><button onclick="event.stopPropagation();openInvoiceBuilder('${arEsc(e.qbNumber)}')" class="site-chip" style="padding:2px 8px;font-size:11px;margin-top:4px">🧾 Invoice</button></div>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="6" style="${td};color:var(--text-3)">No accepted estimates${arHideFullyBilled?' still being billed':''}.</td></tr>`}
     </tbody></table></div>
     <div style="padding:8px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border)">Click an estimate to see its invoices, line-by-line billing, and to link invoices QuickBooks didn't connect.</div>
   </div>`;
 }
 
 // Receivables: open invoices, aging, by customer
-let arCustomer = '', arOverdueOnly = false, arSort = 'days';
+let arCustomer = '', arOverdueOnly = false, arSort = 'days', arNotSentOnly = false;
 function renderReceivables(){
   const el = document.getElementById('main-content');
   if(!qbInvLoaded || (!estimates.length && !arEstTried)){
@@ -6604,7 +6605,7 @@ function renderReceivablesInner(){
   const total = sum(open);
   const customers = [...new Set(open.map(i=>i.customer_name).filter(Boolean))].sort();
   if(arCustomer && !customers.includes(arCustomer)) arCustomer = '';
-  let list = open.filter(i=>(!arCustomer || i.customer_name===arCustomer) && (!arOverdueOnly || invDaysPast(i)>0));
+  let list = open.filter(i=>(!arCustomer || i.customer_name===arCustomer) && (!arOverdueOnly || invDaysPast(i)>0) && (!arNotSentOnly || i.email_status!=='EmailSent'));
   list.sort(arSort==='amount' ? (a,b)=>Number(b.balance)-Number(a.balance) : arSort==='customer' ? (a,b)=>(a.customer_name||'').localeCompare(b.customer_name||'')||invDaysPast(b)-invDaysPast(a) : (a,b)=>invDaysPast(b)-invDaysPast(a)||(a.due_date||'').localeCompare(b.due_date||''));
   const byCust = customers.map(c=>{ const l = open.filter(i=>i.customer_name===c); return { c, owed:sum(l), n:l.length, overdue:sum(l.filter(i=>invDaysPast(i)>0)), oldest:Math.max(...l.map(invDaysPast)) }; }).sort((a,b)=>b.owed-a.owed);
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)!important';
@@ -6637,21 +6638,228 @@ function renderReceivablesInner(){
           <b>Open invoices</b>
           <select style="${sel}" onchange="arCustomer=this.value;renderReceivables()"><option value="">All customers</option>${customers.map(c=>`<option${arCustomer===c?' selected':''}>${arEsc(c)}</option>`).join('')}</select>
           <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arOverdueOnly?'checked':''} onchange="arOverdueOnly=this.checked;renderReceivables()"> Overdue only</label>
+          <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arNotSentOnly?'checked':''} onchange="arNotSentOnly=this.checked;renderReceivables()"> Not emailed yet (${open.filter(i=>i.email_status!=='EmailSent').length})</label>
           <select style="${sel};margin-left:auto" onchange="arSort=this.value;renderReceivables()">${[['days','Most overdue first'],['amount','Largest balance first'],['customer','By customer']].map(([v,l])=>`<option value="${v}"${arSort===v?' selected':''}>${l}</option>`).join('')}</select>
         </div>
         <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:620px"><thead><tr>
-          <th style="${th}">Invoice</th><th style="${th}">Customer / estimate</th><th style="${th}">Due</th><th style="${th};text-align:right">Amount</th><th style="${th};text-align:right">Balance</th><th style="${th}">Status</th></tr></thead><tbody>
+          <th style="${th}">Invoice</th><th style="${th}">Customer / estimate</th><th style="${th}">Due</th><th style="${th};text-align:right">Amount</th><th style="${th};text-align:right">Balance</th><th style="${th}">Status</th><th style="${th}"></th></tr></thead><tbody>
           ${list.map(i=>{ const ests = estFor(i); return `<tr>
             <td style="${td}"><b>#${arEsc(i.doc_number)}</b><div style="font-size:11px;color:var(--text-3)">${arFmt(i.txn_date)}</div></td>
             <td style="${td}">${arEsc(i.customer_name)}${ests.length?`<div style="font-size:11px">${ests.map(x=>x.e?`<a style="cursor:pointer;color:var(--green-dark)" onclick="loadEstimates().then(()=>{setView('estimates');setTimeout(()=>openEstimateDetail('${x.e.id}'),50)})">Est #${arEsc(x.n)} · ${arEsc(x.e.projectName)}</a>`:`Est #${arEsc(x.n)}`).join(' · ')}</div>`:`<div style="font-size:11px;color:var(--text-3)">not linked to an estimate</div>`}</td>
             <td style="${td};white-space:nowrap">${arFmt(i.due_date)}</td>
-            <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right;font-weight:600">${arMoney(i.balance)}</td><td style="${td}">${invChip(i)}</td></tr>`; }).join('') || `<tr><td colspan="6" style="${td};color:var(--text-3)">Nothing here${arOverdueOnly?' that’s overdue':''}.</td></tr>`}
+            <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right;font-weight:600">${arMoney(i.balance)}</td>
+            <td style="${td}">${invChip(i)}<div style="font-size:11px;margin-top:3px;color:${i.email_status==='EmailSent'?'var(--text-3)':'#b45309'}">${i.email_status==='EmailSent'?'✉ emailed':'not emailed'}</div></td>
+            <td style="${td};white-space:nowrap"><button class="site-chip" style="padding:2px 8px;font-size:11px" onclick="viewInvoicePdf('${i.qb_invoice_id}','${arEsc(i.doc_number)}')">📄 View</button>
+              ${canBillInvoices()?`<button class="site-chip${i.email_status!=='EmailSent'?' active':''}" style="padding:2px 8px;font-size:11px" onclick="openSendInvoice('${i.qb_invoice_id}',null,${invDaysPast(i)>0})">✉ ${i.email_status!=='EmailSent'?'Send':invDaysPast(i)>0?'Reminder':'Send again'}</button>`:''}</td></tr>`; }).join('') || `<tr><td colspan="7" style="${td};color:var(--text-3)">Nothing here${arOverdueOnly?' that’s overdue':''}.</td></tr>`}
         </tbody></table></div>
         <div style="padding:8px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border)">${list.length} invoice${list.length===1?'':'s'} · ${arMoney(sum(list))} owed${arCustomer?` · <a style="cursor:pointer;color:var(--green-dark)" onclick="arCustomer='';renderReceivables()">show all customers</a>`:''}</div>
       </div>
     </div>`}`;
 }
 // =================== END QUICKBOOKS INVOICES ===================
+// ===================== BUILD & SEND INVOICES =====================
+const INVOICE_BILLERS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+function canBillInvoices(){ return INVOICE_BILLERS.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
+async function invAction(body){
+  if(typeof ensureFreshToken==='function') await ensureFreshToken();
+  const r = await fetch('/.netlify/functions/qb-invoice-actions', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+sbToken() }, body: JSON.stringify(body) });
+  const d = await r.json().catch(()=>({ error:`Server error (${r.status})` }));
+  if(!r.ok || d.error) throw new Error(d.error || `Server error (${r.status})`);
+  return d;
+}
+function billOverlay(id, html, width){
+  document.getElementById(id)?.remove();
+  const o = document.createElement('div'); o.className = 'modal-overlay centered'; o.id = id;
+  o.innerHTML = `<div class="modal-sheet" style="max-width:${width||760}px;max-height:92vh;overflow-y:auto"><div class="sheet-handle"></div>${html}</div>`;
+  document.body.appendChild(o); return o;
+}
+const billInput = 'font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
+const billLbl = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin-bottom:3px';
+
+// ---- 1. Invoice builder ----
+let billState = null;
+async function openInvoiceBuilder(estNum){
+  if(!canBillInvoices()){ alert('Only Jake, Ryan and Ali can create invoices.'); return; }
+  billOverlay('bill-overlay', `<div style="padding:30px;text-align:center;color:var(--text-3)">Loading estimate #${arEsc(estNum)} from QuickBooks…</div>`);
+  try{
+    await loadQbInvoices();
+    const prep = await invAction({ action:'prepare', estimate_number:estNum });
+    const e = estimates.find(x=>String(x.qbNumber)===String(estNum)) || { qbNumber:estNum, amount:prep.estimate.total };
+    const invs = invoicesForEstimate(estNum).filter(i=>!i._unsynced);
+    const ilines = invs.length ? (await sbFetch('GET', `/rest/v1/qb_invoice_lines?qb_invoice_id=in.(${invs.map(i=>i.qb_invoice_id).join(',')})&select=item_name,description,amount,quantity`))||[] : [];
+    const norm = s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
+    const billed = prep.lines.map(()=>({ amt:0, qty:0 }));
+    ilines.forEach(il=>{
+      let k = prep.lines.findIndex(l=>norm(l.item_name)===norm(il.item_name) && norm(l.description)===norm(il.description));
+      if(k<0){ const m = prep.lines.map((l,j)=>norm(l.item_name)===norm(il.item_name)?j:-1).filter(j=>j>=0); if(m.length===1) k = m[0]; }
+      if(k<0) k = prep.lines.findIndex(l=>norm(l.description) && norm(l.description)===norm(il.description));
+      if(k>=0){ billed[k].amt += Number(il.amount)||0; billed[k].qty += Number(il.quantity)||0; }
+    });
+    const unsyncedBilled = invoicesForEstimate(estNum).filter(i=>i._unsynced).reduce((t,i)=>t+Number(i.total||0),0);
+    const today = arToday();
+    billState = { estNum, prep, e, billed, mode:'pct', unsyncedBilled,
+      rows: prep.lines.map((l,k)=>({ ...l, billedAmt:billed[k].amt, billedQty:billed[k].qty, input:'', description:l.description })),
+      doc: prep.next_doc_number||'', date: today, due:'', po:'', memo:'' };
+    renderInvoiceBuilder();
+  }catch(err){ billOverlay('bill-overlay', `<div class="sheet-title">Couldn't load the estimate</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('bill-overlay').remove()">Close</button></div>`, 520); }
+}
+function billRowAmount(r){
+  const v = parseFloat(r.input); if(isNaN(v)) return 0;
+  if(billState.mode==='pct') return Math.round((r.amount * v/100 - r.billedAmt)*100)/100;   // % complete to date → bill the difference
+  if(billState.mode==='qty') return Math.round(v * r.rate * 100)/100;                       // quantity done this invoice
+  return Math.round(v*100)/100;                                                               // dollar amount
+}
+function renderInvoiceBuilder(){
+  const st = billState, p = st.prep;
+  const total = st.rows.reduce((t,r)=>t+billRowAmount(r),0);
+  const billedSoFar = st.rows.reduce((t,r)=>t+r.billedAmt,0) + st.unsyncedBilled;
+  const contract = Number(st.e.amount)||p.estimate.total;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:6px 8px;text-align:left;background:var(--accent)';
+  const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border);vertical-align:top';
+  const modeLbl = { pct:'% complete to date', qty:'Qty this invoice', amt:'$ this invoice' }[st.mode];
+  const html = `
+    <div class="sheet-title" style="margin-bottom:2px">Create invoice</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Estimate #${arEsc(p.estimate.number)} · ${arEsc(p.estimate.customer)} · contract ${arMoney(contract)} · billed so far ${arMoney(billedSoFar)}${st.unsyncedBilled?` (incl. ${arMoney(st.unsyncedBilled)} not synced line by line)`:''}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px">
+      <div><div style="${billLbl}">Invoice #</div><input style="${billInput}" value="${arEsc(st.doc)}" oninput="billState.doc=this.value" placeholder="Next number"></div>
+      <div><div style="${billLbl}">Invoice date</div><input type="date" style="${billInput}" value="${st.date}" onchange="billState.date=this.value"></div>
+      <div><div style="${billLbl}">Due date</div><input type="date" style="${billInput}" value="${st.due}" onchange="billState.due=this.value" title="Leave blank to use the customer's terms${p.terms?' ('+arEsc(p.terms)+')':''}"></div>
+      <div><div style="${billLbl}">PO #</div><input style="${billInput}" value="${arEsc(st.po)}" oninput="billState.po=this.value"></div>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <span style="font-size:12px;color:var(--text-2)">Bill each line by:</span>
+      ${[['pct','% complete to date'],['qty','Quantity done'],['amt','Dollar amount']].map(([m,l])=>`<button onclick="billState.mode='${m}';billState.rows.forEach(r=>r.input='');renderInvoiceBuilder()" class="site-chip${st.mode===m?' active':''}" style="padding:4px 10px;font-size:12px">${l}</button>`).join('')}
+      <button onclick="billFillRemaining()" class="site-chip" style="padding:4px 10px;font-size:12px;margin-left:auto" title="Bill everything that's left on every line">Bill all remaining</button>
+    </div>
+    <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="width:100%;border-collapse:collapse;min-width:640px"><thead><tr>
+      <th style="${th}">Line</th><th style="${th};text-align:right">Contract</th><th style="${th};text-align:right">Billed so far</th><th style="${th};width:110px">${modeLbl}</th><th style="${th};text-align:right">This invoice</th></tr></thead><tbody>
+      ${st.rows.map((r,k)=>{ const amt = billRowAmount(r), after = r.billedAmt + amt, over = after > r.amount + 0.5, neg = amt < -0.005;
+        return `<tr><td style="${td}"><textarea rows="2" style="${billInput};font-size:12px;resize:vertical" oninput="billState.rows[${k}].description=this.value">${arEsc(r.description)}</textarea><div style="font-size:10px;color:var(--text-3);margin-top:2px">${arEsc(r.item_name)}${r.qty?` · ${r.qty} @ ${arMoney(r.rate)}`:''}</div></td>
+          <td style="${td};text-align:right">${arMoney(r.amount)}</td>
+          <td style="${td};text-align:right">${arMoney(r.billedAmt)}<div style="font-size:10px;color:var(--text-3)">${r.amount?Math.round(r.billedAmt/r.amount*100):0}%</div></td>
+          <td style="${td}"><input type="number" step="any" style="${billInput};text-align:right" value="${arEsc(r.input)}" placeholder="${st.mode==='pct'?Math.round(r.amount?r.billedAmt/r.amount*100:0):'0'}" oninput="billState.rows[${k}].input=this.value;billUpdateRow(${k})" id="bill-in-${k}">${st.mode==='qty'&&!r.rate?'<div style="font-size:10px;color:#b45309">no rate on this line</div>':''}</td>
+          <td style="${td};text-align:right" id="bill-amt-${k}"><b style="${over||neg?'color:#dc2626':''}">${arMoney(amt)}</b>${over?'<div style="font-size:10px;color:#dc2626">over the contract line</div>':neg?'<div style="font-size:10px;color:#dc2626">less than already billed</div>':amt?`<div style="font-size:10px;color:var(--text-3)">${r.amount?Math.round(after/r.amount*100):0}% after</div>`:''}</td></tr>`; }).join('')}
+      </tbody><tfoot><tr><td style="${td};font-weight:700" colspan="4">Invoice total</td><td style="${td};text-align:right;font-weight:700;font-size:14px" id="bill-total">${arMoney(total)}</td></tr></tfoot></table></div>
+    <div style="margin-top:10px"><div style="${billLbl}">Message on invoice (optional)</div><textarea rows="2" style="${billInput}" oninput="billState.memo=this.value" placeholder="Shows on the invoice, e.g. Progress billing through October">${arEsc(st.memo)}</textarea></div>
+    <div id="bill-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:8px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--text-3)">Creates the invoice in QuickBooks, linked to this estimate. It isn't emailed until you send it on the next screen.</span>
+      <div style="display:flex;gap:8px"><button class="btn-cancel" onclick="document.getElementById('bill-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="billConfirm()">Review & create →</button></div>
+    </div>`;
+  billOverlay('bill-overlay', html, 860);
+}
+function billUpdateRow(k){
+  const r = billState.rows[k], amt = billRowAmount(r), after = r.billedAmt + amt, over = after > r.amount + 0.5, neg = amt < -0.005;
+  const cell = document.getElementById('bill-amt-'+k);
+  if(cell) cell.innerHTML = `<b style="${over||neg?'color:#dc2626':''}">${arMoney(amt)}</b>${over?'<div style="font-size:10px;color:#dc2626">over the contract line</div>':neg?'<div style="font-size:10px;color:#dc2626">less than already billed</div>':amt?`<div style="font-size:10px;color:var(--text-3)">${r.amount?Math.round(after/r.amount*100):0}% after</div>`:''}`;
+  const t = document.getElementById('bill-total'); if(t) t.textContent = arMoney(billState.rows.reduce((s,x)=>s+billRowAmount(x),0));
+}
+function billFillRemaining(){
+  billState.rows.forEach(r=>{ const left = Math.max(0, r.amount - r.billedAmt);
+    r.input = billState.mode==='pct' ? (r.amount && left>0.005 ? '100' : '') : billState.mode==='qty' ? (r.rate && left>0.005 ? String(Math.round(left/r.rate*10000)/10000) : '') : (left>0.005 ? String(Math.round(left*100)/100) : ''); });
+  renderInvoiceBuilder();
+}
+function billConfirm(){
+  const st = billState, lines = st.rows.map(r=>({ r, amt:billRowAmount(r) })).filter(x=>Math.abs(x.amt)>0.004);
+  const err = document.getElementById('bill-err');
+  if(!lines.length){ err.textContent = 'Enter an amount on at least one line.'; return; }
+  if(lines.some(x=>x.amt<0)){ err.textContent = 'A line is less than what was already billed. Fix it, or bill a credit separately in QuickBooks.'; return; }
+  const total = lines.reduce((t,x)=>t+x.amt,0), over = lines.filter(x=>x.r.billedAmt + x.amt > x.r.amount + 0.5);
+  billOverlay('bill-confirm', `<div class="sheet-title">Create this invoice in QuickBooks?</div>
+    <div style="font-size:13px;margin:8px 0">${arEsc(st.prep.estimate.customer)} · estimate #${arEsc(st.prep.estimate.number)}</div>
+    <div style="font-size:13px;line-height:1.7">Invoice <b>#${arEsc(st.doc||'(next number)')}</b> · dated <b>${arFmt(st.date)}</b>${st.due?` · due <b>${arFmt(st.due)}</b>`:''}${st.po?` · PO <b>${arEsc(st.po)}</b>`:''}</div>
+    <div style="margin:10px 0;border:1px solid var(--border);border-radius:var(--radius-sm)">${lines.map(x=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px"><span>${arEsc(x.r.description||x.r.item_name).slice(0,90)}</span><b>${arMoney(x.amt)}</b></div>`).join('')}
+      <div style="display:flex;justify-content:space-between;padding:8px 10px;font-size:14px;font-weight:700"><span>Total</span><span>${arMoney(total)}</span></div></div>
+    ${over.length?`<div style="background:#fee2e2;color:#991b1b;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:8px">⚠ ${over.length} line${over.length===1?'':'s'} will be billed past the contract amount.</div>`:''}
+    <div style="font-size:12px;color:var(--text-3)">It will be created but <b>not emailed</b>. You'll confirm the email next.</div>
+    <div id="bill-c-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><button class="btn-cancel" onclick="document.getElementById('bill-confirm').remove()">Back</button>
+      <button class="btn-save" id="bill-c-go" onclick="billCreate()">Create invoice</button></div>`, 560);
+}
+async function billCreate(){
+  const st = billState, btn = document.getElementById('bill-c-go'); btn.disabled = true; btn.textContent = 'Creating…';
+  try{
+    const lines = st.rows.map(r=>{ const amt = billRowAmount(r); return { line_id:r.line_id, amount:amt, description:r.description, qty: st.mode==='qty' ? parseFloat(r.input)||null : null }; }).filter(l=>Math.abs(l.amount)>0.004);
+    const res = await invAction({ action:'create', estimate_number:st.estNum, lines, txn_date:st.date, due_date:st.due||null, doc_number:st.doc||null, po:st.po||'', memo:st.memo||'' });
+    document.getElementById('bill-confirm')?.remove(); document.getElementById('bill-overlay')?.remove();
+    await loadQbInvoices(true);
+    if(view==='receivables') renderReceivables(); else if(view==='estimates') renderEstimates();
+    const e = estimates.find(x=>String(x.qbNumber)===String(st.estNum)); if(e && document.getElementById('est-billing-slot')) renderEstimateBilling(e);
+    openSendInvoice(res.qb_invoice_id, `Invoice #${res.doc_number} for ${arMoney(res.total)} was created in QuickBooks.`);
+  }catch(err){ const el = document.getElementById('bill-c-err'); if(el) el.textContent = 'Could not create: ' + err.message; btn.disabled = false; btn.textContent = 'Create invoice'; }
+}
+
+// ---- 2. Send (confirm address + email) ----
+let sendState = null;
+// Fill QuickBooks template placeholders so the preview reads like the real email
+function fillQbPlaceholders(text, info){
+  const due = info.due_date ? new Date(info.due_date+'T12:00:00').toLocaleDateString('en-US') : '';
+  const map = { 'invoice no.':info.doc_number, 'invoice number':info.doc_number, 'customer name':info.customer, 'customer display name':info.customer, 'full name':info.customer,
+    'company name':'Field Source LLC', 'balance due':arMoney(info.balance), 'amount':arMoney(info.total), 'invoice amount':arMoney(info.total), 'due date':due };
+  return String(text||'').replace(/\[([^\]]+)\]/g, (m,k)=>{ const v = map[k.trim().toLowerCase()]; return v!=null && v!=='' ? v : m; });
+}
+async function openSendInvoice(qbInvoiceId, banner, reminder){
+  billOverlay('send-overlay', `<div style="padding:30px;text-align:center;color:var(--text-3)">Loading invoice from QuickBooks…</div>`, 640);
+  try{
+    const info = await invAction({ action:'email_info', qb_invoice_id:qbInvoiceId });
+    sendState = { id:qbInvoiceId, info, reminder:!!reminder };
+    const sent = info.email_status==='EmailSent';
+    billOverlay('send-overlay', `
+      ${banner?`<div style="background:#dcfce7;color:#166534;border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:10px">✓ ${arEsc(banner)}</div>`:''}
+      <div class="sheet-title" style="margin-bottom:2px">${reminder?'Send reminder':'Send invoice'} #${arEsc(info.doc_number)}</div>
+      <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">${arEsc(info.customer)} · ${arMoney(info.total)}${info.balance!==info.total?` · ${arMoney(info.balance)} still owed`:''}${info.due_date?' · due '+arFmt(info.due_date):''}${sent?` · <span style="color:#166534">already emailed${info.last_sent?' '+new Date(info.last_sent).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}</span>`:' · not emailed yet'}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><div style="${billLbl}">To</div><input id="send-to" style="${billInput}" value="${arEsc(info.to)}" placeholder="customer@school.org"></div>
+        <div><div style="${billLbl}">CC (optional)</div><input id="send-cc" style="${billInput}" value="${arEsc(info.cc)}" placeholder="e.g. accounts@…"></div>
+      </div>
+      ${!info.to?'<div style="font-size:12px;color:#b45309;margin-top:4px">No email on file for this customer in QuickBooks. Type one above.</div>':''}
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px">Separate multiple addresses with commas. These are saved on the invoice in QuickBooks.</div>
+      <div style="margin-top:14px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+        <div style="background:var(--accent);padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2)">The email they'll get</div>
+        <div style="padding:10px 12px;font-size:13px">
+          <div style="margin-bottom:6px"><span style="color:var(--text-3)">Subject:</span> <b>${arEsc(fillQbPlaceholders(info.subject||`Invoice ${info.doc_number} from Field Source LLC`, info))}</b></div>
+          <div style="white-space:pre-wrap;color:var(--text);background:var(--bg);border-radius:6px;padding:8px 10px;max-height:180px;overflow-y:auto">${arEsc(fillQbPlaceholders(info.message||'(QuickBooks standard invoice message)', info))}</div>
+          <div style="margin-top:8px;font-size:12px">📎 Invoice #${arEsc(info.doc_number)} (PDF), with QuickBooks' <b>Pay now</b> link · <a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${qbInvoiceId}','${arEsc(info.doc_number)}')">View the PDF</a></div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:6px">The subject and message come from your QuickBooks invoice email template (QuickBooks → Settings → Account and settings → Sales → Messages). The message below goes on this invoice itself.</div>
+      <div style="margin-top:10px"><div style="${billLbl}">Message on invoice</div><textarea id="send-memo" rows="2" style="${billInput}">${arEsc(info.memo)}</textarea></div>
+      <div id="send-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:8px">
+        <button class="btn-cancel" onclick="document.getElementById('send-overlay').remove()">${banner?'Send later':'Cancel'}</button>
+        ${info.can_send?`<button class="btn-save" id="send-go" onclick="sendInvoiceConfirm()">${reminder||sent?'Send again…':'Send…'}</button>`:'<span style="font-size:12px;color:var(--text-3)">Only Jake, Ryan and Ali can send.</span>'}
+      </div>`, 640);
+  }catch(err){ billOverlay('send-overlay', `<div class="sheet-title">Couldn't load the invoice</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('send-overlay').remove()">Close</button></div>`, 520); }
+}
+function sendInvoiceConfirm(){
+  const to = document.getElementById('send-to').value.trim(), cc = document.getElementById('send-cc').value.trim();
+  if(!to){ document.getElementById('send-err').textContent = 'Enter who it goes to.'; return; }
+  const btn = document.getElementById('send-go');
+  if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent = `Yes, email it to ${to}${cc?' (cc '+cc+')':''}`; btn.style.background = '#b45309'; return; }
+  sendInvoiceNow(to, cc);
+}
+async function sendInvoiceNow(to, cc){
+  const btn = document.getElementById('send-go'); btn.disabled = true; btn.textContent = 'Sending…';
+  try{
+    const res = await invAction({ action:'send', qb_invoice_id:sendState.id, to, cc, memo:document.getElementById('send-memo').value, reminder:sendState.reminder });
+    document.getElementById('send-overlay').remove();
+    await loadQbInvoices(true); if(view==='receivables') renderReceivables();
+    alert(`✓ Invoice #${sendState.info.doc_number} was emailed to ${res.sent_to}.`);
+  }catch(err){ document.getElementById('send-err').textContent = 'Not sent: ' + err.message; btn.disabled = false; btn.dataset.armed=''; btn.style.background=''; btn.textContent = 'Send…'; }
+}
+async function viewInvoicePdf(qbInvoiceId, doc){
+  billOverlay('pdf-overlay', `<div style="padding:30px;text-align:center;color:var(--text-3)">Loading invoice PDF…</div>`, 900);
+  try{
+    const { pdf } = await invAction({ action:'pdf', qb_invoice_id:qbInvoiceId });
+    const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(pdf), c=>c.charCodeAt(0))], { type:'application/pdf' }));
+    billOverlay('pdf-overlay', `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="sheet-title" style="margin:0">Invoice #${arEsc(doc||'')}</div>
+      <div style="display:flex;gap:6px"><a class="site-chip" style="padding:4px 10px;font-size:12px" href="${url}" target="_blank">Open in new tab ↗</a><button class="btn-cancel" onclick="document.getElementById('pdf-overlay').remove()">Close</button></div></div>
+      <iframe src="${url}" style="width:100%;height:75vh;border:1px solid var(--border);border-radius:8px"></iframe>`, 900);
+  }catch(err){ billOverlay('pdf-overlay', `<div class="sheet-title">Couldn't load the PDF</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('pdf-overlay').remove()">Close</button></div>`, 520); }
+}
+// =================== END BUILD & SEND INVOICES ===================
+
 
 // ===================== TRACKER HANDOFF (Ryan's tracker-handoff spec, steps 2-6) =====================
 // Accepted QB estimate -> tracker_jobs + tracker_work_items (one per QB line) + tracker_visits.

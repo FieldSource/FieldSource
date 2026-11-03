@@ -7278,8 +7278,21 @@ function fleetPeople(){
   extra.forEach(n=>{ const l = n.toLowerCase(); if(!lower.some(f=>f===l || f.startsWith(l+' '))) { full.add(n); lower.push(l); } });
   return [...full].sort((a,b)=>a.localeCompare(b));
 }
+let _cardIdx = null, _cardIdxFor = null;
+function fuelCardOf(r){
+  if(r.cardNumber && fleetCards[r.cardNumber]) return fleetCards[r.cardNumber];
+  if(_cardIdxFor !== fleetCards){
+    _cardIdxFor = fleetCards; _cardIdx = { byDesc:{}, byName:{}, byEmboss:{} };
+    Object.values(fleetCards).forEach(c=>{
+      const add = (m,k)=>{ k = String(k||'').trim().toUpperCase(); if(!k) return; (m[k] = m[k]||[]).push(c); };
+      add(_cardIdx.byDesc, c.vehicle_desc); add(_cardIdx.byName, c.name); add(_cardIdx.byEmboss, c.emboss);
+    });
+  }
+  const one = (m,k)=>{ const l = m[String(k||'').trim().toUpperCase()]; return l && l.length===1 ? l[0] : null; };
+  return one(_cardIdx.byDesc, r.vehicleId) || one(_cardIdx.byName, r.vehicleId) || one(_cardIdx.byEmboss, r.cardHolder) || one(_cardIdx.byName, r.cardHolder) || null;
+}
 function fuelCardKind(r){
-  const c = r.cardNumber && fleetCards[r.cardNumber];
+  const c = fuelCardOf(r);
   if(c && c.kind) return c.kind==='Can' ? 'Can' : 'Truck';
   return r.category || 'Can';
 }
@@ -7288,7 +7301,7 @@ function fuelCardKind(r){
 const isShared = v=>/^shared/i.test(String(v||'').trim());
 function fuelPersonInfo(r){
   const d = r.driverId && fleetDrivers[r.driverId];
-  const c = r.cardNumber && fleetCards[r.cardNumber];
+  const c = fuelCardOf(r);
   const shared = ()=>({ name:`Shared: ${cleanFuelVehicle(r)}`, linked:true, shared:true });
   if(d && d.person && !isShared(d.person)) return { name:d.person, linked:true };
   if(c && c.assigned_to && !isShared(c.assigned_to)) return { name:c.assigned_to, linked:true };
@@ -7336,7 +7349,8 @@ async function importWexCards(text){
   rows.forEach(r=>{
     const num = r['Card Number']; if(!num) return;
     const name = (r['Custom Vehicle/Asset ID'] && r['Custom Vehicle/Asset ID']!=='N/A' ? r['Custom Vehicle/Asset ID'] : '') || r['Vehicle Description'] || r['Emboss Line 2'] || num;
-    const base = { card_number:num, name, kind: /\bcan\b/i.test(name) ? 'Can' : 'Vehicle', vin:r['VIN']||'', plate:r['License Plate']||'', status:r['Status']||'', updated_at:new Date().toISOString() };
+    const base = { card_number:num, name, kind: /\bcan\b/i.test(name) ? 'Can' : 'Vehicle', vin:r['VIN']||'', plate:r['License Plate']||'', status:r['Status']||'',
+      emboss:(r['Emboss Line 2']||'').trim(), vehicle_desc:(r['Vehicle Description']||'').trim(), updated_at:new Date().toISOString() };
     if(known.has(num)) existing.push(base); else fresh.push({ ...base, assigned_to: guess(name) });
   });
   try{ await fleetUpsert('fleet_cards','card_number', fresh); await fleetUpsert('fleet_cards','card_number', existing); }
@@ -7379,7 +7393,7 @@ function renderFuelSetup(){
   const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const people = fleetPeople();
   const dl = `<datalist id="fleet-people"><option value="Shared (no one)">${people.filter(p=>!isShared(p)).map(p=>`<option value="${esc(p)}">`).join('')}</datalist>`;
-  const usage = {}; fuelTransactions.forEach(r=>{ if(r.cardNumber) usage['c'+r.cardNumber]=(usage['c'+r.cardNumber]||0)+1; if(r.driverId) usage['d'+r.driverId]=(usage['d'+r.driverId]||0)+1; });
+  const usage = {}; fuelTransactions.forEach(r=>{ const c = fuelCardOf(r); if(c) usage['c'+c.card_number]=(usage['c'+c.card_number]||0)+1; if(r.driverId) usage['d'+r.driverId]=(usage['d'+r.driverId]||0)+1; });
   const cards = Object.values(fleetCards).sort((a,b)=>(a.kind||'').localeCompare(b.kind||'') || a.name.localeCompare(b.name));
   const drivers = Object.values(fleetDrivers).sort((a,b)=>(b.is_vehicle - a.is_vehicle) || (a.wex_name||'').localeCompare(b.wex_name||''));
   const th = 'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)';
@@ -7669,8 +7683,9 @@ function renderFuelTransactions(){
 function renderFuelVehicles(){
   const byVehicle = {};
   fuelTransactions.forEach(r=>{
-    const key = r.cardNumber || cleanFuelVehicle(r);
-    if(!byVehicle[key]) byVehicle[key]={vehicle:cleanFuelVehicle(r),category:fuelCardKind(r),assigned:(r.cardNumber&&fleetCards[r.cardNumber]||{}).assigned_to||'',gallons:0,cost:0,count:0,distance:0,people:{}};
+    const card = fuelCardOf(r);
+    const key = card ? card.card_number : ('?'+cleanFuelVehicle(r));
+    if(!byVehicle[key]) byVehicle[key]={vehicle:cleanFuelVehicle(r),category:fuelCardKind(r),assigned:(card||{}).assigned_to||'',unmatched:!card,gallons:0,cost:0,count:0,distance:0,people:{}};
     const pi = fuelPersonInfo(r); if(pi.name && pi.linked) byVehicle[key].people[pi.name]=(byVehicle[key].people[pi.name]||0)+1;
     byVehicle[key].gallons+=r.gallons;
     byVehicle[key].cost+=r.netCost;
@@ -7687,7 +7702,7 @@ function renderFuelVehicles(){
   rows.forEach(r=>{
     const catColor = r.category==='Truck'?{bg:'#dbeafe',text:'#1d4ed8'}:{bg:'#fef3c7',text:'#92400e'};
     html += `<div style="display:grid;grid-template-columns:2fr 70px 80px 80px 80px 80px 80px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center">
-      <div style="font-weight:500">${r.vehicle}<div style="font-size:11px;color:${r.assigned?'var(--text-3)':'#b45309'};font-weight:400">${r.assigned?(isShared(r.assigned)?'Shared vehicle':'Assigned to '+r.assigned):'No one assigned'}${Object.keys(r.people).filter(n=>n!==r.assigned).length?' · also used by '+Object.keys(r.people).filter(n=>n!==r.assigned).join(', '):''}</div></div>
+      <div style="font-weight:500">${r.vehicle}<div style="font-size:11px;color:${r.assigned?'var(--text-3)':'#b45309'};font-weight:400">${r.unmatched?'Older fill-ups that can\'t be matched to a card':r.assigned?(isShared(r.assigned)?'Shared vehicle':'Assigned to '+r.assigned):'No one assigned'}${Object.keys(r.people).filter(n=>n!==r.assigned).length?' · also used by '+Object.keys(r.people).filter(n=>n!==r.assigned).join(', '):''}</div></div>
       <div><span style="font-size:10px;padding:1px 6px;border-radius:99px;background:${catColor.bg};color:${catColor.text};font-weight:600">${r.category==='Truck'?'Vehicle':r.category}</span></div>
       <div style="font-family:'DM Mono',monospace">${r.count}</div>
       <div style="font-family:'DM Mono',monospace">${fmtNum(r.gallons)}</div>
@@ -7729,7 +7744,7 @@ function cleanFuelDriver(r){
   return r.cardHolder||'Unknown';
 }
 function cleanFuelVehicle(r){
-  const c = r.cardNumber && fleetCards[r.cardNumber]; if(c) return c.name;
+  const c = fuelCardOf(r); if(c) return c.name;
   if(r.cardName) return r.cardName;
   const v = (r.vehicleId||'').trim();
   for(const [k,label] of Object.entries(WEX_VEHICLE_MAP)){

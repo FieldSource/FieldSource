@@ -7699,14 +7699,17 @@ function renderQuoteBuilder(){
     ${flags.length?`<div style="margin-top:14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius-sm);padding:10px 12px;font-size:12px;color:#713f12">
       <b>Check these:</b><ul style="margin:4px 0 0 18px;padding:0">${flags.map(x=>`<li>${escEst(x)}</li>`).join('')}</ul></div>`:''}
 
-    <div style="font-size:13px;font-weight:700;margin:16px 0 8px">Client</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:16px 0 4px"><span style="font-size:13px;font-weight:700">PDF style</span>
+      ${[['estimate','Field Source estimate (like Ryan\u2019s QuickBooks estimate)'],['quote','Client-branded quote (client logo and colors)']].map(([v,l])=>`<button onclick="qq.style='${v}';qqSaveLocal();renderQuoteBuilder()" class="site-chip${(qq.style||'estimate')===v?' active':''}" style="padding:5px 10px;font-size:12px">${l}</button>`).join('')}</div>
+    <div style="font-size:13px;font-weight:700;margin:12px 0 8px">Client</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
       ${f('Contact name','contact_name')}${f('Contact title','contact_title','Treasurer')}
       ${f('Street','street')}${f('City, ST ZIP','city_line')}${f('Contact email','contact_email')}
     </div>
+    <div style="margin-top:10px">${lbl('Reference (optional, one per line)')}<textarea rows="2" oninput="qq.d.reference=this.value;qqSaveLocal()" placeholder="TIPS Contract No. 25010401 (NON-JOC)&#10;Corresponds to Proposed Change Order No. 3" style="width:100%;box-sizing:border-box;font-size:13px;padding:7px 9px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit">${escEst(qq.d.reference||'')}</textarea></div>
     <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:10px">
       <div>${lbl('Client logo')}
-        ${qq.logo?`<img src="${qq.logo}" style="height:46px;border:1px solid var(--border);border-radius:4px;padding:2px;background:#fff;vertical-align:middle">`:'<span style="font-size:12px;color:#b91c1c">Required before the PDF. </span>'}
+        ${qq.logo?`<img src="${qq.logo}" style="height:46px;border:1px solid var(--border);border-radius:4px;padding:2px;background:#fff;vertical-align:middle">`:(qq.style||'estimate')==='estimate'?'<span style="font-size:12px;color:var(--text-3)">Only used for the client-branded style.':'<span style="font-size:12px;color:#b91c1c">Required before the PDF. </span>'}
         <label class="site-chip" style="padding:5px 10px;cursor:pointer;margin-left:6px">${qq.logo?'Replace':'Upload'} logo<input type="file" accept="image/*" style="display:none" onchange="qqUploadLogo(this.files[0])"></label>
       </div>
       <div>${lbl('Accent color')}<input type="color" value="${qq.color||'#1B5E20'}" onchange="qq.color=this.value;qqSaveLocal()"></div>
@@ -7758,7 +7761,8 @@ function renderQuoteBuilder(){
     <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
       <button onclick="qqPdf(false)" class="site-chip" style="padding:8px 14px">📄 Preview PDF</button>
       ${locked
-        ? `<button onclick="qqPdf(true)" class="btn-save" style="padding:8px 16px">⬇ Download final PDF</button>
+        ? `<button onclick="openSendQuote()" class="btn-save" style="padding:8px 16px">✉ Send quote</button>
+           <button onclick="qqPdf(true)" class="site-chip" style="padding:8px 14px">⬇ Download final PDF</button>
            <button onclick="if(confirm('Start a new quote?')){localStorage.removeItem(QQ_KEY);openQuoteBuilder()}" class="site-chip" style="padding:8px 14px">New quote</button>`
         : `<button onclick="qqCreateEstimate()" class="btn-save" style="padding:8px 16px" ${qq.busy?'disabled':''}>Approve and create QuickBooks estimate</button>`}
     </div>`;
@@ -7820,13 +7824,177 @@ async function qqCreateEstimate(customerId){
     }
     await qqSaveClientProfile();
     qqSaveLocal();
-    alert(`QuickBooks estimate ${qq.docNumber?'#'+qq.docNumber+' ':''}created (${fmtEstMoney2(data.total)}).\n\nDownload the final PDF, then email it to the client yourself.`);
+    alert(`QuickBooks estimate ${qq.docNumber?'#'+qq.docNumber+' ':''}created (${fmtEstMoney2(data.total)}).\n\nNext: ✉ Send quote emails the PDF to the client from your Gmail (or download it).`);
   }catch(err){ qq.status = '⚠️ ' + err.message; }
   qq.busy = false; renderQuoteBuilder();
 }
 
-// Customer-facing PDF, laid out like Ryan's build_quote.py.
+// ---- Send the quote PDF from your Gmail ----
+let qqSend = null;
+async function openSendQuote(){
+  const d = qq.d;
+  billOverlay('qq-send', `<div style="padding:30px;text-align:center;color:var(--text-3)">Building the quote PDF…</div>`, 660);
+  try{
+    const pdf = await qqPdf('b64'); if(!pdf) { document.getElementById('qq-send')?.remove(); return; }
+    const st = await invAction({ action:'gmail_status' });
+    const me = (typeof getDisplayName==='function' ? getDisplayName(currentUser&&currentUser.email) : '') || '';
+    const first = String(d.contact_name||'').trim().split(/\s+/)[0];
+    qqSend = { pdf, st, to: d.contact_email||'', cc:'',
+      subject: `Quote${qq.docNumber?' #'+qq.docNumber:''} from Field Source: ${d.title||d.client}`,
+      body: `${first?'Hi '+first:'Hello'},\n\nAttached is our quote${qq.docNumber?' #'+qq.docNumber:''} for ${d.title||'the work we discussed'} (${fmtEstMoney2(qqTotal())}).\n\nTo accept, sign and return the acceptance page, or reply to this email. Let me know if you have any questions or would like to adjust anything.\n\nThank you,\n${me}\nField Source LLC` };
+    renderSendQuote();
+  }catch(err){ billOverlay('qq-send', `<div class="sheet-title">Couldn't get the quote ready</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${escEst(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('qq-send').remove()">Close</button></div>`, 520); }
+}
+function qqSendSave(){ const g = id=>document.getElementById(id); ['to','cc','subject','body'].forEach(k=>{ const el = g('qqs-'+k); if(el) qqSend[k] = el.value; }); }
+function renderSendQuote(){
+  const s = qqSend, d = qq.d;
+  const ready = s.st.gmail_ready && s.st.gmail_from;
+  billOverlay('qq-send', `
+    <div class="sheet-title" style="margin-bottom:2px">Send quote${qq.docNumber?' #'+escEst(qq.docNumber):''}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">${escEst(d.client)} · ${fmtEstMoney2(qqTotal())}</div>
+    ${!s.st.gmail_ready ? `<div style="padding:12px;background:#fef9c3;border-radius:8px;font-size:13px">Gmail sending isn't set up for the tracker yet. Download the PDF and send it yourself for now.</div>`
+      : !s.st.gmail_from ? `<div style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px">Connect your Gmail once so quotes come from your own address. The tracker can only <b>send</b> as you; it can't read your inbox.
+          <div style="margin-top:10px;display:flex;gap:8px"><button class="btn-save" style="flex:none" onclick="qqSendSave();connectGmail()">Connect Gmail</button><button class="btn-cancel" style="flex:none" onclick="qqSendSave();invAction({action:'gmail_status'}).then(x=>{qqSend.st=x;renderSendQuote()})">I've connected, refresh</button></div></div>`
+      : `<div style="font-size:12px;color:var(--text-3);margin-bottom:8px">From: <b style="color:var(--text)">${escEst(s.st.gmail_from)}</b> (your Gmail)</div>`}
+    ${ready ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><div style="${billLbl}">To</div><input id="qqs-to" style="${billInput}" value="${escEst(s.to)}" placeholder="contact@school.org"></div>
+      <div><div style="${billLbl}">CC (optional)</div><input id="qqs-cc" style="${billInput}" value="${escEst(s.cc)}"></div>
+    </div>
+    ${!s.to?'<div style="font-size:12px;color:#b45309;margin-top:4px">No contact email saved for this client. Type one above (it\u2019s saved for next time).</div>':''}
+    <div style="margin-top:10px"><div style="${billLbl}">Subject</div><input id="qqs-subject" style="${billInput}" value="${escEst(s.subject)}"></div>
+    <div style="margin-top:8px"><div style="${billLbl}">Message</div><textarea id="qqs-body" rows="10" style="${billInput};line-height:1.45">${escEst(s.body)}</textarea></div>
+    <div style="margin-top:6px;font-size:12px">📎 ${escEst(s.pdf.name)} (the branded quote) · <a style="cursor:pointer;color:var(--green-dark)" onclick="qqPdf(false)">Preview it</a></div>
+    <div id="qqs-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>` : ''}
+    <div style="display:flex;justify-content:space-between;margin-top:14px;gap:8px">
+      <button class="btn-cancel" onclick="document.getElementById('qq-send').remove()">Cancel</button>
+      ${ready?`<button class="btn-save" id="qqs-go" onclick="qqSendGo()">Send…</button>`:''}
+    </div>`, 660);
+}
+async function qqSendGo(){
+  qqSendSave();
+  const s = qqSend, btn = document.getElementById('qqs-go'), err = document.getElementById('qqs-err');
+  if(!s.to.trim()){ err.textContent = 'Enter who it goes to.'; return; }
+  if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent = `Yes, email it from ${s.st.gmail_from} to ${s.to.trim()}${s.cc.trim()?' (cc '+s.cc.trim()+')':''}`; btn.style.background='#b45309'; return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try{
+    const res = await invAction({ action:'send_quote_gmail', to:s.to, cc:s.cc, subject:s.subject, body:s.body, filename:s.pdf.name, pdf_b64:s.pdf.b64, qb_estimate_id: qq.qbId||'', doc_number: qq.docNumber||'' });
+    if(!qq.d.contact_email && s.to){ qq.d.contact_email = s.to.split(/[,;]/)[0].trim(); try{ await qqSaveClientProfile(); }catch(e){} }
+    document.getElementById('qq-send').remove();
+    alert(`✓ Quote${qq.docNumber?' #'+qq.docNumber:''} was emailed to ${res.sent_to} from ${res.from}.`);
+  }catch(e){ err.textContent = 'Not sent: ' + e.message; btn.disabled = false; btn.dataset.armed=''; btn.style.background=''; btn.textContent = 'Send…'; }
+}
+
+// Field Source estimate PDF, laid out like Ryan's QuickBooks estimate (e.g. WCH Estimate 1829).
+async function qqPdfEstimate(final){
+  const d = qq.d;
+  await qqLoadFsLogo();
+  await qqLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'letter' });
+  const W = 612, H = 792, M = 54, R = W - M, BOTTOM = H - 64;
+  const DG = [30,86,49], LG = [141,198,63], BAND = [238,245,230], INK = [34,34,34], GREY = [96,96,96], RULE = [215,215,215];
+  const money = v=>(v<0?'-':'')+'$'+Math.abs(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const fill = c=>doc.setFillColor(c[0],c[1],c[2]), ink = c=>doc.setTextColor(c[0],c[1],c[2]), draw = c=>doc.setDrawColor(c[0],c[1],c[2]);
+  const font = (st,sz)=>{ doc.setFont('helvetica', st); doc.setFontSize(sz); };
+  const num = qq.docNumber || '';
+  const dateStr = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+  const company = 'Field Source Sports Field Consulting LLC', place = 'Dublin, Ohio';
+  const itemName = it=>String(it.qb_item_name || it.title || '').replace(/\s*:\s*/g, ': ');
+  let y = 0;
+
+  // header (first page)
+  if(qqFsLogo){ const lh = 52, lw = lh*qqFsLogo.w/qqFsLogo.h; doc.addImage(qqFsLogo.data, 'PNG', M, 36, lw, lh); ink([60,140,60]); font('italic',10.5); doc.text('Prepare to Play', M+lw+12, 84); }
+  else { ink(DG); font('bold',18); doc.text('Field Source', M, 76); ink([60,140,60]); font('italic',10.5); doc.text('Prepare to Play', M+120, 76); }
+  ink(GREY); font('normal',8.5); doc.text(company, R, 66, {align:'right'}); doc.text(place, R, 78, {align:'right'});
+  draw(DG); doc.setLineWidth(2); doc.line(M, 103, R, 103);
+  ink(DG); font('bold',15); doc.text('Estimate', M, 128);
+  ink(INK); font('normal',10); doc.text(doc.splitTextToSize(String(d.title||''), 330), M, 143);
+  ink(GREY); font('normal',9); doc.text(String(d.client||''), M, 156);
+  ink(DG); font('bold',13); doc.text(num ? `No. ${num}` : 'No. (pending)', R, 128, {align:'right'});
+  ink(GREY); font('normal',9); doc.text(`Estimate date: ${dateStr}`, R, 143, {align:'right'}); doc.text('Status: Pending', R, 156, {align:'right'});
+  draw(LG); doc.setLineWidth(1.5); doc.line(M, 170, R, 170);
+
+  // bill to / reference
+  y = 190;
+  const refLines = String(d.reference||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  ink(DG); font('bold',9.5); doc.text('BILL TO', M, y); if(refLines.length) doc.text('REFERENCE', 300, y);
+  const bill = [d.client, [d.contact_name, d.contact_title].filter(Boolean).join(', ')].filter(Boolean);
+  bill.forEach((t,i)=>{ ink(i?GREY:INK); font('normal', i?8.5:9); doc.text((i?'Attn: ':'')+String(t), M, y+13+i*11.5, {maxWidth:230}); });
+  refLines.forEach((t,i)=>{ ink(i?GREY:INK); font('normal', i?8.5:9); doc.text(t, 300, y+13+i*11.5, {maxWidth:R-300}); });
+  y += 14 + Math.max(bill.length, refLines.length, 1)*11.5 + 10;
+
+  // items
+  const cQ = 392, cRate = 458, cAmt = R - 8, dw = 330;
+  const thead = ()=>{ fill(DG); doc.rect(M, y, R-M, 19, 'F'); ink([255,255,255]); font('bold',8.5);
+    doc.text('ITEM / DESCRIPTION', M+8, y+12.5); doc.text('QTY', cQ, y+12.5, {align:'center'}); doc.text('RATE', cRate, y+12.5, {align:'center'}); doc.text('AMOUNT', cAmt, y+12.5, {align:'right'}); y += 19; };
+  const newPage = ()=>{ doc.addPage(); y = 54; };
+  thead(); y += 8;
+  let total = 0;
+  (d.items||[]).forEach(it=>{
+    const qty = Number(it.qty)||0, rate = Number(it.unit_price)||0, amt = Math.round(qty*rate*100)/100; total += amt;
+    font('normal',8.3);
+    const desc = String(it.description || it.qb_item_desc || (it.title && it.title!==it.qb_item_name ? it.title : '') || '').trim();
+    const dl = desc ? doc.splitTextToSize(desc, dw-14) : [];
+    const bl = (it.bullets||[]).filter(Boolean).map(b=>doc.splitTextToSize('- '+b, dw-22));
+    const hh = 16 + dl.length*10.5 + bl.reduce((t,l)=>t+l.length*10.5,0) + 14;
+    if(y + hh > BOTTOM){ newPage(); thead(); y += 8; }
+    ink([40,120,60]); font('bold',9.5); doc.text(itemName(it), M+8, y+10, {maxWidth: dw});
+    ink(INK); font('normal',9); doc.text(String(qty), cQ, y+10, {align:'center'}); doc.text(money(rate), cRate, y+10, {align:'center'});
+    font('bold',9); doc.text(money(amt), cAmt, y+10, {align:'right'});
+    let by = y + 23; ink(GREY); font('normal',8.3);
+    if(dl.length){ doc.text(dl, M+17, by); by += dl.length*10.5 + 2; }
+    ink(INK); bl.forEach(l=>{ doc.text(l, M+22, by); by += l.length*10.5; });
+    y = by + 10;
+    draw(RULE); doc.setLineWidth(0.5); doc.line(M, y, R, y); y += 8;
+  });
+
+  // totals
+  if(y + 86 > BOTTOM) newPage();
+  y += 14;
+  const tx = 316;
+  ink(INK); font('normal',9.5); doc.text('Subtotal', tx+10, y); doc.text(money(total), R-8, y, {align:'right'});
+  y += 17; doc.text('Tax', tx+10, y); doc.text(money(0), R-8, y, {align:'right'});
+  y += 9; fill(BAND); doc.rect(tx, y, R-tx, 22, 'F');
+  ink(DG); font('bold',11); doc.text('ESTIMATE TOTAL', tx+10, y+15); doc.text(money(total), R-8, y+15, {align:'right'});
+  y += 48;
+
+  // notes
+  const notes = (d.notes||[]).map(n=>String(n).trim()).filter(Boolean);
+  if(notes.length){
+    if(y + 30 > BOTTOM) newPage();
+    ink(DG); font('bold',9.5); doc.text('NOTES', M, y); y += 12;
+    notes.forEach(n=>{ font('normal',8); const t = doc.splitTextToSize('- '+n, R-M-6); if(y + t.length*10 > BOTTOM) newPage(); ink(GREY); doc.text(t, M+2, y); y += t.length*10; });
+    y += 14;
+  }
+
+  // signatures
+  if(y + 60 > BOTTOM) newPage();
+  y += 26;
+  draw([190,190,190]); doc.setLineWidth(0.6);
+  ink(GREY); font('normal',8.5);
+  const acc = `Accepted by, ${d.client||''}`, sx = Math.min(372, R - doc.getTextWidth(acc));   // keep the client's name on one line
+  doc.line(M, y, M+190, y); doc.line(sx, y, R, y);
+  doc.text(`${qq.preparedBy||'Field Source'}, Field Source`, M, y+12); doc.text('Date', M, y+23);
+  doc.text(acc, sx, y+12); doc.text('Date', sx, y+23);
+
+  // footer on every page
+  const pages = doc.getNumberOfPages();
+  for(let pg=1; pg<=pages; pg++){
+    doc.setPage(pg); draw(LG); doc.setLineWidth(1.5); doc.line(M, H-44, R, H-44);
+    ink(GREY); font('normal',7.5); doc.text(`${company}  |  ${place}`, M, H-32);
+    doc.text(`Estimate No. ${num||'(pending)'}  |  Page ${pg} of ${pages}`, R, H-32, {align:'right'});
+  }
+  doc.setProperties({ title: `Estimate ${num} - ${d.title||''}`, author: 'Field Source' });
+  const short = String(d.client||'').replace(/\b(Local|City|Exempted Village)?\s*(School District|Schools|School)\b/gi,'').trim();
+  const name = `${new Date().toLocaleDateString('en-CA')} ${short||'Field Source'} Estimate${num?' '+num:''} - ${d.title||''}`.replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,' ').trim()+'.pdf';
+  if(final==='b64') return { name, b64: doc.output('datauristring').split(',')[1] };
+  if(final) doc.save(name); else window.open(URL.createObjectURL(doc.output('blob')), '_blank');
+}
+
+// Client-branded quote PDF, laid out like Ryan's build_quote.py.
 async function qqPdf(final){
+  if((qq.style||'estimate')==='estimate') return qqPdfEstimate(final);
   const d = qq.d;
   if(!qq.logo){ alert("Upload the client's logo first. The quote isn't built without it."); return; }
   await qqLoadFsLogo();
@@ -7947,6 +8115,7 @@ async function qqPdf(final){
 
   doc.setProperties({ title: 'Quote - '+(d.title||''), author: 'Field Source' });
   const name = `${new Date().toLocaleDateString('en-CA')} ${d.client||''} Quote${qq.docNumber?' '+qq.docNumber:''} - ${d.title||''}`.replace(/[\\/:*?"<>|]/g,'').trim()+'.pdf';
+  if(final==='b64') return { name, b64: doc.output('datauristring').split(',')[1] };
   if(final) doc.save(name);
   else window.open(URL.createObjectURL(doc.output('blob')), '_blank');
 }

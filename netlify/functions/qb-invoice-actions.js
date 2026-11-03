@@ -16,6 +16,7 @@ const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY;
 const QB_API = 'https://quickbooks.api.intuit.com';
 const BILLERS = ['jake@fieldsourceohio.com', 'ryan@fieldsourceohio.com', 'gibson@fieldsourceohio.com'];
+const QUOTE_SENDERS = [...BILLERS, 'matt@fieldsourceohio.com', 'haller@fieldsourceohio.com'];
 const json = (code, obj) => ({ statusCode: code, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
 
 async function sb(method, path, body, prefer = 'return=representation') {
@@ -82,6 +83,31 @@ exports.handler = async function (event) {
   if (!user) return json(401, { error: 'Please sign in again.' });
   let b; try { b = JSON.parse(event.body || '{}'); } catch (e) { return json(400, { error: 'Bad request' }); }
   const canBill = BILLERS.includes(String(user.email).toLowerCase());
+  if (['gmail_status', 'send_quote_gmail'].includes(b.action) && !QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed to send quotes.' });
+  if (b.action === 'gmail_status') {
+    const g = await sb('GET', `gmail_tokens?user_email=eq.${encodeURIComponent(user.email.toLowerCase())}&select=google_email`).catch(() => []);
+    return json(200, { gmail_ready: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET), gmail_from: g && g[0] ? g[0].google_email : '' });
+  }
+  if (b.action === 'send_quote_gmail') {
+    try {
+      const ok = e => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e);
+      const toList = String(b.to || '').split(/[,;]\s*/).map(x => x.trim()).filter(Boolean), ccList = String(b.cc || '').split(/[,;]\s*/).map(x => x.trim()).filter(Boolean);
+      if (!toList.length || !toList.every(ok)) throw new Error('Check the To email address.');
+      if (ccList.length && !ccList.every(ok)) throw new Error('Check the CC email address.');
+      if (!String(b.subject || '').trim() || !String(b.body || '').trim()) throw new Error('The subject and message can\'t be empty.');
+      if (!b.pdf_b64 || b.pdf_b64.length > 9e6) throw new Error('The quote PDF is missing or too large.');
+      const g = await gmailAccess(user.email); if (!g) throw new Error('Connect your Gmail first.');
+      const raw = mimeMessage({ from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), body: String(b.body), filename: String(b.filename || 'Field Source Quote.pdf').replace(/[\r\n"]/g, ''), pdf: Buffer.from(b.pdf_b64, 'base64') });
+      const gr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: `Bearer ${g.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
+      const gd = await gr.json().catch(() => ({}));
+      if (!gr.ok) throw new Error(`Gmail didn't send it: ${(gd.error && gd.error.message) || gr.status}`);
+      // Mark the QuickBooks estimate as emailed and save the client's address on it
+      if (b.qb_estimate_id) { try { const qb = await qbAuth(); const est = (await qb.call(`estimate/${b.qb_estimate_id}`)).Estimate;
+        await qb.call('estimate', { method: 'POST', body: JSON.stringify({ Id: est.Id, SyncToken: est.SyncToken, sparse: true, BillEmail: { Address: toList.join(', ') }, EmailStatus: 'EmailSent' }) }); } catch (e) { console.warn('mark estimate sent', e.message); } }
+      await logActivity('quote_sent_gmail', user, { estimate: b.doc_number || '', qb_estimate_id: b.qb_estimate_id || '', from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), gmail_id: gd.id });
+      return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
+    } catch (e) { return json(500, { error: e.message }); }
+  }
   if (['create', 'send', 'send_gmail'].includes(b.action) && !canBill) return json(403, { error: 'Only Jake, Ryan and Ali can create or send invoices.' });
 
   try {

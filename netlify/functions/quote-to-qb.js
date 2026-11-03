@@ -98,9 +98,19 @@ exports.handler = async function (event) {
       };
     });
 
+    // QuickBooks has custom transaction numbers on, so it won't number estimates made through the API.
+    // Use the next number after the highest recent estimate number.
+    let nextNum = null;
+    try {
+      const recent = await qb(`query?query=${encodeURIComponent('SELECT DocNumber FROM Estimate ORDERBY MetaData.CreateTime DESC MAXRESULTS 200')}`);
+      const nums = ((recent.QueryResponse && recent.QueryResponse.Estimate) || []).map(e => parseInt(e.DocNumber, 10)).filter(n => !isNaN(n));
+      if (nums.length) nextNum = String(Math.max(...nums) + 1);
+    } catch (e) { console.warn('next estimate number', e.message); }
+
     const created = await qb('estimate', {
       method: 'POST',
       body: JSON.stringify({
+        ...(nextNum ? { DocNumber: nextNum } : {}),
         CustomerRef: { value: String(custId) },
         TxnDate: new Date().toISOString().slice(0, 10),
         Line: lines,

@@ -7255,9 +7255,156 @@ let fuelView = 'transactions'; // 'transactions','vehicles','persons','trends'
 let fuelImporting = false;
 let fuelLoaded = false;
 
+// ── WEX cards & drivers: who and what each fill-up really is ──
+let fleetCards = {};    // card_number -> {name, kind, assigned_to, ...}
+let fleetDrivers = {};  // driver_id -> {wex_name, person, is_vehicle}
+async function loadFleetMaps(){
+  try{
+    const [c, d] = await Promise.all([ sbFetch('GET','/rest/v1/fleet_cards?select=*'), sbFetch('GET','/rest/v1/fleet_drivers?select=*') ]);
+    fleetCards = {}; (c||[]).forEach(x=>fleetCards[x.card_number]=x);
+    fleetDrivers = {}; (d||[]).forEach(x=>fleetDrivers[x.driver_id]=x);
+  }catch(e){ console.warn('Fleet cards/drivers not set up yet', e.message); }
+}
+function fleetPeople(){
+  const s = new Set();
+  Object.values(fleetDrivers).forEach(d=>{ if(!d.is_vehicle && d.person) s.add(d.person); if(d.person) s.add(d.person); });
+  Object.values(fleetCards).forEach(c=>{ if(c.assigned_to) s.add(c.assigned_to); });
+  return [...s].sort();
+}
+function fuelCardKind(r){
+  const c = r.cardNumber && fleetCards[r.cardNumber];
+  if(c && c.kind) return c.kind==='Can' ? 'Can' : 'Truck';
+  return r.category || 'Can';
+}
+// Who: the driver ID's person → else the card's assigned person → else WEX's name
+function fuelPersonInfo(r){
+  const d = r.driverId && fleetDrivers[r.driverId];
+  if(d && d.person) return { name:d.person, linked:true };
+  const c = r.cardNumber && fleetCards[r.cardNumber];
+  if(c && c.assigned_to) return { name:c.assigned_to, linked:true };
+  if(d && !d.is_vehicle && d.wex_name) return { name:d.wex_name, linked:true };
+  if(d && d.is_vehicle) return { name:`Not linked: ${d.wex_name}`, linked:false };
+  return { name:null, linked:false };
+}
+async function fleetUpsert(table, conflict, rows){
+  if(!rows.length) return;
+  if(typeof ensureFreshToken==='function') await ensureFreshToken();
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=${conflict}`, {
+    method:'POST', headers:{ apikey:SUPABASE_KEY, Authorization:'Bearer '+sbToken(), 'Content-Type':'application/json', Prefer:'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(rows) });
+  if(!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0,200)}`);
+}
+function wexParseCSV(text){
+  const lines = text.replace(/^\uFEFF/,'').split(/\r?\n/).filter(l=>l.trim());
+  const parse = line=>{ const out=[]; let cur='', q=false; for(let i=0;i<line.length;i++){ const ch=line[i]; if(ch==='"'){ if(q && line[i+1]==='"'){ cur+='"'; i++; } else q=!q; } else if(ch===',' && !q){ out.push(cur.trim()); cur=''; } else cur+=ch; } out.push(cur.trim()); return out; };
+  const headers = parse(lines[0]||'');
+  return { headers, rows: lines.slice(1).map(l=>{ const v = parse(l); const o = {}; headers.forEach((h,i)=>o[h]=v[i]??''); return o; }) };
+}
+// One button for all three WEX exports
+async function importWexFile(file){
+  const text = await file.text();
+  if(!text.trim()){ alert("That file is empty (0 bytes). Download it from WEX again and make sure the download finishes."); return; }
+  const { headers } = wexParseCSV(text.split(/\r?\n/)[0]);
+  if(headers.includes('Trans ID')) return importFuelCSV(file);                       // Transactions (also has Driver Prompt ID, so check it first)
+  if(headers.includes('Usage Type') && headers.includes('Card Number')) return importWexCards(text);
+  if(headers.includes('Driver Prompt ID') && headers.includes('Last Name')) return importWexDrivers(text);
+  alert("This doesn't look like a WEX Transactions, Cards, or Drivers export.");
+}
+async function importWexCards(text){
+  const statusEl = document.getElementById('fuel-import-status');
+  const { rows } = wexParseCSV(text);
+  const known = new Set(Object.keys(fleetCards));
+  const people = Object.values(fleetDrivers).filter(d=>!d.is_vehicle && d.person).map(d=>d.person);
+  const guess = name=>{ // only when exactly one person matches the card's first word(s)
+    const n = name.replace(/\b(can|truck|vehicle)\b/ig,'').trim().toLowerCase(); if(!n) return '';
+    const hits = people.filter(p=>{ const pl = p.toLowerCase(); return pl===n || pl.startsWith(n+' ') || (n.split(' ').length===2 && pl.startsWith(n.split(' ')[0]+' '+n.split(' ')[1][0])); });
+    return hits.length===1 ? hits[0] : '';
+  };
+  const fresh = [], existing = [];
+  rows.forEach(r=>{
+    const num = r['Card Number']; if(!num) return;
+    const name = (r['Custom Vehicle/Asset ID'] && r['Custom Vehicle/Asset ID']!=='N/A' ? r['Custom Vehicle/Asset ID'] : '') || r['Vehicle Description'] || r['Emboss Line 2'] || num;
+    const base = { card_number:num, name, kind: /\bcan\b/i.test(name) ? 'Can' : 'Vehicle', vin:r['VIN']||'', plate:r['License Plate']||'', status:r['Status']||'', updated_at:new Date().toISOString() };
+    if(known.has(num)) existing.push(base); else fresh.push({ ...base, assigned_to: guess(name) });
+  });
+  try{ await fleetUpsert('fleet_cards','card_number', fresh); await fleetUpsert('fleet_cards','card_number', existing); }
+  catch(e){ alert('Could not save cards: '+e.message+'\n\nHas fleet-cards-drivers.sql been run in Supabase?'); return; }
+  await loadFleetMaps();
+  if(statusEl) statusEl.textContent = `✓ Cards: ${fresh.length} new, ${existing.length} updated. Check who each card is assigned to under Cards & Drivers.`;
+  fuelView = 'setup'; renderFuel();
+}
+async function importWexDrivers(text){
+  const statusEl = document.getElementById('fuel-import-status');
+  const { rows } = wexParseCSV(text);
+  const isVeh = r=>/^TR\s*\d+/i.test(r['First Name']||'') || /^truck\b/i.test(r['Last Name']||'') || /^\d{4}$/.test(r['Last Name']||'');
+  const realPeople = rows.filter(r=>!isVeh(r)).map(r=>({ first:r['First Name'], last:r['Last Name'], full:`${r['First Name']} ${r['Last Name']}`.trim() }));
+  const known = new Set(Object.keys(fleetDrivers));
+  const fresh = [], existing = [];
+  rows.forEach(r=>{
+    const id = r['Driver Prompt ID']; if(!id) return;
+    const veh = isVeh(r), wexName = `${r['First Name']} ${r['Last Name']}`.trim();
+    let person = '';
+    if(!veh) person = wexName;
+    else { const same = realPeople.filter(p=>p.last.toLowerCase()===(r['Last Name']||'').toLowerCase()); if(same.length===1) person = same[0].full; }
+    const base = { driver_id:id, wex_name:wexName, is_vehicle:veh, status:r['Status']||'', updated_at:new Date().toISOString() };
+    if(known.has(id)) existing.push(base); else fresh.push({ ...base, person });
+  });
+  try{ await fleetUpsert('fleet_drivers','driver_id', fresh); await fleetUpsert('fleet_drivers','driver_id', existing); }
+  catch(e){ alert('Could not save drivers: '+e.message+'\n\nHas fleet-cards-drivers.sql been run in Supabase?'); return; }
+  await loadFleetMaps();
+  if(statusEl) statusEl.textContent = `✓ Drivers: ${fresh.length} new, ${existing.length} updated. Truck-number IDs that couldn't be matched to one person are flagged under Cards & Drivers.`;
+  fuelView = 'setup'; renderFuel();
+}
+async function saveFleetField(table, keyCol, key, field, value){
+  try{
+    await sbFetch('PATCH', `/rest/v1/${table}?${keyCol}=eq.${encodeURIComponent(key)}`, { [field]: value, updated_at:new Date().toISOString() });
+    (table==='fleet_cards'?fleetCards:fleetDrivers)[key][field] = value;
+    const st = document.getElementById('fuel-import-status'); if(st) st.textContent = '✓ Saved';
+  }catch(e){ alert('Could not save: '+e.message); }
+}
+function renderFuelSetup(){
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const people = fleetPeople();
+  const dl = `<datalist id="fleet-people">${people.map(p=>`<option value="${esc(p)}">`).join('')}</datalist>`;
+  const usage = {}; fuelTransactions.forEach(r=>{ if(r.cardNumber) usage['c'+r.cardNumber]=(usage['c'+r.cardNumber]||0)+1; if(r.driverId) usage['d'+r.driverId]=(usage['d'+r.driverId]||0)+1; });
+  const cards = Object.values(fleetCards).sort((a,b)=>(a.kind||'').localeCompare(b.kind||'') || a.name.localeCompare(b.name));
+  const drivers = Object.values(fleetDrivers).sort((a,b)=>(b.is_vehicle - a.is_vehicle) || (a.wex_name||'').localeCompare(b.wex_name||''));
+  const th = 'font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)';
+  const td = 'padding:7px 10px;border-top:1px solid var(--border);font-size:13px';
+  const inp = 'font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
+  if(!cards.length && !drivers.length) return `<div style="padding:24px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:14px;line-height:1.6">
+    No cards or drivers loaded yet. In WEX, export <b>Cards</b> and <b>Drivers</b> as CSV, then upload each with <b>Import WEX file</b> above. The button recognizes which export it is.</div>`;
+  return `${dl}
+  <div style="font-size:13px;color:var(--text-2);margin-bottom:10px">Set who each card belongs to and who each Driver ID really is. Fuel totals by vehicle and by person use these. Re-importing the WEX Cards or Drivers file adds new ones without changing what you set here.</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;align-items:start">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="padding:10px 12px;font-weight:700">Cards <span style="font-weight:400;color:var(--text-3);font-size:12px">${cards.length}</span></div>
+      <table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Card</th><th style="${th}">Type</th><th style="${th}">Assigned to</th><th style="${th};text-align:right">Fill-ups</th></tr></thead><tbody>
+      ${cards.map(c=>`<tr><td style="${td}"><b>${esc(c.name)}</b><div style="font-size:11px;color:var(--text-3)">${esc(c.card_number)}${c.plate?' · '+esc(c.plate):''}</div></td>
+        <td style="${td}"><select style="${inp}" onchange="saveFleetField('fleet_cards','card_number','${esc(c.card_number)}','kind',this.value)">${['Vehicle','Can'].map(k=>`<option${c.kind===k?' selected':''}>${k}</option>`).join('')}</select></td>
+        <td style="${td}"><input style="${inp};${c.assigned_to?'':'border-color:#f59e0b'}" list="fleet-people" value="${esc(c.assigned_to)}" placeholder="Who uses it?" onchange="saveFleetField('fleet_cards','card_number','${esc(c.card_number)}','assigned_to',this.value.trim())"></td>
+        <td style="${td};text-align:right;color:var(--text-3)">${usage['c'+c.card_number]||0}</td></tr>`).join('')}
+      </tbody></table></div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="padding:10px 12px;font-weight:700">Driver IDs <span style="font-weight:400;color:var(--text-3);font-size:12px">${drivers.length}</span></div>
+      <table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">In WEX as</th><th style="${th}">Is really</th><th style="${th};text-align:right">Fill-ups</th></tr></thead><tbody>
+      ${drivers.map(d=>`<tr><td style="${td}">${esc(d.wex_name)}<div style="font-size:11px;color:var(--text-3)">ID ${esc(d.driver_id)}${d.is_vehicle?' · <span style="color:#b45309">truck number, not a person</span>':''}</div></td>
+        <td style="${td}"><input style="${inp};${d.person?'':'border-color:#f59e0b'}" list="fleet-people" value="${esc(d.person)}" placeholder="${d.is_vehicle?'Who drives this truck?':'Name'}" onchange="saveFleetField('fleet_drivers','driver_id','${esc(d.driver_id)}','person',this.value.trim())"></td>
+        <td style="${td};text-align:right;color:var(--text-3)">${usage['d'+d.driver_id]||0}</td></tr>`).join('')}
+      </tbody></table></div>
+  </div>
+  <div style="font-size:12px;color:var(--text-3);margin-top:10px">Orange boxes still need a name. For fill-ups where the Driver ID isn't linked to anyone, the card's assigned person is used instead.</div>`;
+}
+
 async function loadFuelTransactions(){
   try {
-    const data = await sbFetch('GET', '/rest/v1/fuel_transactions?select=*&order=transaction_date.desc&limit=1000');
+    const data = [];
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    for(let from=0; from<100000; from+=1000){
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/fuel_transactions?select=*&order=transaction_date.desc`, { headers:{ apikey:SUPABASE_KEY, Authorization:'Bearer '+sbToken(), Range:`${from}-${from+999}` } });
+      const page = r.ok ? await r.json() : []; data.push(...page); if(page.length < 1000) break;
+    }
+    await loadFleetMaps();
     fuelLoaded = true;
     fuelTransactions = (data||[]).map(r=>({
       id: r.id,
@@ -7277,6 +7424,9 @@ async function loadFuelTransactions(){
       costPerDist: Number(r.cost_per_distance)||0,
       merchant: r.merchant_name||'',
       wexId: r.wex_trans_id||'',
+      cardNumber: r.card_number||'',
+      cardName: r.card_name||'',
+      driverId: r.driver_id||'',
     }));
   } catch(e){ fuelTransactions = []; fuelLoaded = true; }
 }
@@ -7322,8 +7472,14 @@ async function importFuelCSV(file){
   if(statusEl) statusEl.textContent = 'Processing...';
 
   // Get existing wex_trans_ids for dedup
-  const existing = await sbFetch('GET', '/rest/v1/fuel_transactions?select=wex_trans_id');
-  const existingIds = new Set((existing||[]).map(r=>r.wex_trans_id));
+  const existingIds = new Set();
+  for(let from=0; from<200000; from+=1000){
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/fuel_transactions?select=wex_trans_id`, { headers:{ apikey:SUPABASE_KEY, Authorization:'Bearer '+sbToken(), Range:`${from}-${from+999}` } });
+    const page = r.ok ? await r.json() : [];
+    page.forEach(x=>existingIds.add(x.wex_trans_id));
+    if(page.length < 1000) break;
+  }
+  const seenInFile = {};
 
   let added=0, skipped=0, errors=0;
   const rows = [];
@@ -7331,12 +7487,20 @@ async function importFuelCSV(file){
   for(let i=1; i<lines.length; i++){
     const vals = parseCSVLine(lines[i]);
     if(vals.length < 10) continue;
-    const wexId = vals[col('Trans ID')]||'';
-    if(existingIds.has(wexId)){ skipped++; continue; }
+    const baseId = vals[col('Trans ID')]||'';
+    // WEX can put two lines on one transaction (fuel + coupon/discount); keep both with distinct keys
+    seenInFile[baseId] = (seenInFile[baseId]||0) + 1;
+    const wexId = seenInFile[baseId]===1 ? baseId : `${baseId}-${(vals[col('Product')]||'line').trim()}${seenInFile[baseId]>2?'-'+seenInFile[baseId]:''}`;
+    const isExisting = existingIds.has(wexId);
 
     const emboss = vals[col('Emboss Line 2')]||'';
     const vehicleDesc = vals[col('Vehicle Description')]||'';
-    const category = classifyFuel(emboss, vehicleDesc);
+    const assetId = (vals[col('Custom Vehicle/Asset ID')]||'').trim();
+    const cardName = (assetId && assetId!=='N/A' ? assetId : '') || vehicleDesc || emboss;
+    const known = fleetCards[vals[col('Card Number')]||''];
+    const category = known ? (known.kind==='Can'?'Can':'Truck') : (cardName ? (/\bcan\b/i.test(cardName)?'Can':'Truck') : classifyFuel(emboss, vehicleDesc));
+    let driverId = '';
+    [[col('Prompt 1 Type'),col('Prompt 1 Value')],[col('Prompt 2 Type'),col('Prompt 2 Value')]].forEach(([t,v])=>{ if(t>=0 && /driver/i.test(vals[t]||'') && !driverId) driverId = (vals[v]||'').trim(); });
 
     const driverLast = vals[col('Driver Last Name')]||'';
     const driverFirst = vals[col('Driver First Name')]||'';
@@ -7358,24 +7522,38 @@ async function importFuelCSV(file){
       cost_per_distance: parseFloat(vals[col('Cost Per Distance')])||0,
       merchant_name: vals[col('Merchant Name')]||'',
       wex_trans_id: wexId,
+      card_number: vals[col('Card Number')]||'',
+      card_name: cardName,
+      driver_id: driverId,
     };
     if(!row.transaction_date || !wexId) continue;
+    row._existing = isExisting;
     rows.push(row);
   }
 
   // Insert in batches of 50
+  const errMsgs = [];
+  const clean = r=>{ const o = { ...r }; delete o._existing; return o; };
   for(let i=0; i<rows.length; i+=50){
     const batch = rows.slice(i, i+50);
     try {
-      await sbFetch('POST', '/rest/v1/fuel_transactions', batch);
-      added += batch.length;
-    } catch(e){ errors += batch.length; console.error('Fuel import error:', e); }
+      await fleetUpsert('fuel_transactions', 'wex_trans_id', batch.map(clean));   // new rows added, existing ones get card/driver filled in
+      batch.forEach(r=>r._existing ? skipped++ : added++);
+    } catch(e){
+      // Retry one at a time so a single problem row doesn't block the rest
+      for(const row of batch){
+        try{ await fleetUpsert('fuel_transactions', 'wex_trans_id', [clean(row)]); row._existing ? skipped++ : added++; }
+        catch(e2){ errors++; if(errMsgs.length<3) errMsgs.push(`${row.transaction_date} #${row.wex_trans_id}: ${String(e2.message||e2).slice(0,140)}`); }
+      }
+    }
     if(statusEl) statusEl.textContent = `Processing... ${added} added so far`;
   }
+  if(errMsgs.length) console.error('Fuel import errors:', errMsgs);
 
   await loadFuelTransactions();
   const total = fuelTransactions.length;
-  if(statusEl) statusEl.textContent = `✓ Done: ${added} new, ${skipped} duplicates skipped, ${errors} errors. ${total} total in database.`;
+  if(statusEl) statusEl.textContent = `✓ Done: ${added} new, ${skipped} already here (card and driver details refreshed), ${errors} errors. ${total} total in database.`;
+  if(errors) alert(`${errors} transaction${errors===1?'':'s'} couldn't be imported:\n\n${errMsgs.join('\n')}${errors>errMsgs.length?'\n…':''}`);
   renderFuelDashboard();
 }
 
@@ -7386,7 +7564,7 @@ function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T12:00:00'); return d
 
 function renderFuel(){
   const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
-  const canImport = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com'].includes(userEmail);
+  const canImport = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes(userEmail);
 
   if(!fuelLoaded){
     loadFuelTransactions().then(()=>renderFuel());
@@ -7399,8 +7577,8 @@ function renderFuel(){
       <div style="font-size:18px;font-weight:700;color:var(--text)">Fuel Tracking</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${canImport?`<label style="padding:6px 14px;background:var(--green);color:#fff;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">
-          Import WEX CSV
-          <input type="file" accept=".csv" style="display:none" onchange="importFuelCSV(this.files[0]).then(()=>this.value='')">
+          Import WEX file
+          <input type="file" accept=".csv" style="display:none" title="Transactions, Cards, or Drivers export" onchange="importWexFile(this.files[0]).then(()=>this.value='')">
         </label>`:''}
         <button onclick="exportFuelCSV()" style="padding:6px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text-2)">Download CSV</button>
       </div>
@@ -7409,7 +7587,7 @@ function renderFuel(){
 
     <!-- Sub-tabs -->
     <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
-      ${[['transactions','Transactions'],['vehicles','By Vehicle'],['persons','By Person'],['trends','Monthly Trends']].map(([v,l])=>`<button onclick="fuelView='${v}';renderFuelDashboard()" style="padding:8px 16px;border:none;background:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border-bottom:2px solid ${fuelView===v?'var(--green)':'transparent'};margin-bottom:-2px;color:${fuelView===v?'var(--green-dark)':'var(--text-2)'}">${l}</button>`).join('')}
+      ${[['transactions','Transactions'],['vehicles','By Vehicle'],['persons','By Person'],['trends','Monthly Trends'],['setup','Cards & Drivers']].map(([v,l])=>`<button onclick="fuelView='${v}';renderFuelDashboard()" style="padding:8px 16px;border:none;background:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border-bottom:2px solid ${fuelView===v?'var(--green)':'transparent'};margin-bottom:-2px;color:${fuelView===v?'var(--green-dark)':'var(--text-2)'}">${l}</button>`).join('')}
     </div>
     <div id="fuel-dashboard"></div>
   </div>`;
@@ -7425,6 +7603,7 @@ function renderFuelDashboard(){
   else if(fuelView==='vehicles') el.innerHTML = renderFuelVehicles();
   else if(fuelView==='persons') el.innerHTML = renderFuelPersons();
   else if(fuelView==='trends') el.innerHTML = renderFuelTrends();
+  else if(fuelView==='setup') el.innerHTML = renderFuelSetup();
 }
 
 function renderFuelTransactions(){
@@ -7476,8 +7655,9 @@ function renderFuelTransactions(){
 function renderFuelVehicles(){
   const byVehicle = {};
   fuelTransactions.forEach(r=>{
-    const key = cleanFuelVehicle(r);
-    if(!byVehicle[key]) byVehicle[key]={vehicle:key,category:r.category,gallons:0,cost:0,count:0,distance:0};
+    const key = r.cardNumber || cleanFuelVehicle(r);
+    if(!byVehicle[key]) byVehicle[key]={vehicle:cleanFuelVehicle(r),category:fuelCardKind(r),assigned:(r.cardNumber&&fleetCards[r.cardNumber]||{}).assigned_to||'',gallons:0,cost:0,count:0,distance:0,people:{}};
+    const pi = fuelPersonInfo(r); if(pi.name && pi.linked) byVehicle[key].people[pi.name]=(byVehicle[key].people[pi.name]||0)+1;
     byVehicle[key].gallons+=r.gallons;
     byVehicle[key].cost+=r.netCost;
     byVehicle[key].count++;
@@ -7493,8 +7673,8 @@ function renderFuelVehicles(){
   rows.forEach(r=>{
     const catColor = r.category==='Truck'?{bg:'#dbeafe',text:'#1d4ed8'}:{bg:'#fef3c7',text:'#92400e'};
     html += `<div style="display:grid;grid-template-columns:2fr 70px 80px 80px 80px 80px 80px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center">
-      <div style="font-weight:500">${r.vehicle}</div>
-      <div><span style="font-size:10px;padding:1px 6px;border-radius:99px;background:${catColor.bg};color:${catColor.text};font-weight:600">${r.category}</span></div>
+      <div style="font-weight:500">${r.vehicle}<div style="font-size:11px;color:${r.assigned?'var(--text-3)':'#b45309'};font-weight:400">${r.assigned?'Assigned to '+r.assigned:'No one assigned'}${Object.keys(r.people).filter(n=>n!==r.assigned).length?' · also used by '+Object.keys(r.people).filter(n=>n!==r.assigned).join(', '):''}</div></div>
+      <div><span style="font-size:10px;padding:1px 6px;border-radius:99px;background:${catColor.bg};color:${catColor.text};font-weight:600">${r.category==='Truck'?'Vehicle':r.category}</span></div>
       <div style="font-family:'DM Mono',monospace">${r.count}</div>
       <div style="font-family:'DM Mono',monospace">${fmtNum(r.gallons)}</div>
       <div style="font-family:'DM Mono',monospace">${fmtCur(r.cost)}</div>
@@ -7528,12 +7708,15 @@ const WEX_VEHICLE_MAP = {
   'TR16 - Stith': '2026 Silverado 3500HD (Stith)',
 };
 function cleanFuelDriver(r){
+  const who = fuelPersonInfo(r); if(who.name) return who.name;
   const card = (r.cardHolder||'').toUpperCase().trim();
   if(WEX_NAME_MAP[card]) return WEX_NAME_MAP[card];
   if(r.driverFirst && r.driverLast) return `${r.driverFirst} ${r.driverLast}`;
   return r.cardHolder||'Unknown';
 }
 function cleanFuelVehicle(r){
+  const c = r.cardNumber && fleetCards[r.cardNumber]; if(c) return c.name;
+  if(r.cardName) return r.cardName;
   const v = (r.vehicleId||'').trim();
   for(const [k,label] of Object.entries(WEX_VEHICLE_MAP)){
     if(v.startsWith(k)) return label;
@@ -7544,20 +7727,20 @@ function renderFuelPersons(){
   const byPerson = {};
   fuelTransactions.forEach(r=>{
     const key = cleanFuelDriver(r);
-    if(!byPerson[key]) byPerson[key]={name:key,truckGal:0,truckCost:0,canGal:0,canCost:0};
-    if(r.category==='Truck'){ byPerson[key].truckGal+=r.gallons; byPerson[key].truckCost+=r.netCost; }
+    if(!byPerson[key]) byPerson[key]={name:key,truckGal:0,truckCost:0,canGal:0,canCost:0,unlinked:!fuelPersonInfo(r).linked};
+    if(fuelCardKind(r)==='Truck'){ byPerson[key].truckGal+=r.gallons; byPerson[key].truckCost+=r.netCost; }
     else { byPerson[key].canGal+=r.gallons; byPerson[key].canCost+=r.netCost; }
   });
   const rows = Object.values(byPerson).sort((a,b)=>(b.truckCost+b.canCost)-(a.truckCost+a.canCost));
 
   let html = `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
     <div style="display:grid;grid-template-columns:1fr 80px 80px 80px 80px 80px 80px;padding:10px 12px;background:var(--accent);border-bottom:1px solid var(--border)">
-      ${['Driver','Truck Gal','Truck Cost','Can Gal','Can Cost','Total Gal','Total Cost'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
+      ${['Person','Vehicle Gal','Vehicle Cost','Can Gal','Can Cost','Total Gal','Total Cost'].map(h=>`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-2)">${h}</div>`).join('')}
     </div>`;
 
   rows.forEach(r=>{
     html += `<div style="display:grid;grid-template-columns:1fr 80px 80px 80px 80px 80px 80px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center">
-      <div style="font-weight:500">${r.name}</div>
+      <div style="font-weight:500;${r.unlinked?'color:#b45309':''}">${r.name}${r.unlinked?`<div style="font-size:11px;font-weight:400">Set who this is under Cards &amp; Drivers</div>`:''}</div>
       <div style="font-family:'DM Mono',monospace">${fmtNum(r.truckGal)}</div>
       <div style="font-family:'DM Mono',monospace">${fmtCur(r.truckCost)}</div>
       <div style="font-family:'DM Mono',monospace">${fmtNum(r.canGal)}</div>

@@ -7615,7 +7615,7 @@ function renderFuel(){
 
     <!-- Sub-tabs -->
     <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">
-      ${[['transactions','Transactions'],['vehicles','By Vehicle'],['persons','By Person'],['trends','Monthly Trends'],['setup','Cards & Drivers']].map(([v,l])=>`<button onclick="fuelView='${v}';renderFuelDashboard()" style="padding:8px 16px;border:none;background:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border-bottom:2px solid ${fuelView===v?'var(--green)':'transparent'};margin-bottom:-2px;color:${fuelView===v?'var(--green-dark)':'var(--text-2)'}">${l}</button>`).join('')}
+      ${[['transactions','Transactions'],['vehicles','By Vehicle'],['persons','By Person'],['trends','Monthly Trends'],['setup','Cards & Drivers']].map(([v,l])=>`<button onclick="fuelView='${v}';renderFuel()" style="padding:8px 16px;border:none;background:none;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;border-bottom:2px solid ${fuelView===v?'var(--green)':'transparent'};margin-bottom:-2px;color:${fuelView===v?'var(--green-dark)':'var(--text-2)'}">${l}</button>`).join('')}
     </div>
     <div id="fuel-dashboard"></div>
   </div>`;

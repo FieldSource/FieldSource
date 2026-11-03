@@ -6370,7 +6370,7 @@ async function previewQbEstimatePdf(docNumber){
 }
 
 // ===================== QUICKBOOKS INVOICES: billed-to-date + receivables =====================
-let qbInvoices = [], invLinks = [], qbInvLoaded = false, qbInvLoading = null;
+let qbInvoices = [], invLinks = [], qbInvLoaded = false, qbInvLoading = null, qbInvLoadError = '';
 async function loadQbInvoices(force){
   if(qbInvLoaded && !force) return;
   if(qbInvLoading) return qbInvLoading;
@@ -6379,14 +6379,14 @@ async function loadQbInvoices(force){
       if(typeof ensureFreshToken==='function') await ensureFreshToken();
       const all = [];
       for(let from=0; from<200000; from+=1000){
-        const r = await fetch(`${SUPABASE_URL}/rest/v1/qb_invoices?select=*&order=txn_date.desc`, { headers:{ apikey:SUPABASE_KEY, Authorization:'Bearer '+sbToken(), Range:`${from}-${from+999}` } });
-        if(!r.ok) throw new Error(await r.text());
-        const page = await r.json(); all.push(...page); if(page.length < 1000) break;
+        const page = await sbFetch('GET', `/rest/v1/qb_invoices?select=*&order=qb_invoice_id.asc&limit=1000&offset=${from}`);
+        all.push(...(page||[])); if(!page || page.length < 1000) break;
       }
+      qbInvLoadError = '';
       qbInvoices = all.filter(i=>Number(i.total)!==0 || Number(i.balance)!==0); // leave out voided ($0) invoices
       invLinks = (await sbFetch('GET','/rest/v1/invoice_estimate_links?select=*'))||[];
       qbInvLoaded = true;
-    }catch(e){ console.warn('QuickBooks invoices not available yet:', e.message); qbInvoices = []; invLinks = []; qbInvLoaded = true; }
+    }catch(e){ console.warn('QuickBooks invoices not available yet:', e.message); qbInvLoadError = e.message; qbInvoices = []; invLinks = []; qbInvLoaded = true; }
     finally{ qbInvLoading = null; }
   })();
   return qbInvLoading;
@@ -6412,11 +6412,14 @@ function invoicesForEstimate(num){
   if(!num) return [];
   num = String(num);
   const manual = new Set(invLinks.filter(l=>l.estimate_number===num).map(l=>l.qb_invoice_id));
-  const out = qbInvoices.filter(i=>(i.linked_estimate_numbers||[]).includes(num) || manual.has(i.qb_invoice_id));
+  const notThis = new Set(invLinks.filter(l=>l.estimate_number==='not:'+num).map(l=>l.qb_invoice_id));
+  const out = qbInvoices.filter(i=>!notThis.has(i.qb_invoice_id) && ((i.linked_estimate_numbers||[]).includes(num) || manual.has(i.qb_invoice_id) || (i.auto_estimate_numbers||[]).includes(num)))
+    .map(i=>(i.linked_estimate_numbers||[]).includes(num)||manual.has(i.qb_invoice_id) ? i : { ...i, _via:'auto', _how:i.auto_match });
   const have = new Set(out.map(i=>String(i.doc_number)));
   const est = (typeof estimates!=='undefined' ? estimates : []).find(x=>String(x.qbNumber)===num);
   (est && est.priorInvoices || []).forEach(p=>{
     const n = String(p.number||'').trim(); if(!n || have.has(n)) return;
+    const qn = qbInvoices.find(i=>String(i.doc_number)===n); if(qn && notThis.has(qn.qb_invoice_id)) return;
     const q = qbInvoices.find(i=>String(i.doc_number)===n);
     out.push(q ? { ...q, _via:'billing tracker' } : { qb_invoice_id:'bt-'+n, doc_number:n, txn_date:p.date||null, due_date:null, total:Number(p.amount)||0, balance:null, _via:'billing tracker', _unsynced:true });
     have.add(n);
@@ -6461,7 +6464,7 @@ async function renderEstimateBilling(e){
       <tbody>${b.inv.sort((x,y)=>(x.txn_date||'').localeCompare(y.txn_date||'')).map(i=>`<tr>
         <td style="${td}"><b>#${arEsc(i.doc_number)}</b></td><td style="${td}">${arFmt(i.txn_date)}</td><td style="${td}">${arFmt(i.due_date)}</td>
         <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right">${arMoney(i.balance)}</td><td style="${td}">${invChip(i)}</td>
-        <td style="${td};font-size:11px;color:var(--text-3)">${manual.has(i.qb_invoice_id)?`linked by hand · <a style="cursor:pointer;color:#b91c1c" onclick="unlinkInvoice('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">unlink</a>`:i._via?'matched by Billing Tracker':'linked in QuickBooks'}</td></tr>`).join('')}
+        <td style="${td};font-size:11px;color:var(--text-3)">${manual.has(i.qb_invoice_id)?`linked by hand · <a style="cursor:pointer;color:#b91c1c" onclick="unlinkInvoice('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">unlink</a>`:i._via?`${i._via==='auto'?'matched automatically'+(i._how?' ('+arEsc(i._how)+')':''):'matched by Billing Tracker'}${i._unsynced?'':` · <a style="cursor:pointer;color:#b91c1c" onclick="notThisEstimate('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">not this estimate</a>`}`:'linked in QuickBooks'}</td></tr>`).join('')}
       </tbody></table></div>
       <div id="est-billing-lines" style="margin-top:10px;font-size:12px;color:var(--text-3)">Loading line detail…</div>`
     : `<div style="font-size:12px;color:var(--text-3);margin-top:8px">No invoices on this estimate yet${qbInvoices.length?'':' (or the invoice sync hasn’t run yet)'}. Invoices created from this estimate in QuickBooks show up automatically; others can be linked with <b>+ Link an invoice</b>.</div>`}`;
@@ -6501,7 +6504,7 @@ function openLinkInvoices(estNum, client){
   const c = String(client||'').toLowerCase();
   const cand = qbInvoices.filter(i=>!taken.has(i.qb_invoice_id) && (!c || String(i.customer_name||'').toLowerCase()===c))
     .sort((a,b)=>(b.txn_date||'').localeCompare(a.txn_date||'')).slice(0,200);
-  const linkedElsewhere = i=>{ const n = [...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id).map(l=>l.estimate_number)]; return n.length ? 'on #'+n.join(', #') : ''; };
+  const linkedElsewhere = i=>{ const n = [...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id && !l.estimate_number.startsWith('not:')).map(l=>l.estimate_number), ...(i.auto_estimate_numbers||[])]; return n.length ? 'on #'+[...new Set(n)].join(', #') : ''; };
   document.getElementById('link-inv-overlay')?.remove();
   const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='link-inv-overlay';
   o.onclick = ev=>{ if(ev.target===o) o.remove(); };
@@ -6526,6 +6529,13 @@ async function saveInvoiceLinks(estNum){
     if(view==='estimates') renderEstimates();
   }catch(err){ alert('Could not link: '+err.message); }
 }
+async function notThisEstimate(invId, estNum){
+  if(!confirm('This invoice is not part of this estimate? It will stop counting toward its billing.')) return;
+  try{ const row = { qb_invoice_id:invId, estimate_number:'not:'+estNum, linked_by:(currentUser&&currentUser.email)||'' };
+    await sbFetch('POST','/rest/v1/invoice_estimate_links', row); invLinks.push(row);
+    const e = estimates.find(x=>x.qbNumber===String(estNum)); if(e) renderEstimateBilling(e); if(view==='estimates') renderEstimates(); }
+  catch(err){ alert(err.message); }
+}
 async function unlinkInvoice(invId, estNum){
   if(!confirm('Unlink this invoice from the estimate?')) return;
   try{ await sbFetch('DELETE', `/rest/v1/invoice_estimate_links?qb_invoice_id=eq.${invId}&estimate_number=eq.${encodeURIComponent(estNum)}`);
@@ -6537,7 +6547,7 @@ async function unlinkInvoice(invId, estNum){
 // Accepted estimates = contracts to bill (shown at the top of Accounts Receivable)
 let arHideFullyBilled = true, arContractSort = 'left', arEstTried = false;
 function arContractsHtml(){
-  const accepted = (typeof estimates!=='undefined'?estimates:[]).filter(e=>e.qbNumber && (e.qbStatus==='Accepted' || e.status==='Approved' || e.status==='Scheduled' || e.status==='In Progress'));
+  const accepted = (typeof estimates!=='undefined'?estimates:[]).filter(e=>e.qbNumber && (e.qbStatus==='Accepted' || e.qbStatus==='Closed' || e.status==='Approved' || e.status==='Scheduled' || e.status==='In Progress'));
   const rows = accepted.map(e=>({ e, b: estimateBilling(e) })).filter(x=>!arHideFullyBilled || x.b.remaining > 0.5 || x.b.open > 0.005 || !x.b.inv.length);
   rows.sort(arContractSort==='pct' ? (a,b)=>a.b.pct-b.b.pct : arContractSort==='date' ? (a,b)=>(b.e.acceptedDate||b.e.createdDate||'').localeCompare(a.e.acceptedDate||a.e.createdDate||'') : (a,b)=>b.b.remaining-a.b.remaining);
   const tot = rows.reduce((t,x)=>({ c:t.c+x.b.contract, bl:t.bl+x.b.billed, col:t.col+x.b.collected, ow:t.ow+x.b.open, left:t.left+Math.max(0,x.b.remaining) }), { c:0, bl:0, col:0, ow:0, left:0 });
@@ -6586,7 +6596,9 @@ function renderReceivablesInner(){
   const open = qbInvoices.filter(i=>Number(i.balance)>0.005);
   const est = num=>estimates.find(x=>x.qbNumber===num);
   const btByDoc = {}; (typeof estimates!=='undefined'?estimates:[]).forEach(x=>(x.priorInvoices||[]).forEach(p=>{ const n = String(p.number||'').trim(); if(n) (btByDoc[n] = btByDoc[n]||[]).push(String(x.qbNumber)); }));
-  const estFor = i=>{ const nums = [...new Set([...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id).map(l=>l.estimate_number), ...(btByDoc[String(i.doc_number)]||[])])]; return nums.map(n=>({ n, e:est(n) })); };
+  const estFor = i=>{ const not = new Set(invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id && l.estimate_number.startsWith('not:')).map(l=>l.estimate_number.slice(4)));
+    const nums = [...new Set([...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id && !l.estimate_number.startsWith('not:')).map(l=>l.estimate_number), ...(btByDoc[String(i.doc_number)]||[]), ...(i.auto_estimate_numbers||[])])].filter(n=>!not.has(n));
+    return nums.map(n=>({ n, e:est(n) })); };
   const buckets = [['Current',i=>invDaysPast(i)===0],['1–30',i=>invDaysPast(i)>=1&&invDaysPast(i)<=30],['31–60',i=>invDaysPast(i)>30&&invDaysPast(i)<=60],['61–90',i=>invDaysPast(i)>60&&invDaysPast(i)<=90],['90+',i=>invDaysPast(i)>90]];
   const sum = l=>l.reduce((t,i)=>t+Number(i.balance||0),0);
   const total = sum(open);
@@ -6602,8 +6614,10 @@ function renderReceivablesInner(){
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
       <div style="font-size:18px;font-weight:700">Accounts Receivable</div>
-      <div style="font-size:12px;color:var(--text-3)">From QuickBooks${lastSync?' · updated '+new Date(lastSync).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''} · refreshes hourly</div>
+      <div style="font-size:12px;color:var(--text-3);display:flex;gap:10px;align-items:center">${qbInvoices.length.toLocaleString()} QuickBooks invoices${lastSync?' · synced '+new Date(lastSync).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''} · refreshes hourly
+        <button class="site-chip" style="padding:3px 10px;font-size:12px" onclick="qbInvLoaded=false;renderReceivables()">↻ Refresh</button></div>
     </div>
+    ${qbInvLoadError?`<div style="padding:10px 14px;background:#fee2e2;border:1px solid #fca5a5;border-radius:var(--radius);font-size:13px;margin-bottom:12px;color:#991b1b">Couldn't load invoices: ${arEsc(qbInvLoadError).slice(0,200)}</div>`:''}
     ${!qbInvoices.length?`<div style="padding:12px 14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius);font-size:13px;margin-bottom:12px">No QuickBooks invoices have come in yet, so billed amounts show $0. Once <b>qb-invoices-setup.sql</b> has been run in Supabase and the invoice sync has run (open <code>/.netlify/functions/qb-invoice-sync</code> until it says <code>"hasMore":false</code>), refresh this page.</div>${arContractsHtml()}`:`
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid var(--green)"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">Total owed (open invoices)</div><div style="font-size:20px;font-weight:700">${arMoney0(total)}</div><div style="font-size:11px;color:var(--text-3)">${open.length} open invoice${open.length===1?'':'s'}</div></div>

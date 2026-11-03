@@ -11323,11 +11323,44 @@ async function deleteMileageEntry(id){
 // ── TIME OFF UI ──────────────────────────────────────────────
 let editingTimeOffId = null;
 
-function updateTimeOffBadge(){
-  const pending = timeOffEntries.filter(e=>e.status==='Pending').length;
-  const badge = document.getElementById('timeoff-badge');
-  if(badge){ badge.style.display = (pending && isAdmin) ? '' : 'none'; badge.textContent = pending; }
+// Who gets notified about which time-off requests (everyone with approval rights can still SEE all of them):
+//   Jake: Luanne and Ali · Matt: everyone else · Ryan: everyone
+const TO_JAKE_PEOPLE = ['luanne','ali','gibson'];
+const TO_NOTIFY_RULES = {
+  'jake@fieldsourceohio.com': person=>TO_JAKE_PEOPLE.includes(String(person||'').trim().toLowerCase()),
+  'matt@fieldsourceohio.com': person=>!TO_JAKE_PEOPLE.includes(String(person||'').trim().toLowerCase()),
+  'ryan@fieldsourceohio.com': ()=>true,
+};
+function timeOffForMe(e){
+  const rule = TO_NOTIFY_RULES[((currentUser&&currentUser.email)||'').toLowerCase()];
+  return !!rule && rule(e.person);
 }
+function updateTimeOffBadge(){
+  const mine = timeOffEntries.filter(e=>e.status==='Pending' && timeOffForMe(e));
+  const badge = document.getElementById('timeoff-badge');
+  if(badge){ badge.style.display = mine.length ? '' : 'none'; badge.textContent = mine.length; badge.title = mine.length ? `${mine.length} time-off request${mine.length===1?'':'s'} for you to review` : ''; }
+  // Pop-up for requests this person hasn't been told about yet (remembered per browser)
+  if(!mine.length) return;
+  let seen = []; try{ seen = JSON.parse(localStorage.getItem('to_seen')||'[]'); }catch(e){}
+  const fresh = mine.filter(e=>!seen.includes(e.id));
+  if(!fresh.length) return;
+  try{ localStorage.setItem('to_seen', JSON.stringify([...seen, ...fresh.map(e=>e.id)].slice(-300))); }catch(e){}
+  showTimeOffNotice(fresh);
+}
+function showTimeOffNotice(list){
+  document.getElementById('to-notice')?.remove();
+  const fmt = d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const n = document.createElement('div'); n.id = 'to-notice';
+  n.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:9999;max-width:340px;background:var(--card);border:1px solid var(--border-2);border-left:5px solid #ef4444;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:12px 14px;font-size:13px';
+  n.innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><b>🗓 Time-off request${list.length===1?'':'s'} to review</b>
+      <button onclick="document.getElementById('to-notice').remove()" style="border:none;background:none;cursor:pointer;font-size:14px;color:var(--text-3)">✕</button></div>
+    ${list.slice(0,4).map(e=>`<div style="margin-top:6px">${(e.person||'').replace(/</g,'&lt;')}: ${fmt(e.startDate)}${e.endDate!==e.startDate?' – '+fmt(e.endDate):''}${e.note?` <span style="color:var(--text-3)">(${e.note.replace(/</g,'&lt;')})</span>`:''}</div>`).join('')}
+    ${list.length>4?`<div style="margin-top:4px;color:var(--text-3)">+${list.length-4} more</div>`:''}
+    <button onclick="document.getElementById('to-notice').remove();if(typeof setPortal==='function'&&currentPortal!=='tracker')setPortal('tracker');setView('timeoff')" style="margin-top:10px;width:100%;padding:7px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:600;cursor:pointer">Review</button>`;
+  document.body.appendChild(n);
+}
+// Check for new requests every 2 minutes for the people who get notified
+setInterval(()=>{ if(currentUser && TO_NOTIFY_RULES[(currentUser.email||'').toLowerCase()] && typeof loadTimeOff==='function') loadTimeOff().then(updateTimeOffBadge).catch(()=>{}); }, 120000);
 
 function renderTimeOff(){
   const today = isoDate(new Date());
@@ -11393,6 +11426,7 @@ function renderTimeOff(){
       <div>
         <span style="font-weight:600">${e.person}</span>
         ${isCurrent&&e.status==='Approved'?`<span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:99px;padding:2px 8px;margin-left:6px">Out now</span>`:''}
+        ${e.status==='Pending'&&canApprove&&timeOffForMe(e)?`<span style="font-size:11px;background:#fee2e2;color:#991b1b;border-radius:99px;padding:2px 8px;margin-left:6px">Yours to review</span>`:''}
         <div style="font-size:12px;color:var(--text-3);margin-top:2px">${dateRange}${e.note?` · ${e.note}`:''}${e.requestedBy&&e.requestedBy!==e.person?` · Requested by ${e.requestedBy}`:''}</div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">

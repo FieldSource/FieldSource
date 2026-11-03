@@ -1138,7 +1138,7 @@ function renderCosting(){
     // Primary person
     const allPeople = [r.filedBy, ...(r.additionalCrew||[])].filter(Boolean);
     allPeople.forEach(person=>{
-      const rate = laborRates[person]||0;
+      const rate = rateFor(person, r.reportDate);
       const cost = hrs*rate;
       const s = getSite(r.client);
       s.labor += cost;
@@ -1286,12 +1286,102 @@ function renderCosting(){
 
 
 // ── LABOR COSTS ───────────────────────────────────────────────
+// ── Effective-dated labor rates ──
+// Each rate change has a start date. A report's labor cost uses the rate in effect on the report's date,
+// so raises only count going forward and finished jobs keep their real costs.
+let laborRateHist = {}; // person -> [{id, rate, effective_date, role, reason, note}] oldest first
+const LABOR_ROLES = ['Crew member','Crew lead','Foreman','Sports field manager','Project manager','Equipment operator','Intern','Office / admin'];
+const LABOR_REASONS = ['Raise','Role change','Correction','Starting rate'];
+function rateFor(person, date){
+  const h = laborRateHist[person];
+  if(h && h.length){
+    const d = (date||'').slice(0,10) || isoDate(new Date());
+    let cur = null; h.forEach(x=>{ if(x.effective_date <= d) cur = x; });
+    return Number((cur || h[0]).rate) || 0;   // before the first entry, use the earliest rate
+  }
+  return laborRates[person] || 0;
+}
+function currentRateEntry(person){ const h = laborRateHist[person]||[]; const t = isoDate(new Date()); let cur = null; h.forEach(x=>{ if(x.effective_date <= t) cur = x; }); return cur || h[0] || null; }
+function upcomingRateEntry(person){ const t = isoDate(new Date()); return (laborRateHist[person]||[]).find(x=>x.effective_date > t) || null; }
+async function loadLaborRateHistory(){
+  try{
+    const rows = await sbFetch('GET','/rest/v1/labor_rate_history?select=*&order=effective_date.asc');
+    laborRateHist = {};
+    (rows||[]).forEach(r=>{ (laborRateHist[r.person] = laborRateHist[r.person]||[]).push(r); });
+  }catch(e){ console.warn('Rate history not available yet:', e.message); laborRateHist = {}; }
+}
+function openRateChange(person){
+  const h = (laborRateHist[person]||[]).slice().reverse();
+  const cur = currentRateEntry(person), up = upcomingRateEntry(person);
+  const fmt = d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  document.getElementById('rate-overlay')?.remove();
+  const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='rate-overlay';
+  o.onclick = e=>{ if(e.target===o) o.remove(); };
+  o.innerHTML = `<div class="modal-sheet" style="max-width:560px"><div class="sheet-handle"></div>
+    <div class="sheet-title" style="margin-bottom:2px">${esc(person)}: hourly rate</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Now: <b style="color:var(--text)">${cur?'$'+Number(cur.rate)+'/hr':(laborRates[person]?'$'+laborRates[person]+'/hr':'not set')}</b>${cur&&cur.role?' · '+esc(cur.role):''}${up?` · changes to $${Number(up.rate)}/hr on ${fmt(up.effective_date)}`:''}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><div class="form-label">New rate ($/hr)</div><input id="rc-rate" type="number" min="0" step="0.5" value="${cur?Number(cur.rate):(laborRates[person]||'')}"></div>
+      <div><div class="form-label">Starts on</div><input id="rc-date" type="date" value="${isoDate(new Date())}"></div>
+      <div><div class="form-label">Role / job class</div><input id="rc-role" list="rc-roles" value="${esc(cur&&cur.role||'')}" placeholder="e.g. Crew lead"><datalist id="rc-roles">${LABOR_ROLES.map(r=>`<option value="${r}">`).join('')}</datalist></div>
+      <div><div class="form-label">Reason</div><select id="rc-reason">${LABOR_REASONS.map(r=>`<option>${r}</option>`).join('')}</select></div>
+    </div>
+    <div style="margin-top:10px"><div class="form-label">Note (optional)</div><input id="rc-note" placeholder="e.g. Annual review, promoted to crew lead"></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px">Hours worked before the start date keep the old rate. To fix a wrong rate everywhere, pick <b>Correction</b> and the date the wrong rate started.</div>
+    <div id="rc-err" style="color:#b91c1c;font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
+      <button class="btn-cancel" onclick="document.getElementById('rate-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveRateChange('${person.replace(/'/g,"\\'")}')">Save rate</button>
+    </div>
+    <div class="form-label" style="margin-top:16px">History</div>
+    <div style="max-height:30vh;overflow-y:auto">${h.length ? h.map(x=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px">
+        <span><b>$${Number(x.rate)}/hr</b> from ${x.effective_date<='2000-01-02'?'the start':fmt(x.effective_date)}${x.role?' · '+esc(x.role):''} <span style="color:var(--text-3)">· ${esc(x.reason||'')}${x.note?' · '+esc(x.note):''}</span></span>
+        ${h.length>1?`<button onclick="deleteRateEntry('${x.id}','${person.replace(/'/g,"\\'")}')" style="border:none;background:none;cursor:pointer;color:var(--text-3)" title="Remove this entry">🗑</button>`:''}</div>`).join('')
+      : '<div style="font-size:12px;color:var(--text-3)">No history yet. The first rate you save becomes the starting rate.</div>'}</div>
+  </div>`;
+  document.body.appendChild(o);
+}
+async function saveRateChange(person){
+  const rate = Number(document.getElementById('rc-rate').value), date = document.getElementById('rc-date').value;
+  const role = document.getElementById('rc-role').value.trim(), reason = document.getElementById('rc-reason').value, note = document.getElementById('rc-note').value.trim();
+  const err = document.getElementById('rc-err');
+  if(!(rate>=0) || document.getElementById('rc-rate').value===''){ err.textContent = 'Enter the rate.'; return; }
+  if(!date){ err.textContent = 'Pick the start date.'; return; }
+  try{
+    const hist = laborRateHist[person]||[];
+    // First entry for someone becomes their starting rate from the beginning, so past reports are covered
+    const eff = !hist.length && reason==='Starting rate' ? '2000-01-01' : date;
+    const same = hist.find(x=>x.effective_date===eff);
+    if(same){ await sbFetch('PATCH', `/rest/v1/labor_rate_history?id=eq.${same.id}`, { rate, role, reason, note }); Object.assign(same, { rate, role, reason, note }); }
+    else {
+      const r = await sbFetch('POST','/rest/v1/labor_rate_history', { person, rate, effective_date: eff, role, reason, note, created_by:(currentUser&&currentUser.email)||'' });
+      hist.push(r[0]); hist.sort((a,b)=>a.effective_date.localeCompare(b.effective_date)); laborRateHist[person] = hist;
+    }
+    // Keep the simple "current rate" table in step for anything that reads it
+    const now = rateFor(person, isoDate(new Date()));
+    await saveLaborRate(person, now);
+    document.getElementById('rate-overlay').remove();
+    renderLabor();
+  }catch(e){ err.textContent = 'Could not save: ' + e.message; }
+}
+async function deleteRateEntry(id, person){
+  if(!confirm('Remove this rate from the history? Labor costs for those dates will use the rate before it.')) return;
+  try{
+    await sbFetch('DELETE', `/rest/v1/labor_rate_history?id=eq.${id}`);
+    laborRateHist[person] = (laborRateHist[person]||[]).filter(x=>x.id!==id);
+    await saveLaborRate(person, rateFor(person, isoDate(new Date())));
+    openRateChange(person); renderLabor();
+  }catch(e){ alert(e.message); }
+}
+
 async function loadLaborRates(){
   try {
     const data = await sbFetch('GET', '/rest/v1/labor_rates?select=*');
     laborRates = {};
     (data||[]).forEach(r=>{ laborRates[r.person] = Number(r.rate)||0; });
   } catch(e){ console.warn('Labor rates load failed:', e); laborRates={}; }
+  await loadLaborRateHistory();
 }
 
 async function saveLaborRate(person, rate){
@@ -1312,6 +1402,10 @@ async function saveLaborRate(person, rate){
       body: JSON.stringify({person, rate: num})
     });
     if(!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0,200)}`);
+    // Read it back so we know it stuck (catches duplicate rows or a database rule quietly ignoring the change)
+    const back = await sbFetch('GET', `/rest/v1/labor_rates?person=eq.${encodeURIComponent(person)}&select=rate`);
+    const vals = (back||[]).map(r=>Number(r.rate));
+    if(!vals.length || vals.some(v=>v!==num)) throw new Error(vals.length>1 ? `there are ${vals.length} saved rates for ${person}; the database needs cleaning up` : `the database still shows ${vals[0]??'nothing'}`);
     laborRates[person] = num;
     return true;
   } catch(e){
@@ -1350,7 +1444,7 @@ function renderLabor(){
     const people = [r.filedBy, ...(r.additionalCrew||[])].filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i);
     if(!bySite[r.client]) bySite[r.client] = {cost:0, hours:0, breakdown:{}};
     people.forEach(person=>{
-      const rate = laborRates[person]||0;
+      const rate = rateFor(person, r.reportDate);
       if(!rate) noRate[person] = (noRate[person]||0) + hrs;
       const cost = hrs * rate;
       bySite[r.client].cost += cost;
@@ -1387,18 +1481,17 @@ function renderLabor(){
 
   // Rates editor
   html += `<div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
-    <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);margin-bottom:10px">Hourly Rates</div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:10px"><div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Hourly Rates</div>
+      <div style="font-size:11px;color:var(--text-3)">Click a person to give a raise or change their role. Past hours keep the rate that applied then.</div></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px">
       ${allCrew.map(person=>`
-        <div style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 10px">
-          <span title="${person}" style="font-size:13px;font-weight:500;color:var(--text);flex:1;min-width:0;line-height:1.25">${person}</span>
-          <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
-            <span style="font-size:12px;color:var(--text-3)">$</span>
-            <input type="number" id="rate-${person.replace(/\s+/g,'-')}" value="${laborRates[person]||''}" placeholder="0" min="0" step="5"
-              style="width:60px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;background:var(--bg);text-align:right">
-            <span style="font-size:11px;color:var(--text-3)">/hr</span>
-            <button onclick="const inp=document.getElementById('rate-${person.replace(/\s+/g,'-')}');saveLaborRate('${person}',inp.value).then(ok=>{inp.style.borderColor=ok?'var(--green)':'#dc2626';setTimeout(()=>inp.style.borderColor='',1500)})" style="padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">Save</button>
+        <div onclick="openRateChange('${person.replace(/'/g,"\\'")}')" title="Change rate / see history" style="cursor:pointer;display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 10px">
+          <div style="flex:1;min-width:0;line-height:1.25">
+            <div style="font-size:13px;font-weight:500;color:var(--text)">${person}</div>
+            <div style="font-size:11px;color:var(--text-3)">${(currentRateEntry(person)||{}).role||''}${upcomingRateEntry(person)?`${(currentRateEntry(person)||{}).role?' · ':''}<span style="color:#b45309">→ $${Number(upcomingRateEntry(person).rate)} on ${new Date(upcomingRateEntry(person).effective_date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>`:''}</div>
           </div>
+          <div style="font-size:14px;font-weight:700;font-family:'DM Mono',monospace;color:${rateFor(person)?'var(--text)':'#b45309'}">${rateFor(person)?'$'+rateFor(person)+'/hr':'set rate'}</div>
+          <span style="font-size:11px;color:var(--green-dark);font-weight:600">Change</span>
         </div>`).join('')}
     </div>
   </div>`;
@@ -2600,6 +2693,10 @@ function startPolling(){
         crewDays: row.crew_days || null
       }));
       save();
+      // Don't re-render while someone is editing: Labor Costs, or any field that has focus
+      if(view==='labor') return;
+      const ae = document.activeElement, mc = document.getElementById('main-content');
+      if(ae && mc && mc.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return;
       // Don't re-render if user is mid-form on time off
       if(view==='timeoff' && editingTimeOffId !== null) return;
       if(view==='timeoff'){

@@ -5991,6 +5991,7 @@ async function loadEstimates(){
       qbLink: r.qb_link||'',
       lineItems: Array.isArray(r.line_items)?r.line_items:[],
       priorInvoices: Array.isArray(r.prior_invoices)?r.prior_invoices:[],
+      pmEmail: r.pm_email||'', pmName: r.pm_name||'', apProject: r.ap_project||'',
       qbSyncedAt: r.qb_synced_at||'',
     }));
   } catch(e){ estimates = []; }
@@ -6241,6 +6242,7 @@ function openEstimateDetail(id){
     ${e.scope?`<div style="margin-top:12px">${field('Scope', escEst(e.scope))}</div>`:''}
     ${e.notes?`<div style="margin-top:12px">${field('Notes', `<span style="font-style:italic">${escEst(e.notes)}</span>`)}</div>`:''}
 
+    <div id="est-pm-slot"></div>
     ${e.qbNumber?'<div id="est-billing-slot"><div style="font-size:12px;color:var(--text-3);margin-top:16px">Loading billing…</div></div>':''}
     <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Breakdown</div>`;
 
@@ -6306,6 +6308,7 @@ function openEstimateDetail(id){
   if(e.qbNumber && !lines.length) loadQbLines(e.qbNumber);
   if(e.qbNumber && canEdit) checkTrackerJob(e.qbNumber);
   if(e.qbNumber) renderEstimateBilling(e);
+  if(!approvalRulesLoaded) loadApprovalRules().then(()=>renderEstimatePm(e)); else renderEstimatePm(e);
 }
 
 // QuickBooks line items, from the qb_estimates / qb_estimate_lines tables kept fresh by qb-sync.
@@ -6561,13 +6564,15 @@ function arContractsHtml(){
       <label style="font-size:12px;display:flex;gap:4px;align-items:center;margin-left:auto"><input type="checkbox" ${arHideFullyBilled?'checked':''} onchange="arHideFullyBilled=this.checked;renderReceivables()"> Hide fully billed and paid</label>
       <select style="${sel}" onchange="arContractSort=this.value;renderReceivables()">${[['left','Most left to bill'],['pct','Least billed %'],['date','Newest accepted']].map(([v,l])=>`<option value="${v}"${arContractSort===v?' selected':''}>${l}</option>`).join('')}</select>
     </div>
+    ${(()=>{ const n = estimatesNeedingPm().length; return n ? `<div style="margin:0 12px 10px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px">👷 <b>${n} accepted estimate${n===1?'':'s'}</b> ${n===1?'has':'have'} no project manager. Click <b>Assign PM</b> on ${n===1?'it':'each'} below; the PM approves that job's vendor invoices.</div>` : ''; })()}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;padding:0 12px 10px">
       ${[['Contract value',tot.c,''],['Billed',tot.bl,tot.c?Math.round(tot.bl/tot.c*100)+'% of contracts':''],['Collected',tot.col,''],['Still owed',tot.ow,''],['Left to bill',tot.left,'']].map(([l,v,sub])=>`<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${l}</div><div style="font-size:16px;font-weight:700">${arMoney0(v)}</div>${sub?`<div style="font-size:11px;color:var(--text-3)">${sub}</div>`:''}</div>`).join('')}
     </div>
     <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:680px" class="pm-tbl"><thead><tr>
       <th style="${th}">Estimate</th><th style="${th};text-align:right">Contract</th><th style="${th};width:150px">Billed</th><th style="${th};text-align:right">Collected</th><th style="${th};text-align:right">Owed</th><th style="${th};text-align:right">Left to bill</th></tr></thead><tbody>
       ${rows.map(({e,b})=>{ const over = b.contract && b.billed > b.contract + 0.5; return `<tr style="cursor:pointer" onclick="openEstimateDetail('${e.id}')">
-        <td style="${td}"><b>#${arEsc(e.qbNumber)}</b> · ${arEsc(e.projectName)}<div style="font-size:11px;color:var(--text-3)">${arEsc(e.client||'')}${e.acceptedDate?' · accepted '+arFmt(e.acceptedDate):''}</div></td>
+        <td style="${td}"><b>#${arEsc(e.qbNumber)}</b> · ${arEsc(e.projectName)}<div style="font-size:11px;color:var(--text-3)">${arEsc(e.client||'')}${e.acceptedDate?' · accepted '+arFmt(e.acceptedDate):''}</div>
+          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`👷 ${arEsc(e.pmName||e.pmEmail)}`:`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Assign PM</a>`}</div></td>
         <td style="${td};text-align:right">${arMoney0(b.contract)}</td>
         <td style="${td}"><div style="font-size:12px;${over?'color:#dc2626;font-weight:600':''}">${arMoney0(b.billed)} <span style="color:var(--text-3)">${b.contract?Math.round(b.pct)+'%':''}</span></div>
           <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:3px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>
@@ -7006,7 +7011,7 @@ async function openHandoff(estId){
       num, estId, qbTotal: Math.round((Number(qe[0].total)||0)*100)/100,
       job: { job_name: e.projectName||'', client: qe[0].customer_name||e.client||'', site:'', po_number:'',
              accepted_date: e.acceptedDate||'', job_type: e.type==='Maintenance'?'Maintenance':'Project',
-             billing_mode:'billed', closeout_mode:'turnkey', pm:'', pm_email:'', billing_contact:'', billing_email:'', notes:'' },
+             billing_mode:'billed', closeout_mode:'turnkey', pm:e.pmName||'', pm_email:e.pmEmail||'', billing_contact:'', billing_email:'', notes:'' },
       items, pattern:'single_day',
       sched:{ date:'', start:'', end:'', weekdaysOnly:true, days:[2], every:1, dates:'', window:'', count:1 },
       visits: [],
@@ -9897,7 +9902,170 @@ async function markInvResolved(id){
   } catch(e){ alert('Failed: '+e.message); }
 }
 
+// ===================== INVOICE APPROVAL RULES =====================
+// Project → approver, set in the app (Approvals tab). Vendor invoices for a project with a rule wait for that
+// person's approval; projects without a rule file straight away. Jake, Ryan and Matt can approve anything and edit the rules.
+let approvalRules = [], approvalRulesLoaded = false;
+const APPROVAL_ADMINS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
+async function loadApprovalRules(){
+  try{ approvalRules = (await sbFetch('GET','/rest/v1/invoice_approvers?select=*&order=project.asc'))||[]; }
+  catch(e){ console.warn('Approval rules not available:', e.message); approvalRules = []; }
+  approvalRulesLoaded = true;
+}
+function approvalRuleFor(projectName){
+  const p = String(projectName||'').trim().toLowerCase(); if(!p) return null;
+  const hits = approvalRules.filter(r=>r.active!==false && r.project && (p===r.project.toLowerCase() || p.includes(r.project.toLowerCase())));
+  return hits.sort((a,b)=>b.project.length-a.project.length)[0] || null;   // most specific rule wins
+}
+function isApprovalAdmin(){ return APPROVAL_ADMINS.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
+function canApproveInvoice(f){
+  const me = ((currentUser&&currentUser.email)||'').toLowerCase();
+  if(APPROVAL_ADMINS.includes(me)) return true;
+  const r = approvalRuleFor(f && f.projectName); return !!(r && String(r.approver_email||'').toLowerCase()===me);
+}
+function approverNameFor(f){ const r = approvalRuleFor(f.projectName); return r ? (r.approver_name || (typeof getDisplayName==='function' ? getDisplayName(r.approver_email) : r.approver_email)) : 'Jake, Ryan or Matt'; }
+function approvalPeople(){
+  const names = (typeof USER_DISPLAY_NAMES!=='undefined') ? USER_DISPLAY_NAMES : {};
+  const staff = ['jake','ryan','matt','haller','gibson','luanne','wes','brian','alterman','trubisky','stith','moore','greg'];
+  return Object.entries(names).filter(([e])=>staff.some(s=>e.toLowerCase().startsWith(s+'@'))).map(([email,name])=>({ email, name })).sort((a,b)=>a.name.localeCompare(b.name));
+}
+function approvalProjects(){
+  const s = new Set([...(typeof CLIENTS!=='undefined'?CLIENTS:[]), ...(typeof jobs!=='undefined'?jobs.map(j=>j.client):[]), ...(typeof invoiceFiles!=='undefined'?invoiceFiles.map(f=>f.projectName):[])].filter(Boolean));
+  return [...s].sort();
+}
+function approvalRulesHtml(){
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const admin = isApprovalAdmin(), people = approvalPeople();
+  const inp = 'font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  const pending = p=>(invoiceFiles||[]).filter(f=>f.approvalStatus==='pending' && approvalRuleFor(f.projectName)===p).length;
+  return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:20px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <div style="font-size:13px;font-weight:700;color:var(--text)">Approval rules</div>
+      <div style="font-size:12px;color:var(--text-3)">Vendor invoices for these projects wait for the approver. All other projects file straight to Dropbox.</div>
+    </div>
+    ${approvalRules.length ? approvalRules.map(r=>`<div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--border);font-size:13px;flex-wrap:wrap">
+        <b style="min-width:180px">${esc(r.project)}</b><span style="color:var(--text-3)">→</span>
+        ${admin ? `<select style="${inp}" onchange="saveApprovalRule('${r.id}',{approver_email:this.value,approver_name:this.options[this.selectedIndex].text})">${people.map(p=>`<option value="${esc(p.email)}"${p.email===r.approver_email?' selected':''}>${esc(p.name)}</option>`).join('')}${people.some(p=>p.email===r.approver_email)?'':`<option selected value="${esc(r.approver_email)}">${esc(r.approver_name||r.approver_email)}</option>`}</select>` : `<span>${esc(r.approver_name||r.approver_email)}</span>`}
+        ${(()=>{ const ests = (typeof estimates!=='undefined'?estimates:[]).filter(e=>e.apProject && e.apProject.toLowerCase()===r.project.toLowerCase() && e.pmEmail); return ests.length ? `<span style="font-size:11px;color:var(--text-3)">PM on ${ests.map(e=>'#'+esc(e.qbNumber)).join(', ')}</span>` : ''; })()}
+        ${pending(r)?`<span style="font-size:11px;color:#92400e;background:#fff7ed;border-radius:99px;padding:2px 8px">${pending(r)} waiting</span>`:''}
+        ${admin ? `<button onclick="deleteApprovalRule('${r.id}')" style="margin-left:auto;border:none;background:none;color:var(--text-3);cursor:pointer" title="Remove rule">🗑</button>` : ''}
+      </div>`).join('') : '<div style="font-size:13px;color:var(--text-3);padding:6px 0;border-top:1px solid var(--border)">No rules yet. Every invoice files straight to Dropbox.</div>'}
+    ${admin ? `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+      <input id="ar-new-project" list="ar-projects" placeholder="Project or client (e.g. Elgin)" style="${inp};min-width:220px">
+      <datalist id="ar-projects">${approvalProjects().map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
+      <span style="color:var(--text-3)">→</span>
+      <select id="ar-new-approver" style="${inp}"><option value="">Approver…</option>${people.map(p=>`<option value="${esc(p.email)}">${esc(p.name)}</option>`).join('')}</select>
+      <button class="btn-save" style="flex:none;padding:7px 14px" onclick="addApprovalRule()">Add rule</button>
+    </div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px">A rule covers any project whose name contains it ("Elgin" covers "Elgin HS Baseball"). The more specific rule wins. Jake, Ryan and Matt can approve anything.</div>` : ''}
+  </div>`;
+}
+async function addApprovalRule(){
+  const project = document.getElementById('ar-new-project').value.trim(), sel = document.getElementById('ar-new-approver');
+  if(!project || !sel.value){ alert('Pick a project and an approver.'); return; }
+  if(approvalRules.some(r=>r.project.toLowerCase()===project.toLowerCase())){ alert(`There's already a rule for ${project}. Change its approver instead.`); return; }
+  try{
+    const r = await sbFetch('POST','/rest/v1/invoice_approvers', { project, approver_email:sel.value, approver_name:sel.options[sel.selectedIndex].text, created_by:(currentUser&&currentUser.email)||'' });
+    approvalRules.push(...(r||[])); approvalRules.sort((a,b)=>a.project.localeCompare(b.project));
+    renderInvApproval(); updateApprovalBell();
+  }catch(e){ alert('Could not save: '+e.message+(/invoice_approvers/.test(e.message)?'\n\nRun the approval rules SQL in Supabase first.':'')); }
+}
+async function saveApprovalRule(id, fields){
+  try{ await sbFetch('PATCH', `/rest/v1/invoice_approvers?id=eq.${id}`, fields); Object.assign(approvalRules.find(r=>r.id===id), fields); renderInvApproval(); updateApprovalBell(); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+async function deleteApprovalRule(id){
+  const r = approvalRules.find(x=>x.id===id); if(!r) return;
+  if(!confirm(`Remove the rule for ${r.project}? New invoices for it will file straight to Dropbox. Invoices already waiting stay in the list for Jake, Ryan or Matt to approve.`)) return;
+  try{ await sbFetch('DELETE', `/rest/v1/invoice_approvers?id=eq.${id}`); approvalRules = approvalRules.filter(x=>x.id!==id); renderInvApproval(); updateApprovalBell(); }
+  catch(e){ alert('Could not remove: '+e.message); }
+}
+// =================== END INVOICE APPROVAL RULES ===================
+// ===================== PROJECT MANAGER ON ACCEPTED ESTIMATES =====================
+// Each accepted estimate gets a PM. The PM becomes the vendor-invoice approver for the job's Accounts Payable project.
+function estIsAccepted(e){ return !!(e && e.qbNumber && (e.qbStatus==='Accepted' || e.qbStatus==='Closed' || ['Approved','Scheduled','In Progress'].includes(e.status))); }
+function guessApProject(e){
+  const hay = `${e.client||''} ${e.projectName||''}`.toLowerCase();
+  const opts = approvalProjects().filter(p=>p && hay.includes(p.toLowerCase()));
+  return opts.sort((a,b)=>b.length-a.length)[0] || '';
+}
+function estimatesNeedingPm(){ return (typeof estimates!=='undefined'?estimates:[]).filter(e=>estIsAccepted(e) && !e.pmEmail); }
+function openPmAssign(estId){
+  const e = estimates.find(x=>x.id===estId); if(!e) return;
+  if(!approvalRulesLoaded){ loadApprovalRules().then(()=>openPmAssign(estId)); return; }
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const people = approvalPeople(), proj = e.apProject || guessApProject(e);
+  const existing = proj ? approvalRuleFor(proj) : null;
+  const inp = 'font-size:13px;padding:7px 9px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
+  document.getElementById('pm-assign-overlay')?.remove();
+  const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='pm-assign-overlay';
+  o.innerHTML = `<div class="modal-sheet" style="max-width:520px"><div class="sheet-handle"></div>
+    <div class="sheet-title" style="margin-bottom:2px">${e.pmEmail?'Change':'Assign'} project manager</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:14px">Estimate #${esc(e.qbNumber)} · ${esc(e.projectName)} · ${esc(e.client||'')}</div>
+    <div class="form-label">Project manager</div>
+    <select id="pm-who" style="${inp}"><option value="">Choose…</option>${people.map(p=>`<option value="${esc(p.email)}"${p.email===e.pmEmail?' selected':''}>${esc(p.name)}</option>`).join('')}</select>
+    <div class="form-label" style="margin-top:12px">Vendor invoices for this job are filed in Accounts Payable under</div>
+    <input id="pm-proj" list="pm-projs" style="${inp}" value="${esc(proj)}" placeholder="e.g. Elgin" oninput="pmProjHint()">
+    <datalist id="pm-projs">${approvalProjects().map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
+    <div id="pm-proj-hint" style="font-size:11px;color:var(--text-3);margin-top:4px"></div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:12px"><input type="checkbox" id="pm-approver" checked> Make them the invoice approver for this project</label>
+    <div id="pm-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
+      <div>${e.pmEmail?`<button class="btn-cancel" style="flex:none;color:#b91c1c" onclick="savePmAssign('${e.id}',true)">Remove PM</button>`:''}</div>
+      <div style="display:flex;gap:8px"><button class="btn-cancel" style="flex:none" onclick="document.getElementById('pm-assign-overlay').remove()">Cancel</button>
+      <button class="btn-save" style="flex:none" onclick="savePmAssign('${e.id}')">Save</button></div>
+    </div></div>`;
+  o.onclick = ev=>{ if(ev.target===o) o.remove(); };
+  document.body.appendChild(o);
+  pmProjHint();
+}
+function pmProjHint(){
+  const el = document.getElementById('pm-proj-hint'); if(!el) return;
+  const p = document.getElementById('pm-proj').value.trim(), r = p ? approvalRuleFor(p) : null;
+  el.innerHTML = !p ? 'Pick the project name used when uploading this job\u2019s vendor invoices.'
+    : r ? `Invoices for <b>${arEsc(p)}</b> currently go to <b>${arEsc(r.approver_name||r.approver_email)}</b>${r.project.toLowerCase()!==p.toLowerCase()?` (rule "${arEsc(r.project)}")`:''}. Saving changes that.`
+    : `No approval rule for <b>${arEsc(p)}</b> yet. Saving creates one.`;
+}
+async function savePmAssign(estId, remove){
+  const e = estimates.find(x=>x.id===estId); if(!e) return;
+  const sel = document.getElementById('pm-who'), proj = (document.getElementById('pm-proj').value||'').trim(), makeApprover = document.getElementById('pm-approver').checked;
+  const err = document.getElementById('pm-err');
+  const pmEmail = remove ? '' : sel.value, pmName = remove ? '' : (sel.value ? sel.options[sel.selectedIndex].text : '');
+  if(!remove && !pmEmail){ err.textContent = 'Choose the project manager.'; return; }
+  if(!remove && makeApprover && !proj){ err.textContent = 'Enter the Accounts Payable project name, or uncheck "Make them the invoice approver."'; return; }
+  try{
+    await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${e.id}`, { pm_email: pmEmail||null, pm_name: pmName||null, ap_project: proj||null });
+    e.pmEmail = pmEmail; e.pmName = pmName; e.apProject = proj;
+    if(!remove && makeApprover && proj){
+      const exact = approvalRules.find(r=>r.project.toLowerCase()===proj.toLowerCase());
+      const fields = { approver_email: pmEmail, approver_name: pmName };
+      if(exact){ await sbFetch('PATCH', `/rest/v1/invoice_approvers?id=eq.${exact.id}`, fields); Object.assign(exact, fields); }
+      else { const r = await sbFetch('POST','/rest/v1/invoice_approvers', { project: proj, ...fields, created_by: `${(currentUser&&currentUser.email)||''} (PM on estimate #${e.qbNumber})` }); approvalRules.push(...(r||[])); }
+    }
+    document.getElementById('pm-assign-overlay').remove();
+    if(document.getElementById('est-pm-slot')) renderEstimatePm(e);
+    if(view==='receivables') renderReceivables(); else if(view==='estimates') renderEstimates(); else if(view==='inv-approval') renderInvApproval();
+    updateApprovalBell();
+  }catch(ex){ err.textContent = 'Could not save: ' + ex.message + (/pm_email|ap_project/.test(ex.message)?' (run the project manager SQL in Supabase first)':''); }
+}
+function renderEstimatePm(e){
+  const slot = document.getElementById('est-pm-slot'); if(!slot) return;
+  if(!estIsAccepted(e)){ slot.innerHTML = ''; return; }
+  const r = e.apProject ? approvalRuleFor(e.apProject) : null;
+  const approvesHere = r && e.pmEmail && String(r.approver_email).toLowerCase()===String(e.pmEmail).toLowerCase();
+  slot.innerHTML = e.pmEmail
+    ? `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:12px;font-size:13px">
+        <span>👷 Project manager: <b>${arEsc(e.pmName||e.pmEmail)}</b><span style="color:var(--text-3)">${e.apProject?` · ${approvesHere?'approves vendor invoices for':'invoices filed under'} <b>${arEsc(e.apProject)}</b>`:''}${e.apProject&&r&&!approvesHere?` (approver is ${arEsc(r.approver_name||r.approver_email)})`:''}</span></span>
+        <button class="site-chip" style="margin-left:auto;padding:3px 10px;font-size:12px" onclick="openPmAssign('${e.id}')">Change</button></div>`
+    : `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #fde68a;background:#fffbeb;border-radius:var(--radius-sm);margin-top:12px;font-size:13px">
+        <span>👷 <b>No project manager yet.</b> <span style="color:var(--text-3)">They'll approve this job's vendor invoices.</span></span>
+        <button class="site-chip active" style="margin-left:auto;padding:4px 12px;font-size:12px" onclick="openPmAssign('${e.id}')">Assign</button></div>`;
+}
+// =================== END PROJECT MANAGER ===================
+
+
 function renderInvApproval(){
+  if(!approvalRulesLoaded){ loadApprovalRules().then(()=>{ if(view==='inv-approval') renderInvApproval(); updateApprovalBell(); }); }
   const userEmail = (currentUser?.email||'').toLowerCase();
   const canApprove = APPROVER_EMAILS.includes(userEmail);
   const canUploadInv = UPLOADER_EMAILS.includes(userEmail);
@@ -9973,11 +10141,12 @@ function renderInvApproval(){
 
   let html = `<div style="margin-bottom:20px">
     <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:16px">Invoice Approvals</div>
+    ${approvalRulesHtml()}
 
     ${pendingInvoiceApprovals.length>0?`<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:20px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <div style="font-size:13px;font-weight:700;color:var(--text)">⏳ Pending Approval (${pendingInvoiceApprovals.length})</div>
-        <div style="font-size:12px;color:#92400e;background:#fff7ed;border:1px solid #fed7aa;border-radius:99px;padding:3px 10px;font-weight:600">Waiting on: Dan Haller</div>
+        <div style="font-size:12px;color:var(--text-3)">Each shows who it's waiting on</div>
       </div>
       ${pendingInvoiceApprovals.map(f=>{
         const safe = f.id.replace(/'/g,"\\'");
@@ -9988,13 +10157,14 @@ function renderInvApproval(){
           <div style="flex:1;min-width:0">
             <div style="font-weight:600;font-size:13px;color:var(--text)">${f.vendorName||f.fileName}</div>
             <div style="font-size:12px;color:var(--text-2)">${f.projectName}${f.invoiceNum?' · Inv #'+f.invoiceNum:''}</div>
+            <div style="font-size:11px;color:#92400e;margin-top:2px">Waiting on: ${approverNameFor(f)}</div>
             ${f.notes?`<div style="font-size:11px;color:var(--text-3)">${f.notes}</div>`:''}
           </div>
           <div style="font-weight:700;font-size:14px;color:var(--green-dark);font-family:'DM Mono',monospace;flex-shrink:0">${f.amount?'$'+Number(f.amount).toLocaleString('en-US',{minimumFractionDigits:2}):'—'}</div>
           <div style="display:flex;gap:6px;flex-shrink:0;align-items:center">
             <button onclick="openInvoiceFile('${safePath}','${safeFile}','${safeProject}')" title="Open document" style="padding:5px 10px;background:none;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;cursor:pointer">↗ View</button>
-            ${canApprove?`<button id="approve-btn-${safe}" onclick="approveInvoice('${safe}')" style="padding:5px 12px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:600;cursor:pointer">✓ Approve</button>`:''}
-            ${canApprove?`<button onclick="rejectInvoice('${safe}')" style="padding:5px 12px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:12px;cursor:pointer;color:#dc2626">✕ Reject</button>`:''}
+            ${canApproveInvoice(f)?`<button id="approve-btn-${safe}" onclick="approveInvoice('${safe}')" style="padding:5px 12px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:12px;font-weight:600;cursor:pointer">✓ Approve</button>`:''}
+            ${canApproveInvoice(f)?`<button onclick="rejectInvoice('${safe}')" style="padding:5px 12px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:12px;cursor:pointer;color:#dc2626">✕ Reject</button>`:''}
           </div>
         </div>`;
       }).join('')}
@@ -10198,6 +10368,7 @@ async function approveInvoiceFromPanel(id){
 }
 
 async function rejectInvoiceFromPanel(id){
+  const fr = invoiceFiles.find(x=>x.id===id); if(fr && !canApproveInvoice(fr)){ alert(`This invoice is waiting on ${approverNameFor(fr)}.`); return; }
   const reason = prompt('Reason for rejection (required):');
   if(!reason) return;
   await sbFetch('PATCH', `/rest/v1/invoice_files?id=eq.${id}`, {
@@ -10232,11 +10403,11 @@ function goToInvoices(){
 function bellInvoices(){
   const userEmail = (currentUser?.email||'').toLowerCase();
   if(userEmail === 'jake@fieldsourceohio.com') return (invoiceFiles||[]).filter(f=>f.approvalStatus==='pending');
-  if(userEmail === 'haller@fieldsourceohio.com') return (invoiceFiles||[]).filter(f=>f.approvalStatus==='pending' && ['canal winchester'].some(p=>(f.projectName||'').toLowerCase().includes(p)));
-  return [];
+  return (invoiceFiles||[]).filter(f=>{ if(f.approvalStatus!=='pending') return false; const r = approvalRuleFor(f.projectName); return r && String(r.approver_email||'').toLowerCase()===userEmail; });
 }
 function bellTimeOff(){ return (typeof timeOffEntries!=='undefined' ? timeOffEntries : []).filter(e=>e.status==='Pending' && typeof timeOffForMe==='function' && timeOffForMe(e)); }
 function updateApprovalBell(pulse){
+  if(!approvalRulesLoaded && currentUser){ approvalRulesLoaded = true; loadApprovalRules().then(()=>updateApprovalBell()); }
   const inv = bellInvoices().length, to = bellTimeOff().length, total = inv + to;
   const bell = document.getElementById('approval-bell');
   const badge = document.getElementById('approval-badge');
@@ -10252,6 +10423,7 @@ function updateApprovalBell(pulse){
 async function approveInvoice(id){
   const f = invoiceFiles.find(x=>x.id===id);
   if(!f) return;
+  if(!canApproveInvoice(f)){ alert(`This invoice is waiting on ${approverNameFor(f)}.`); return; }
   const btn = document.getElementById('approve-btn-'+id);
   if(btn){ btn.textContent='Approving...'; btn.disabled=true; }
   try {
@@ -10294,6 +10466,7 @@ async function approveInvoice(id){
 }
 
 async function rejectInvoice(id){
+  const fr = invoiceFiles.find(x=>x.id===id); if(fr && !canApproveInvoice(fr)){ alert(`This invoice is waiting on ${approverNameFor(fr)}.`); return; }
   const reason = prompt('Reason for rejection (required):');
   if(!reason) return;
   await sbFetch('PATCH', `/rest/v1/invoice_files?id=eq.${id}`, {
@@ -10463,7 +10636,8 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
     });
     if(!uploadRes.ok){ throw new Error('Storage upload failed: ' + uploadRes.statusText); }
 
-    const requiresApproval = ['canal winchester'].some(p=>(projectName||'').toLowerCase().includes(p));
+    if(!approvalRulesLoaded) await loadApprovalRules();
+    const requiresApproval = !!approvalRuleFor(projectName);
     console.log('Filing invoice — projectName:', projectName, 'requiresApproval:', requiresApproval);
     const meta = {
       job_id: null,

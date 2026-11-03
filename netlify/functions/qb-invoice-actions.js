@@ -108,6 +108,33 @@ exports.handler = async function (event) {
       return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
     } catch (e) { return json(500, { error: e.message }); }
   }
+  if (b.action === 'estimate_number' || b.action === 'estimate_delete') {
+    if (!QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed.' });
+    try {
+      const qb = await qbAuth();
+      const est = (await qb.call(`estimate/${b.qb_estimate_id}`)).Estimate;
+      if (b.action === 'estimate_number') {
+        if (est.DocNumber) return json(200, { ok: true, doc_number: est.DocNumber, already: true });
+        const recent = await qb.call(`query?query=${encodeURIComponent('SELECT DocNumber FROM Estimate ORDERBY MetaData.CreateTime DESC MAXRESULTS 200')}`);
+        const nums = ((recent.QueryResponse && recent.QueryResponse.Estimate) || []).map(e => parseInt(e.DocNumber, 10)).filter(n => !isNaN(n));
+        const next = String((nums.length ? Math.max(...nums) : 1000) + 1);
+        const up = (await qb.call('estimate', { method: 'POST', body: JSON.stringify({ Id: est.Id, SyncToken: est.SyncToken, sparse: true, DocNumber: next }) })).Estimate;
+        await sb('PATCH', `estimates?qb_estimate_id=eq.${est.Id}`, { qb_estimate_number: up.DocNumber }, 'return=minimal');
+        await sb('PATCH', `qb_estimates?qb_estimate_id=eq.${est.Id}`, { estimate_number: up.DocNumber }, 'return=minimal').catch(() => {});
+        await logActivity('estimate_numbered', user, { qb_estimate_id: String(est.Id), doc_number: up.DocNumber });
+        return json(200, { ok: true, doc_number: up.DocNumber });
+      }
+      // delete: only estimates nobody has accepted or billed
+      if (est.TxnStatus === 'Accepted' || est.TxnStatus === 'Closed') return json(400, { error: `This estimate is ${est.TxnStatus} in QuickBooks, so it can't be deleted from the tracker. Change it in QuickBooks if you're sure.` });
+      if ((est.LinkedTxn || []).length) return json(400, { error: 'An invoice was created from this estimate, so it can\'t be deleted.' });
+      await qb.call('estimate?operation=delete', { method: 'POST', body: JSON.stringify({ Id: est.Id, SyncToken: est.SyncToken }) });
+      const rows = await sb('GET', `qb_estimates?qb_estimate_id=eq.${est.Id}&select=id`).catch(() => []);
+      for (const r of rows || []) { await sb('DELETE', `qb_estimate_lines?estimate_id=eq.${r.id}`, null, 'return=minimal').catch(() => {}); await sb('DELETE', `qb_estimates?id=eq.${r.id}`, null, 'return=minimal').catch(() => {}); }
+      await sb('DELETE', `estimates?qb_estimate_id=eq.${est.Id}`, null, 'return=minimal');
+      await logActivity('estimate_deleted', user, { qb_estimate_id: String(est.Id), doc_number: est.DocNumber || '', customer: est.CustomerRef && est.CustomerRef.name, total: est.TotalAmt });
+      return json(200, { ok: true });
+    } catch (e) { return json(500, { error: e.message }); }
+  }
   if (['create', 'send', 'send_gmail'].includes(b.action) && !canBill) return json(403, { error: 'Only Jake, Ryan and Ali can create or send invoices.' });
 
   try {

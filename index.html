@@ -6580,8 +6580,71 @@ function arContractsHtml(){
   </div>`;
 }
 
+// Link an invoice to an estimate, starting from the invoice (Accounts Receivable)
+let invLinkSearch = '';
+function invCurrentEstimates(i){
+  const not = new Set(invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id && l.estimate_number.startsWith('not:')).map(l=>l.estimate_number.slice(4)));
+  const out = [];
+  const add = (n, how)=>{ n = String(n); if(!n || not.has(n) || out.some(x=>x.n===n)) return; out.push({ n, how }); };
+  (i.linked_estimate_numbers||[]).forEach(n=>add(n,'linked in QuickBooks'));
+  invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id && !l.estimate_number.startsWith('not:')).forEach(l=>add(l.estimate_number,'linked by hand'));
+  (typeof estimates!=='undefined'?estimates:[]).forEach(e=>(e.priorInvoices||[]).forEach(p=>{ if(String(p.number||'').trim()===String(i.doc_number)) add(e.qbNumber,'matched by Billing Tracker'); }));
+  (i.auto_estimate_numbers||[]).forEach(n=>add(n,'matched automatically'));
+  return out;
+}
+function openLinkEstimate(invId){
+  const i = qbInvoices.find(x=>x.qb_invoice_id===invId); if(!i) return;
+  const cur = invCurrentEstimates(i), curSet = new Set(cur.map(c=>c.n));
+  const q = invLinkSearch.trim().toLowerCase(), cust = String(i.customer_name||'').toLowerCase();
+  const all = (typeof estimates!=='undefined'?estimates:[]).filter(e=>e.qbNumber && !curSet.has(String(e.qbNumber)));
+  const sameCust = all.filter(e=>String(e.client||'').toLowerCase()===cust);
+  const pool = q ? all.filter(e=>[e.qbNumber,e.projectName,e.client].join(' ').toLowerCase().includes(q)) : sameCust;
+  pool.sort((a,b)=>((b.qbStatus==='Accepted')-(a.qbStatus==='Accepted')) || String(b.qbNumber).localeCompare(String(a.qbNumber),undefined,{numeric:true}));
+  const row = e=>`<div style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="flex:1;min-width:0"><b>#${arEsc(e.qbNumber)}</b> · ${arEsc(e.projectName)}<div style="font-size:11px;color:var(--text-3)">${arEsc(e.client||'')} · ${arMoney0(e.amount)}${e.qbStatus?' · '+arEsc(e.qbStatus):''}${e.createdDate?' · '+arFmt(e.createdDate):''}</div></span>
+      <button class="site-chip active" style="padding:3px 10px;font-size:12px" onclick="linkInvoiceToEstimate('${invId}','${arEsc(e.qbNumber)}')">Link</button></div>`;
+  billOverlay('inv-link-overlay', `
+    <div class="sheet-title" style="margin-bottom:2px">Which estimate is invoice #${arEsc(i.doc_number)} for?</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">${arEsc(i.customer_name)} · ${arMoney(i.total)} · ${arFmt(i.txn_date)}</div>
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin-bottom:4px">Linked now</div>
+    ${cur.length ? cur.map(c=>{ const e = estimates.find(x=>String(x.qbNumber)===c.n); return `<div style="display:flex;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--border);font-size:13px">
+        <span style="flex:1"><b>#${arEsc(c.n)}</b>${e?' · '+arEsc(e.projectName):''}<div style="font-size:11px;color:var(--text-3)">${arEsc(c.how)}</div></span>
+        <button class="site-chip" style="padding:3px 10px;font-size:12px;color:#b91c1c" onclick="unlinkInvoiceFromEstimate('${invId}','${arEsc(c.n)}','${arEsc(c.how)}')">Remove</button></div>`; }).join('')
+      : '<div style="font-size:13px;color:#b45309;padding:6px 4px">Not linked to any estimate.</div>'}
+    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 4px">${q?'Matching estimates':'Estimates for '+arEsc(i.customer_name)}</div>
+    <input id="inv-link-q" style="${billInput};margin-bottom:6px" placeholder="Search any estimate by number, project or client" value="${arEsc(invLinkSearch)}"
+      oninput="invLinkSearch=this.value;clearTimeout(window._ilq);window._ilq=setTimeout(()=>{openLinkEstimate('${invId}');const x=document.getElementById('inv-link-q');x.focus();x.setSelectionRange(x.value.length,x.value.length);},250)">
+    <div style="max-height:40vh;overflow-y:auto">${pool.slice(0,60).map(row).join('') || `<div style="font-size:13px;color:var(--text-3);padding:8px 4px">${q?'No estimates match.':'No other estimates for this customer. Search above to find one under a different name.'}</div>`}</div>
+    <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn-cancel" onclick="invLinkSearch='';document.getElementById('inv-link-overlay').remove()">Done</button></div>`, 620);
+}
+async function linkInvoiceToEstimate(invId, estNum){
+  try{
+    // undo an earlier "not this estimate" for the same pair, then link
+    if(invLinks.some(l=>l.qb_invoice_id===invId && l.estimate_number==='not:'+estNum)){
+      await sbFetch('DELETE', `/rest/v1/invoice_estimate_links?qb_invoice_id=eq.${invId}&estimate_number=eq.${encodeURIComponent('not:'+estNum)}`);
+      invLinks = invLinks.filter(l=>!(l.qb_invoice_id===invId && l.estimate_number==='not:'+estNum));
+    }
+    const row = { qb_invoice_id:invId, estimate_number:String(estNum), linked_by:(currentUser&&currentUser.email)||'' };
+    await sbFetch('POST','/rest/v1/invoice_estimate_links', row); invLinks.push(row);
+    invLinkSearch = ''; openLinkEstimate(invId); if(view==='receivables') renderReceivables();
+  }catch(err){ alert('Could not link: '+err.message); }
+}
+async function unlinkInvoiceFromEstimate(invId, estNum, how){
+  try{
+    if(how==='linked by hand'){
+      await sbFetch('DELETE', `/rest/v1/invoice_estimate_links?qb_invoice_id=eq.${invId}&estimate_number=eq.${encodeURIComponent(estNum)}`);
+      invLinks = invLinks.filter(l=>!(l.qb_invoice_id===invId && l.estimate_number===String(estNum)));
+    } else {
+      // QuickBooks / automatic / Billing Tracker links are hidden with a "not this estimate" note
+      const row = { qb_invoice_id:invId, estimate_number:'not:'+estNum, linked_by:(currentUser&&currentUser.email)||'' };
+      await sbFetch('POST','/rest/v1/invoice_estimate_links', row); invLinks.push(row);
+    }
+    openLinkEstimate(invId); if(view==='receivables') renderReceivables();
+  }catch(err){ alert('Could not remove: '+err.message); }
+}
+
 // Receivables: open invoices, aging, by customer
-let arCustomer = '', arOverdueOnly = false, arSort = 'days', arNotSentOnly = false;
+let arCustomer = '', arOverdueOnly = false, arSort = 'days', arNotSentOnly = false, arUnlinkedOnly = false;
 function renderReceivables(){
   const el = document.getElementById('main-content');
   if(!qbInvLoaded || (!estimates.length && !arEstTried)){
@@ -6605,7 +6668,7 @@ function renderReceivablesInner(){
   const total = sum(open);
   const customers = [...new Set(open.map(i=>i.customer_name).filter(Boolean))].sort();
   if(arCustomer && !customers.includes(arCustomer)) arCustomer = '';
-  let list = open.filter(i=>(!arCustomer || i.customer_name===arCustomer) && (!arOverdueOnly || invDaysPast(i)>0) && (!arNotSentOnly || i.email_status!=='EmailSent'));
+  let list = open.filter(i=>(!arCustomer || i.customer_name===arCustomer) && (!arOverdueOnly || invDaysPast(i)>0) && (!arNotSentOnly || i.email_status!=='EmailSent') && (!arUnlinkedOnly || !estFor(i).length));
   list.sort(arSort==='amount' ? (a,b)=>Number(b.balance)-Number(a.balance) : arSort==='customer' ? (a,b)=>(a.customer_name||'').localeCompare(b.customer_name||'')||invDaysPast(b)-invDaysPast(a) : (a,b)=>invDaysPast(b)-invDaysPast(a)||(a.due_date||'').localeCompare(b.due_date||''));
   const byCust = customers.map(c=>{ const l = open.filter(i=>i.customer_name===c); return { c, owed:sum(l), n:l.length, overdue:sum(l.filter(i=>invDaysPast(i)>0)), oldest:Math.max(...l.map(invDaysPast)) }; }).sort((a,b)=>b.owed-a.owed);
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)!important';
@@ -6638,6 +6701,7 @@ function renderReceivablesInner(){
           <b>Open invoices</b>
           <select style="${sel}" onchange="arCustomer=this.value;renderReceivables()"><option value="">All customers</option>${customers.map(c=>`<option${arCustomer===c?' selected':''}>${arEsc(c)}</option>`).join('')}</select>
           <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arOverdueOnly?'checked':''} onchange="arOverdueOnly=this.checked;renderReceivables()"> Overdue only</label>
+          <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arUnlinkedOnly?'checked':''} onchange="arUnlinkedOnly=this.checked;renderReceivables()"> No estimate (${open.filter(i=>!estFor(i).length).length})</label>
           <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arNotSentOnly?'checked':''} onchange="arNotSentOnly=this.checked;renderReceivables()"> Not emailed yet (${open.filter(i=>i.email_status!=='EmailSent').length})</label>
           <select style="${sel};margin-left:auto" onchange="arSort=this.value;renderReceivables()">${[['days','Most overdue first'],['amount','Largest balance first'],['customer','By customer']].map(([v,l])=>`<option value="${v}"${arSort===v?' selected':''}>${l}</option>`).join('')}</select>
         </div>
@@ -6645,7 +6709,7 @@ function renderReceivablesInner(){
           <th style="${th}">Invoice</th><th style="${th}">Customer / estimate</th><th style="${th}">Due</th><th style="${th};text-align:right">Amount</th><th style="${th};text-align:right">Balance</th><th style="${th}">Status</th><th style="${th}"></th></tr></thead><tbody>
           ${list.map(i=>{ const ests = estFor(i); return `<tr>
             <td style="${td}"><b>#${arEsc(i.doc_number)}</b><div style="font-size:11px;color:var(--text-3)">${arFmt(i.txn_date)}</div></td>
-            <td style="${td}">${arEsc(i.customer_name)}${ests.length?`<div style="font-size:11px">${ests.map(x=>x.e?`<a style="cursor:pointer;color:var(--green-dark)" onclick="loadEstimates().then(()=>{setView('estimates');setTimeout(()=>openEstimateDetail('${x.e.id}'),50)})">Est #${arEsc(x.n)} · ${arEsc(x.e.projectName)}</a>`:`Est #${arEsc(x.n)}`).join(' · ')}</div>`:`<div style="font-size:11px;color:var(--text-3)">not linked to an estimate</div>`}</td>
+            <td style="${td}">${arEsc(i.customer_name)}${ests.length?`<div style="font-size:11px">${ests.map(x=>x.e?`<a style="cursor:pointer;color:var(--green-dark)" onclick="openEstimateDetail('${x.e.id}')">Est #${arEsc(x.n)} · ${arEsc(x.e.projectName)}</a>`:`Est #${arEsc(x.n)}`).join(' · ')} · <a style="cursor:pointer;color:var(--text-3)" onclick="openLinkEstimate('${i.qb_invoice_id}')">change</a></div>`:`<div style="font-size:11px"><span style="color:#b45309">not linked to an estimate</span> · <a style="cursor:pointer;color:var(--green-dark);font-weight:600" onclick="openLinkEstimate('${i.qb_invoice_id}')">🔗 Link to estimate</a></div>`}</td>
             <td style="${td};white-space:nowrap">${arFmt(i.due_date)}</td>
             <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right;font-weight:600">${arMoney(i.balance)}</td>
             <td style="${td}">${invChip(i)}<div style="font-size:11px;margin-top:3px;color:${i.email_status==='EmailSent'?'var(--text-3)':'#b45309'}">${i.email_status==='EmailSent'?'✉ emailed':'not emailed'}</div></td>

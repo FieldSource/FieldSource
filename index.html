@@ -3072,6 +3072,7 @@ function pmTemplateRows(tree, projectId, opts){
 function pmTreeFromProject(projectId){
   const build = pid=>pmKids(projectId, pid).map(it=>{
     const n = { title:it.title, type:it.type };
+    if(it.type!=='phase' && it.owner) n.owner = it.owner;
     if(pmIsExternal(it)){ n.party = pmParty(it); if(it.party==='sub' && it.party_name) n.party_name = it.party_name; }
     if(it.description) n.description = it.description;
     if(pmLenUnit(it)==='hours'){ n.unit = 'hours'; }
@@ -4482,6 +4483,8 @@ async function pmSaveProject(id){
       }
       document.getElementById('pm-overlay').remove();
       pmRender();
+      const byOwner = {}; pm.items.filter(i=>i.project_id===p.id && i.owner).forEach(i=>{ (byOwner[i.owner]=byOwner[i.owner]||[]).push(i); });
+      Object.entries(byOwner).forEach(([o,list])=>pmNotifyText(o, p.id, `assigned you ${list.length} task${list.length===1?'':'s'} on a new project: ${list.slice(0,3).map(i=>i.title).join(', ')}${list.length>3?'…':''}`));
       if(pm.items.some(i=>i.project_id===p.id && i.type!=='phase')) pmDeadlines(p.id, { fresh:true });
       return;
     }
@@ -4797,7 +4800,8 @@ function pmTplRender(fresh){
     return `<div style="display:flex;align-items:center;gap:6px;padding:5px 6px 5px ${6+depth*24}px;border-bottom:1px solid var(--border);${isPhase?'background:var(--surface)':''}">
       <input value="${pmEsc(n.title)}" oninput="pmTplSet('${n._k}','title',this.value)" class="pm-in" style="flex:1;min-width:140px;padding:4px 6px;${isPhase?'font-weight:600':''}" placeholder="${isPhase?'Phase name':'Task name'}">
       ${isPhase?'':`<select onchange="pmTplSet('${n._k}','type',this.value);pmTplRender()" class="pm-in" style="width:150px;padding:4px;font-size:12px">${types.map(([v,l])=>`<option value="${v}"${n.type===v?' selected':''}>${l}</option>`).join('')}</select>
-        <select onchange="pmTplSet('${n._k}','party',this.value)" class="pm-in" style="width:96px;padding:4px;font-size:12px" title="Who does it">${[['fs','Field Source'],['client','👤 Client'],['sub','🔧 Sub']].map(([v,l])=>`<option value="${v}"${(n.party||'fs')===v?' selected':''}>${l}</option>`).join('')}</select>`}
+        <select onchange="pmTplSet('${n._k}','party',this.value)" class="pm-in" style="width:96px;padding:4px;font-size:12px" title="Who does it">${[['fs','Field Source'],['client','👤 Client'],['sub','🔧 Sub']].map(([v,l])=>`<option value="${v}"${(n.party||'fs')===v?' selected':''}>${l}</option>`).join('')}</select>
+        <select onchange="pmTplSet('${n._k}','owner',this.value)" class="pm-in" style="width:92px;padding:4px;font-size:12px" title="Default owner (or follow-up person for client/sub items)"><option value="">Owner…</option>${PM_OWNERS.map(o=>`<option${n.owner===o.name?' selected':''}>${o.name}</option>`).join('')}</select>`}
       ${isPhase||ms||hasKids?'<span style="width:136px"></span>':`<span style="display:flex;gap:3px;width:136px">
         <input type="number" min="0" step="0.5" value="${(n.unit==='hours'?n.est_hours:n.duration)??''}" oninput="pmTplSetLen('${n._k}',this.value)" class="pm-in" style="width:56px;padding:4px;font-size:12px" placeholder="length" title="Length">
         <select onchange="pmTplSetUnit('${n._k}',this.value)" class="pm-in" style="width:76px;padding:4px;font-size:12px"><option value="days"${n.unit!=='hours'?' selected':''}>days</option><option value="hours"${n.unit==='hours'?' selected':''}>hours</option></select></span>`}
@@ -4862,6 +4866,7 @@ function pmTplClose(){ if(pmTpl && pmTpl.dirty && !confirm('Close without saving
 function pmTplStrip(nodes, depth){
   return nodes.filter(n=>(n.title||'').trim()).map(n=>{
     const o = { title:n.title.trim(), type: depth===0 ? 'phase' : (n.type||'task') };
+    if(depth>0 && n.owner) o.owner = n.owner;
     if(depth>0 && (n.party==='client'||n.party==='sub')){ o.party = n.party; if(n.party==='sub' && n.party_name) o.party_name = n.party_name; }
     if(n.unit==='hours' && !pmIsMilestone(o.type)){ o.unit = 'hours'; if(n.est_hours!=null && n.est_hours!=='') o.est_hours = n.est_hours; }
     else { if(n.duration && !pmIsMilestone(o.type)) o.duration = n.duration; if(n.est_hours!=null && n.est_hours!=='') o.est_hours = n.est_hours; }

@@ -72,7 +72,7 @@ async function qbItems() {
     page.filter(i => i.Type !== 'Category').forEach(i => items.push({
       id: String(i.Id), name: i.FullyQualifiedName || i.Name,
       price: i.UnitPrice != null ? Number(i.UnitPrice) : null,
-      desc: String(i.Description || '').replace(/\s+/g, ' ').slice(0, 140),
+      desc: String(i.Description || '').replace(/\s+/g, ' ').slice(0, 400),
     }));
     if (page.length < 1000) break;
   }
@@ -144,7 +144,7 @@ exports.handler = async function (event) {
     (out.items || []).forEach(it => {
       const qi = byId.get(String(it.qb_item_id || ''));
       if (it.qb_item_id && !qi) { it.qb_item_id = ''; it.qb_item_name = ''; (out.flags = out.flags || []).push(`"${it.title}": the QuickBooks item it picked doesn't exist. Pick one.`); }
-      if (qi) it.qb_item_name = qi.name;
+      if (qi){ it.qb_item_name = qi.name; if (!it.qb_item_desc) it.qb_item_desc = qi.desc || ''; }
       if (String(it.price_source || '').startsWith('QuickBooks') && qi && qi.price != null && Number(it.unit_price) !== qi.price) {
         it.unit_price = qi.price;
         (out.flags = out.flags || []).push(`"${it.title}": price reset to the QuickBooks price for ${qi.name} ($${qi.price}).`);

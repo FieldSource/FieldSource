@@ -15,5 +15,10 @@ exports.handler = async function () {
     console.log('qb-sync pass', i + 1, res.statusCode, res.body.slice(0, 300));
     if (res.statusCode !== 200 || !body.hasMore) break;
   }
+  // Then invoices (balances, payments, links to estimates)
+  try{
+    const inv = require('./qb-invoice-sync.js');
+    for (let i = 0; i < 3; i++) { const r = await inv.run(false); console.log('qb-invoice-sync pass', i + 1, JSON.stringify(r)); if (!r.hasMore) break; }
+  }catch(e){ console.error('qb-invoice-sync failed:', e.message); }
   return res;
 };

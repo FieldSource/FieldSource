@@ -6193,8 +6193,8 @@ async function deleteFleetLoan(id){
 let estimates = [];
 let estimateStatusFilter = 'All';
 let estimateTypeFilter = 'All';
-let estimateSortBy = 'due'; // column key: name,type,amount,created,due,status,days,proposal,tips
-let estimateSortDir = 'asc';
+let estimateSortBy = 'created'; // column key: name,type,amount,created,due,status,days,proposal,tips (default: newest first)
+let estimateSortDir = 'desc';
 let estimateCreatedFrom = '';
 let estimateClientFilter = ''; // '' = all clients, '__none__' = no client set
 let estimateCreatedTo = '';
@@ -6325,6 +6325,7 @@ function renderEstimates(){
       const c = (typeof av==='number'&&typeof bv==='number') ? av-bv : String(av).localeCompare(String(bv));
       if(c) return c*dir;
     }
+    if(estimateSortBy==='created'){ const an = parseInt(a.qbNumber,10), bn = parseInt(b.qbNumber,10); if(!isNaN(an) && !isNaN(bn) && an!==bn) return (an-bn)*dir; }   // same day: higher estimate # = newer
     return (a.projectName||'').localeCompare(b.projectName||'');
   });
 

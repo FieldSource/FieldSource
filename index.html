@@ -7028,9 +7028,23 @@ async function openInvoiceBuilder(estNum){
     const today = arToday();
     billState = { estNum, prep, e, billed, mode:'pct', unsyncedBilled,
       rows: prep.lines.map((l,k)=>({ ...l, billedAmt:billed[k].amt, billedQty:billed[k].qty, input:'', description:l.description })),
-      doc: prep.next_doc_number||'', date: today, due:'', po:'', memo:'' };
+      doc: prep.next_doc_number||'', date: today, due:'', po:'', memo:'',
+      term: billDefaultTerm(prep) };
     renderInvoiceBuilder();
   }catch(err){ billOverlay('bill-overlay', `<div class="sheet-title">Couldn't load the estimate</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('bill-overlay').remove()">Close</button></div>`, 520); }
+}
+// Terms: Due on receipt / Net 15 / Net 30 / Custom date. Uses QuickBooks' own terms when they exist.
+const BILL_TERMS = [ { key:'receipt', label:'Due on receipt', days:0, re:/due\s*on\s*receipt/i }, { key:'net15', label:'Net 15', days:15, re:/net\s*15\b/i }, { key:'net30', label:'Net 30', days:30, re:/net\s*30\b/i } ];
+function billQbTerm(prep, key){ const t = BILL_TERMS.find(x=>x.key===key); return t && (prep.terms||[]).find(q=>t.re.test(q.name)); }
+function billDefaultTerm(prep){
+  const ct = (prep.terms||[]).find(q=>q.id===prep.customer_term_id);
+  const m = ct && BILL_TERMS.find(t=>t.re.test(ct.name));
+  return m ? m.key : 'net30';
+}
+function billDueDate(st){
+  if(st.term==='custom') return st.due || '';
+  const t = BILL_TERMS.find(x=>x.key===st.term); if(!t || !st.date) return '';
+  const d = new Date(st.date+'T12:00:00'); d.setDate(d.getDate()+t.days); return d.toLocaleDateString('en-CA');
 }
 function billRowAmount(r){
   const v = parseFloat(r.input); if(isNaN(v)) return 0;
@@ -7051,8 +7065,10 @@ function renderInvoiceBuilder(){
     <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Estimate #${arEsc(p.estimate.number)} · ${arEsc(p.estimate.customer)} · contract ${arMoney(contract)} · billed so far ${arMoney(billedSoFar)}${st.unsyncedBilled?` (incl. ${arMoney(st.unsyncedBilled)} not synced line by line)`:''}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px">
       <div><div style="${billLbl}">Invoice #</div><input style="${billInput}" value="${arEsc(st.doc)}" oninput="billState.doc=this.value" placeholder="Next number"></div>
-      <div><div style="${billLbl}">Invoice date</div><input type="date" style="${billInput}" value="${st.date}" onchange="billState.date=this.value"></div>
-      <div><div style="${billLbl}">Due date</div><input type="date" style="${billInput}" value="${st.due}" onchange="billState.due=this.value" title="Leave blank to use the customer's terms${p.terms?' ('+arEsc(p.terms)+')':''}"></div>
+      <div><div style="${billLbl}">Invoice date</div><input type="date" style="${billInput}" value="${st.date}" onchange="billState.date=this.value;renderInvoiceBuilder()"></div>
+      <div><div style="${billLbl}">Terms</div><select style="${billInput}" onchange="billState.term=this.value;if(this.value==='custom'&&!billState.due)billState.due=billDueDate({...billState,term:'net30'});renderInvoiceBuilder()">
+        ${[...BILL_TERMS.map(t=>[t.key,t.label]), ['custom','Custom date']].map(([k,l])=>`<option value="${k}"${st.term===k?' selected':''}>${l}</option>`).join('')}</select>
+        ${st.term==='custom' ? `<input type="date" style="${billInput};margin-top:4px" value="${st.due}" onchange="billState.due=this.value">` : `<div style="font-size:11px;color:var(--text-3);margin-top:3px">Due ${billDueDate(st)?arFmt(billDueDate(st)):'—'}</div>`}</div>
       <div><div style="${billLbl}">PO #</div><input style="${billInput}" value="${arEsc(st.po)}" oninput="billState.po=this.value"></div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
@@ -7093,11 +7109,12 @@ function billConfirm(){
   const st = billState, lines = st.rows.map(r=>({ r, amt:billRowAmount(r) })).filter(x=>Math.abs(x.amt)>0.004);
   const err = document.getElementById('bill-err');
   if(!lines.length){ err.textContent = 'Enter an amount on at least one line.'; return; }
+  if(st.term==='custom' && !st.due){ err.textContent = 'Pick the custom due date.'; return; }
   if(lines.some(x=>x.amt<0)){ err.textContent = 'A line is less than what was already billed. Fix it, or bill a credit separately in QuickBooks.'; return; }
   const total = lines.reduce((t,x)=>t+x.amt,0), over = lines.filter(x=>x.r.billedAmt + x.amt > x.r.amount + 0.5);
   billOverlay('bill-confirm', `<div class="sheet-title">Create this invoice in QuickBooks?</div>
     <div style="font-size:13px;margin:8px 0">${arEsc(st.prep.estimate.customer)} · estimate #${arEsc(st.prep.estimate.number)}</div>
-    <div style="font-size:13px;line-height:1.7">Invoice <b>#${arEsc(st.doc||'(next number)')}</b> · dated <b>${arFmt(st.date)}</b>${st.due?` · due <b>${arFmt(st.due)}</b>`:''}${st.po?` · PO <b>${arEsc(st.po)}</b>`:''}</div>
+    <div style="font-size:13px;line-height:1.7">Invoice <b>#${arEsc(st.doc||'(next number)')}</b> · dated <b>${arFmt(st.date)}</b> · <b>${st.term==='custom'?'Custom':BILL_TERMS.find(t=>t.key===st.term).label}</b>${billDueDate(st)?`, due <b>${arFmt(billDueDate(st))}</b>`:''}${st.po?` · PO <b>${arEsc(st.po)}</b>`:''}</div>
     <div style="margin:10px 0;border:1px solid var(--border);border-radius:var(--radius-sm)">${lines.map(x=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px"><span>${arEsc(x.r.description||x.r.item_name).slice(0,90)}</span><b>${arMoney(x.amt)}</b></div>`).join('')}
       <div style="display:flex;justify-content:space-between;padding:8px 10px;font-size:14px;font-weight:700"><span>Total</span><span>${arMoney(total)}</span></div></div>
     ${over.length?`<div style="background:#fee2e2;color:#991b1b;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:8px">⚠ ${over.length} line${over.length===1?'':'s'} will be billed past the contract amount.</div>`:''}
@@ -7110,7 +7127,8 @@ async function billCreate(){
   const st = billState, btn = document.getElementById('bill-c-go'); btn.disabled = true; btn.textContent = 'Creating…';
   try{
     const lines = st.rows.map(r=>{ const amt = billRowAmount(r); return { line_id:r.line_id, amount:amt, description:r.description, qty: st.mode==='qty' ? parseFloat(r.input)||null : null }; }).filter(l=>Math.abs(l.amount)>0.004);
-    const res = await invAction({ action:'create', estimate_number:st.estNum, lines, txn_date:st.date, due_date:st.due||null, doc_number:st.doc||null, po:st.po||'', memo:st.memo||'' });
+    const qbTerm = st.term==='custom' ? null : billQbTerm(st.prep, st.term);
+    const res = await invAction({ action:'create', estimate_number:st.estNum, lines, txn_date:st.date, term_id: qbTerm ? qbTerm.id : null, due_date: qbTerm ? null : (billDueDate(st)||null), doc_number:st.doc||null, po:st.po||'', memo:st.memo||'' });
     document.getElementById('bill-confirm')?.remove(); document.getElementById('bill-overlay')?.remove();
     await loadQbInvoices(true);
     if(view==='receivables') renderReceivables(); else if(view==='estimates') renderEstimates();

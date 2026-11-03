@@ -655,6 +655,71 @@ async function renameClient(id){
   catch(e){ alert('Could not rename: '+e.message); }
 }
 // =================== END CLIENT LIST ===================
+// ===================== OVERHEAD COST CATEGORIES (Accounts Payable) =====================
+// Vendor invoices are charged either to a job (a client) or to an overhead category (not a job).
+// Editable in the app (Jake, Ryan, Matt); kept separate from clients so "Office" never shows up as a job site.
+const COST_CATEGORIES = ['Chemicals & Fertilizer','Equipment','Office','Marketing','Professional Services'];
+const NOT_FOR_INVOICES = ['Shop'];   // schedule-only sites that shouldn't be offered when filing invoices
+let costCategoryRows = [];
+async function loadCostCategories(){
+  try{
+    const rows = await sbFetch('GET','/rest/v1/app_lists?list=eq.cost_categories&select=id,value,active&order=value.asc');
+    if(rows && rows.length){ costCategoryRows = rows; COST_CATEGORIES.length = 0; COST_CATEGORIES.push(...rows.filter(r=>r.active!==false).map(r=>r.value).sort((a,b)=>a.localeCompare(b))); }
+  }catch(e){ console.warn('Cost categories not loaded (using built-in list):', e.message); }
+}
+function isOverhead(name){ return COST_CATEGORIES.some(c=>c.toLowerCase()===String(name||'').toLowerCase()); }
+function jobClients(){ return CLIENTS.filter(c=>!isOverhead(c) && !NOT_FOR_INVOICES.some(x=>x.toLowerCase()===String(c).toLowerCase())); }
+// <option> list for "charge this invoice to": jobs first, then overhead
+function chargeToOptions(selected){
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const opt = c=>`<option value="${esc(c)}"${c===selected?' selected':''}>${esc(c)}</option>`;
+  const extra = selected && !isOverhead(selected) && !CLIENTS.includes(selected) ? `<optgroup label="Other">${opt(selected)}</optgroup>` : '';
+  return `<optgroup label="Jobs">${jobClients().map(opt).join('')}</optgroup><optgroup label="Overhead (not a job)">${COST_CATEGORIES.map(opt).join('')}</optgroup>${extra}`;
+}
+function openManageCostCategories(){
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const rows = costCategoryRows.length ? costCategoryRows : COST_CATEGORIES.map(v=>({ id:null, value:v, active:true }));
+  const active = rows.filter(r=>r.active!==false).sort((a,b)=>a.value.localeCompare(b.value)), retired = rows.filter(r=>r.active===false);
+  const btn = 'border:1px solid var(--border-2);background:none;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit';
+  document.getElementById('cat-overlay')?.remove();
+  const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='cat-overlay'; o.style.zIndex = 10050;
+  o.onclick = e=>{ if(e.target===o) o.remove(); };
+  const row = (r,on)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid var(--border);font-size:13px">
+    <span style="flex:1;${on?'':'color:var(--text-3);text-decoration:line-through'}">${esc(r.value)}</span>
+    ${on?`<button style="${btn}" onclick="renameCostCategory('${r.id}')">Rename</button><button style="${btn};color:#b91c1c" onclick="setCostCategory('${r.id}',false)">Retire</button>`:`<button style="${btn}" onclick="setCostCategory('${r.id}',true)">Restore</button>`}</div>`;
+  o.innerHTML = `<div class="modal-sheet" style="max-width:480px"><div class="sheet-handle"></div>
+    <div class="sheet-title" style="margin-bottom:2px">Overhead categories</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">For vendor invoices that aren't for a job. They appear under "Overhead" when filing an invoice.</div>
+    ${!costCategoryRows.length?`<div style="font-size:12px;background:#fef9c3;border-radius:8px;padding:8px 10px;margin-bottom:10px">Run the overhead categories SQL first so changes can be saved.</div>`:''}
+    <div style="display:flex;gap:8px;margin-bottom:12px"><input id="cat-new" placeholder="New category, e.g. Insurance" style="flex:1;font-size:13px;padding:7px 9px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit" onkeydown="if(event.key==='Enter')addCostCategory()">
+      <button class="btn-save" style="flex:none;padding:7px 14px" onclick="addCostCategory()">Add</button></div>
+    ${active.map(r=>row(r,true)).join('')}
+    ${retired.length?`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 4px">Retired</div>${retired.map(r=>row(r,false)).join('')}`:''}
+    <div style="font-size:11px;color:var(--text-3);margin-top:10px">Renaming applies to new invoices; ones already filed keep the old name.</div>
+    <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn-cancel" style="flex:none" onclick="document.getElementById('cat-overlay').remove();refreshChargeToPickers()">Done</button></div></div>`;
+  document.body.appendChild(o);
+}
+function refreshChargeToPickers(){ ['inv-confirm-project','inv-edit-project'].forEach(id=>{ const el = document.getElementById(id); if(el){ const v = el.value; el.innerHTML = chargeToOptions(v); } }); }
+async function addCostCategory(){
+  const v = (document.getElementById('cat-new').value||'').trim().replace(/\s+/g,' '); if(!v) return;
+  if(costCategoryRows.some(r=>r.value.toLowerCase()===v.toLowerCase()) || CLIENTS.some(c=>c.toLowerCase()===v.toLowerCase() && !isOverhead(c))){ alert(`"${v}" is already a category or a client.`); return; }
+  try{ const r = await sbFetch('POST','/rest/v1/app_lists', { list:'cost_categories', value:v, active:true, created_by:(currentUser&&currentUser.email)||'' }); costCategoryRows.push(...(r||[])); await loadCostCategories(); openManageCostCategories(); }
+  catch(e){ alert('Could not add: '+e.message); }
+}
+async function renameCostCategory(id){
+  const r = costCategoryRows.find(x=>x.id===id); if(!r) return;
+  const v = (prompt('Rename category (invoices already filed keep the old name):', r.value)||'').trim(); if(!v || v===r.value) return;
+  try{ await sbFetch('PATCH', `/rest/v1/app_lists?id=eq.${id}`, { value:v }); r.value = v; await loadCostCategories(); openManageCostCategories(); }
+  catch(e){ alert('Could not rename: '+e.message); }
+}
+async function setCostCategory(id, active){
+  const r = costCategoryRows.find(x=>x.id===id); if(!r) return;
+  if(!active && !confirm(`Retire "${r.value}"? It disappears from the picker; invoices already filed keep it.`)) return;
+  try{ await sbFetch('PATCH', `/rest/v1/app_lists?id=eq.${id}`, { active }); r.active = active; await loadCostCategories(); openManageCostCategories(); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+// =================== END OVERHEAD COST CATEGORIES ===================
+
 
 
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Jeff Ziegler','Matt','Wes','Will Alterman','Cameron','Killer','Sly','Gase - Intern','Kaleb','Penlin'];
@@ -10461,6 +10526,7 @@ function renderInvApproval(){
 // ── INVOICES ─────────────────────────────────────────────────────────────────
 let invoiceFiles = [];
 let invoiceJobFilter = 'All';
+function invMatchesJobFilter(f){ if(invoiceJobFilter==='All') return true; if(invoiceJobFilter==='__overhead__') return isOverhead(f.projectName); if(invoiceJobFilter==='__jobs__') return !isOverhead(f.projectName); return f.projectName===invoiceJobFilter; }
 let invoiceSearch = '';
 let invoiceVendorFilter = 'All';
 let invoiceYearFilter = 'All';
@@ -10715,7 +10781,7 @@ async function extractInvoiceData(file){
     const payload = JSON.stringify({
       fileData: base64,
       fileType: mimeType,
-      clientList: CLIENTS.join(', '),
+      clientList: jobClients().join(', ') + '. If the invoice is not for a specific job, use one of these overhead categories instead: ' + COST_CATEGORIES.join(', '),
     });
     console.log('Sending to extract-invoice, payload size:', payload.length, 'fileType:', mimeType);
     const response = await fetch('/.netlify/functions/extract-invoice', {
@@ -10907,7 +10973,7 @@ function openInvoiceEditModal(id){
     <div class="form-group">
       <label class="form-label">Project *</label>
       <select id="inv-edit-project" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
-        ${CLIENTS.map(c=>`<option value="${c}"${c===f.projectName?' selected':''}>${c}</option>`).join('')}
+        ${chargeToOptions(f.projectName)}
       </select>
       <div style="margin-top:8px">
         <label class="form-label" style="color:var(--text-3)">Or enter a new project name</label>
@@ -10978,10 +11044,9 @@ function showInvoiceConfirmModal(file, extracted, notes){
 
   const suggestedProject = extracted?.project||'';
   const suggestedVendor = extracted?.vendor||'';
-  const matchedClient = CLIENTS.find(c=>
-    c.toLowerCase()===suggestedProject.toLowerCase() ||
-    suggestedProject.toLowerCase().includes(c.toLowerCase())
-  ) || '';
+  const matchedClient = [...COST_CATEGORIES, ...jobClients()].find(c=>
+    c.toLowerCase()===suggestedProject.toLowerCase()
+  ) || jobClients().find(c=>suggestedProject.toLowerCase().includes(c.toLowerCase())) || '';
 
   const queueLabel = invoiceQueue.length > 1 ? ` (${invoiceQueueIndex+1} of ${invoiceQueue.length})` : '';
   overlay.innerHTML = `<div class="modal-sheet" style="max-width:480px">
@@ -11000,10 +11065,11 @@ function showInvoiceConfirmModal(file, extracted, notes){
       Could not automatically read this file. Please select the project and vendor manually.
     </div>`}
     <div class="form-group">
-      <label class="form-label">Project *</label>
+      <label class="form-label">Charge to (job or overhead) *</label>
       <select id="inv-confirm-project" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
-        ${CLIENTS.map(c=>`<option value="${c}"${c===matchedClient?' selected':''}>${c}</option>`).join('')}
+        ${chargeToOptions(matchedClient)}
       </select>
+      ${(typeof canEditServices==='function' && canEditServices())?`<div style="text-align:right;margin-top:3px"><a style="font-size:11px;cursor:pointer;color:var(--green-dark)" onclick="openManageCostCategories()">Manage overhead categories</a></div>`:''}
       <div style="margin-top:8px">
         <label class="form-label" style="color:var(--text-3)">Or enter a new project name</label>
         <input type="text" id="inv-confirm-new-project" placeholder="Type new project name to override..." value="${!matchedClient&&suggestedProject?suggestedProject:''}" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
@@ -11357,7 +11423,7 @@ function getReportFilteredInvoices(){
   let filtered = invoiceFiles;
   if(reportDateFrom) filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,10)>=reportDateFrom);
   if(reportDateTo) filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,10)<=reportDateTo);
-  if(invoiceJobFilter!=='All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  filtered = filtered.filter(invMatchesJobFilter);
   if(invoiceVendorFilter!=='All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
   if(reportMinAmount) filtered = filtered.filter(f=>f.amount&&f.amount>=parseFloat(reportMinAmount));
   return filtered;
@@ -11380,7 +11446,7 @@ function downloadInvoiceReport(type){
     const lines = [];
     const dateStr = new Date().toLocaleDateString('en-US');
     lines.push(`Field Source Invoice Report — ${dateStr}`);
-    lines.push(`Filters: Project=${invoiceJobFilter}, Vendor=${invoiceVendorFilter}, From=${reportDateFrom||'—'}, To=${reportDateTo||'—'}, Min Amount=${reportMinAmount||'—'}`);
+    lines.push(`Filters: Project=${({__jobs__:'All jobs',__overhead__:'All overhead'}[invoiceJobFilter]||invoiceJobFilter)}, Vendor=${invoiceVendorFilter}, From=${reportDateFrom||'—'}, To=${reportDateTo||'—'}, Min Amount=${reportMinAmount||'—'}`);
     lines.push(`Total: ${filtered.length} invoices, ${poFmt(total)}`);
     lines.push('');
 
@@ -11440,7 +11506,7 @@ function downloadInvoiceReport(type){
       @media print{body{padding:16px}}
     </style></head><body>
     <h1>Field Source Invoice Report</h1>
-    <div class="meta">Generated ${dateStr} · ${filtered.length} invoices · ${invoiceJobFilter!=='All'?'Project: '+invoiceJobFilter+' · ':''}${invoiceVendorFilter!=='All'?'Vendor: '+invoiceVendorFilter+' · ':''}${reportDateFrom?'From: '+reportDateFrom+' · ':''}${reportDateTo?'To: '+reportDateTo:''}
+    <div class="meta">Generated ${dateStr} · ${filtered.length} invoices · ${invoiceJobFilter!=='All'?'Project: '+({__jobs__:'All jobs',__overhead__:'All overhead'}[invoiceJobFilter]||invoiceJobFilter)+' · ':''}${invoiceVendorFilter!=='All'?'Vendor: '+invoiceVendorFilter+' · ':''}${reportDateFrom?'From: '+reportDateFrom+' · ':''}${reportDateTo?'To: '+reportDateTo:''}
     </div>
     <div class="summary">
       <div><div class="num">${filtered.length}</div><div class="lbl">Invoices</div></div>
@@ -11484,7 +11550,7 @@ function renderInvoiceReports(){
   let filtered = inv;
   if(reportDateFrom) filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,10)>=reportDateFrom);
   if(reportDateTo) filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,10)<=reportDateTo);
-  if(invoiceJobFilter!=='All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  filtered = filtered.filter(invMatchesJobFilter);
   if(invoiceVendorFilter!=='All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
   if(reportMinAmount) filtered = filtered.filter(f=>f.amount&&f.amount>=parseFloat(reportMinAmount));
 
@@ -11521,7 +11587,9 @@ function renderInvoiceReports(){
       <div>
         <label class="form-label">Project</label>
         <select onchange="invoiceJobFilter=this.value;renderInvoiceReports()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
-          ${allProjects.map(p=>`<option value="${p}"${invoiceJobFilter===p?' selected':''}>${p}</option>`).join('')}
+          ${(()=>{ const o = p=>`<option value="${p}"${invoiceJobFilter===p?' selected':''}>${p}</option>`; const list = allProjects.filter(p=>p!=='All');
+            return `<option value="All"${invoiceJobFilter==='All'?' selected':''}>All</option><option value="__jobs__"${invoiceJobFilter==='__jobs__'?' selected':''}>All jobs</option><option value="__overhead__"${invoiceJobFilter==='__overhead__'?' selected':''}>All overhead</option>`
+              + `<optgroup label="Jobs">${list.filter(p=>!isOverhead(p)).map(o).join('')}</optgroup><optgroup label="Overhead">${list.filter(p=>isOverhead(p)).map(o).join('')}</optgroup>`; })()}
         </select>
       </div>
       <div>
@@ -11634,7 +11702,7 @@ function renderInvoices(){
   const allProjects = ['All', ...projectsFromFiles];
 
   let filtered = invoiceFiles;
-  if(invoiceJobFilter !== 'All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  filtered = filtered.filter(invMatchesJobFilter);
   if(invoiceVendorFilter !== 'All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
   if(invoiceSearch.trim()) {
     const q = invoiceSearch.trim().toLowerCase();
@@ -11649,7 +11717,7 @@ function renderInvoices(){
   }
   // Vendors available after project filter
   const availableVendors = ['All', ...new Set(
-    (invoiceJobFilter==='All' ? invoiceFiles : invoiceFiles.filter(f=>f.projectName===invoiceJobFilter))
+    invoiceFiles.filter(invMatchesJobFilter)
     .map(f=>f.vendorName).filter(Boolean)
   )].sort((a,b)=>a==='All'?-1:a.localeCompare(b));
   if(!availableVendors.includes(invoiceVendorFilter)) invoiceVendorFilter='All';
@@ -11692,7 +11760,9 @@ function renderInvoices(){
       <div>
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-3);margin-bottom:6px">Project</div>
         <select onchange="invoiceJobFilter=this.value;invoiceVendorFilter='All';renderInvoices()" style="width:100%;padding:8px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:13px;font-family:inherit;background:var(--bg)">
-          ${allProjects.map(p=>`<option value="${p}"${invoiceJobFilter===p?' selected':''}>${p}</option>`).join('')}
+          ${(()=>{ const o = p=>`<option value="${p}"${invoiceJobFilter===p?' selected':''}>${p}</option>`; const list = allProjects.filter(p=>p!=='All');
+            return `<option value="All"${invoiceJobFilter==='All'?' selected':''}>All</option><option value="__jobs__"${invoiceJobFilter==='__jobs__'?' selected':''}>All jobs</option><option value="__overhead__"${invoiceJobFilter==='__overhead__'?' selected':''}>All overhead</option>`
+              + `<optgroup label="Jobs">${list.filter(p=>!isOverhead(p)).map(o).join('')}</optgroup><optgroup label="Overhead">${list.filter(p=>isOverhead(p)).map(o).join('')}</optgroup>`; })()}
         </select>
       </div>
       <div>
@@ -11734,7 +11804,7 @@ function renderInvoiceList(){
 
   const allProjects2 = [...new Set(invoiceFiles.map(f=>f.projectName).filter(Boolean))].sort();
   let filtered = invoiceFiles;
-  if(invoiceJobFilter !== 'All') filtered = filtered.filter(f=>f.projectName===invoiceJobFilter);
+  filtered = filtered.filter(invMatchesJobFilter);
   if(invoiceYearFilter !== 'All') filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(0,4)===invoiceYearFilter);
   if(invoiceMonthFilter !== 'All') filtered = filtered.filter(f=>f.uploadedAt&&f.uploadedAt.slice(5,7)===invoiceMonthFilter);
   if(invoiceVendorFilter !== 'All') filtered = filtered.filter(f=>f.vendorName===invoiceVendorFilter);
@@ -13171,7 +13241,7 @@ async function doLogin(){
     currentUser = data.user;
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList();
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories();
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);
@@ -13284,7 +13354,7 @@ function checkSession(){
       currentToken = token;
       refreshToken = refresh;
       currentUser = JSON.parse(user);
-      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList();
+      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories();
       isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
       isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());

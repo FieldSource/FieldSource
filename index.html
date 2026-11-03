@@ -555,6 +555,108 @@ async function setServiceActive(id, active){
 }
 // =================== END SERVICES LIST ===================
 
+// ===================== CLIENT LIST (editable in the app) =====================
+// Clients are the overarching place (Logan Elm, not "Logan Elm Softball Field"). The built-in lists above are the
+// fallback; once app_lists has clients, it's the source of truth. Used by every client/site picker in the tracker.
+let clientRows = [];
+function canEditClients(){ return SERVICE_EDITORS.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
+async function loadClientList(){
+  try{
+    const rows = await sbFetch('GET','/rest/v1/app_lists?list=eq.clients&select=id,value,active,address&order=value.asc');
+    if(rows && rows.length){
+      clientRows = rows;
+      const active = rows.filter(r=>r.active!==false).map(r=>r.value).sort((a,b)=>a.localeCompare(b));
+      CLIENTS.length = 0; CLIENTS.push(...active);
+      rows.forEach(r=>{ if(r.address) CLIENT_ADDRESSES[r.value] = r.address; });
+    }
+  }catch(e){ console.warn('Client list not loaded (using built-in list):', e.message); }
+}
+// "Logan Elm Local Schools" -> "Logan Elm"; "Grove City Parks and Recreation" -> "Grove City"
+function shortClientName(name){
+  let n = String(name||'').trim();
+  const tails = ['Local School District','City School District','Exempted Village School District','School District','Local Schools','City Schools','Local School','Schools','High School','Middle School',
+    'Parks and Recreation','Parks & Recreation','Recreation Department','Park District','Recreation','Board of Education','Christian Schools','Catholic High School'];
+  tails.push('Baseball','Softball','Soccer','Football','Track','Tennis','Athletics','Athletic Complex','LLC','L.L.C.','Inc','Inc.','Co','Co.','Company','Corp','Corporation');
+  tails.sort((a,b)=>b.length-a.length);
+  for(let pass=0, changed=true; changed && pass<4; pass++){ changed = false;
+    for(const t of tails){ const re = new RegExp('\\s*[-–,]?\\s*' + t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\s*$', 'i'); if(re.test(n) && n.replace(re,'').trim()){ n = n.replace(re,''); changed = true; break; } } }
+  return n.replace(/^(The|City of)\s+/i, m=>/city of/i.test(m)?m:'').trim() || String(name||'').trim();
+}
+// Compare names on their meaningful words: generic words dropped, abbreviations evened out
+// ("Circleville City Schools" ~ "Circleville Schools", "Mount Gilead" ~ "Mt Gilead Schools", "Bloom-Carroll" ~ "Bloom Carroll").
+const CLIENT_GENERIC = new Set(['the','of','and','school','schools','city','local','district','exempted','village','high','middle','elementary','board','education','department','recreation','parks','park','inc','llc','co','company','public','csd','lsd','evsd','hs','ms','baseball','softball','soccer','football','field','fields','stadium','complex']);
+function clientWords(name){
+  return String(name||'').toLowerCase().replace(/&/g,' and ').replace(/['’]s\b/g,'').replace(/[^a-z0-9]+/g,' ')
+    .split(' ').map(w=>w==='mt'?'mount':w==='st'?'saint':w==='ft'?'fort':w).filter(w=>w && !CLIENT_GENERIC.has(w));
+}
+const CLIENT_ALIASES = { 'swls':['southwest','licking'] };   // client written as initials -> the words it stands for
+const CLIENT_WEAK = new Set(['mount','saint','fort','north','south','east','west','central','ohio','columbus','university','county','valley','christian','catholic','club']);
+function clientMatches(name){
+  const cw = clientWords(name); if(!cw.length) return [];
+  return CLIENTS.map(c=>{ let kw = clientWords(c); if(!kw.length) return null;
+      if(kw.length===1 && CLIENT_ALIASES[kw[0]]) kw = CLIENT_ALIASES[kw[0]];
+      const sharedWords = kw.filter(w=>cw.includes(w)), shared = sharedWords.length;
+      if(shared && shared<kw.length && sharedWords.every(w=>CLIENT_WEAK.has(w))) return null;   // only "Mount"/"North"/"Ohio" in common: not a real match
+      const all = shared===kw.length;                       // every meaningful word of the client is in the name
+      return shared ? { c, shared, all, score: (all?100:0) + shared*10 - Math.abs(kw.length-shared) } : null; })
+    .filter(Boolean).sort((a,b)=>b.score-a.score || b.c.length-a.c.length);
+}
+function matchTrackerClient(e){
+  const best = [e.client, e.projectName].map(n=>clientMatches(n).find(m=>m.all)).filter(Boolean).sort((a,b)=>b.score-a.score)[0];
+  return best ? best.c : '';
+}
+async function addClient(name, address){
+  const v = String(name||'').trim().replace(/\s+/g,' ');
+  if(!v) throw new Error('Enter the client name.');
+  const dup = clientRows.find(r=>r.value.toLowerCase()===v.toLowerCase()) || (CLIENTS.find(c=>c.toLowerCase()===v.toLowerCase()) ? { value:v, active:true } : null);
+  if(dup){ if(dup.active===false && dup.id){ await sbFetch('PATCH', `/rest/v1/app_lists?id=eq.${dup.id}`, { active:true }); } await loadClientList(); return dup.value; }
+  const r = await sbFetch('POST','/rest/v1/app_lists', { list:'clients', value:v, address:(address||'').trim()||null, active:true, created_by:(currentUser&&currentUser.email)||'' });
+  clientRows.push(...(r||[])); await loadClientList(); return v;
+}
+function openManageClients(){
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const rows = clientRows.length ? clientRows : CLIENTS.map(v=>({ id:null, value:v, active:true, address:CLIENT_ADDRESSES[v]||'' }));
+  const active = rows.filter(r=>r.active!==false).sort((a,b)=>a.value.localeCompare(b.value)), retired = rows.filter(r=>r.active===false);
+  const inp = 'font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  document.getElementById('cli-overlay')?.remove();
+  const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='cli-overlay';
+  o.onclick = e=>{ if(e.target===o) o.remove(); };
+  const row = (r, on)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 2px;border-bottom:1px solid var(--border);font-size:13px;flex-wrap:wrap">
+      <span style="width:170px;${on?'font-weight:600':'color:var(--text-3);text-decoration:line-through'}">${esc(r.value)}</span>
+      ${on?`<input style="${inp};flex:1;min-width:180px" value="${esc(r.address||CLIENT_ADDRESSES[r.value]||'')}" placeholder="Address" onchange="saveClientField('${r.id}','address',this.value)">
+      <button onclick="renameClient('${r.id}')" style="border:1px solid var(--border-2);background:none;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit">Rename</button>
+      <button onclick="saveClientField('${r.id}','active',false)" style="border:1px solid var(--border-2);background:none;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;color:#b91c1c">Retire</button>`
+      :`<button onclick="saveClientField('${r.id}','active',true)" style="margin-left:auto;border:1px solid var(--border-2);background:none;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit">Restore</button>`}</div>`;
+  o.innerHTML = `<div class="modal-sheet" style="max-width:680px;max-height:90vh;overflow-y:auto"><div class="sheet-handle"></div>
+    <div class="sheet-title" style="margin-bottom:2px">Clients</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Use the overarching place (e.g. <b>Logan Elm</b>, not "Logan Elm Softball Field"). Used for scheduling, daily reports, vendor invoices and approvals.</div>
+    ${!clientRows.length?`<div style="font-size:12px;background:#fef9c3;border-radius:8px;padding:8px 10px;margin-bottom:10px">The client list hasn't been set up in the database yet (run the clients SQL), so changes can't be saved.</div>`:''}
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"><input id="cli-new" placeholder="New client, e.g. Teays Valley" style="${inp};width:200px">
+      <input id="cli-new-addr" placeholder="Address (optional)" style="${inp};flex:1;min-width:180px">
+      <button class="btn-save" style="flex:none;padding:7px 14px" onclick="addClient(document.getElementById('cli-new').value, document.getElementById('cli-new-addr').value).then(()=>openManageClients()).catch(e=>alert(e.message))">Add</button></div>
+    <div style="max-height:56vh;overflow-y:auto">${active.map(r=>row(r,true)).join('')}
+      ${retired.length?`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 4px">Retired (hidden from pickers; past jobs keep them)</div>${retired.map(r=>row(r,false)).join('')}`:''}</div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:10px">Renaming applies to new entries; jobs, reports and invoices already saved keep the old name.</div>
+    <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn-cancel" style="flex:none" onclick="document.getElementById('cli-overlay').remove()">Done</button></div></div>`;
+  document.body.appendChild(o);
+}
+async function saveClientField(id, field, value){
+  const r = clientRows.find(x=>x.id===id); if(!r) return;
+  if(field==='active' && value===false && !confirm(`Retire "${r.value}"? It disappears from the pickers. Anything already saved keeps it.`)) return;
+  try{ await sbFetch('PATCH', `/rest/v1/app_lists?id=eq.${id}`, { [field]: field==='address' ? (String(value).trim()||null) : value }); r[field] = value; if(field==='address') CLIENT_ADDRESSES[r.value] = String(value).trim(); await loadClientList(); if(field!=='address') openManageClients(); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+async function renameClient(id){
+  const r = clientRows.find(x=>x.id===id); if(!r) return;
+  const v = (prompt('Rename client (anything already saved keeps the old name):', r.value)||'').trim().replace(/\s+/g,' ');
+  if(!v || v===r.value) return;
+  if(clientRows.some(x=>x.id!==id && x.value.toLowerCase()===v.toLowerCase())){ alert(`"${v}" is already on the list.`); return; }
+  try{ await sbFetch('PATCH', `/rest/v1/app_lists?id=eq.${id}`, { value:v }); if(CLIENT_ADDRESSES[r.value]){ CLIENT_ADDRESSES[v] = CLIENT_ADDRESSES[r.value]; } r.value = v; await loadClientList(); openManageClients(); }
+  catch(e){ alert('Could not rename: '+e.message); }
+}
+// =================== END CLIENT LIST ===================
+
+
 const CREW=['Dan Sr','Dan Jr','Brandon Stith','Brandon Moore','Greg','Jeff Ziegler','Matt','Wes','Will Alterman','Cameron','Killer','Sly','Gase - Intern','Kaleb','Penlin'];
 
 const CLIENT_ADDRESSES = {
@@ -6633,7 +6735,7 @@ function arContractsHtml(){
       <label style="font-size:12px;display:flex;gap:4px;align-items:center;margin-left:auto"><input type="checkbox" ${arHideFullyBilled?'checked':''} onchange="arHideFullyBilled=this.checked;renderReceivables()"> Hide fully billed and paid</label>
       <select style="${sel}" onchange="arContractSort=this.value;renderReceivables()">${[['left','Most left to bill'],['pct','Least billed %'],['date','Newest accepted']].map(([v,l])=>`<option value="${v}"${arContractSort===v?' selected':''}>${l}</option>`).join('')}</select>
     </div>
-    ${(()=>{ const n = estimatesNeedingPm().length; return n ? `<div style="margin:0 12px 10px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px">👷 <b>${n} accepted estimate${n===1?'':'s'}</b> ${n===1?'has':'have'} no project manager. Click <b>Assign PM</b> on ${n===1?'it':'each'} below; the PM approves that job's vendor invoices.</div>` : ''; })()}
+    ${(()=>{ const n = estimatesNeedingPm().length; return n ? `<div style="margin:0 12px 10px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px">👷 <b>${n} accepted estimate${n===1?'':'s'}</b> ${n===1?'needs':'need'} setting up. Click <b>Set up job</b> to pick the project manager (who approves vendor invoices) and the client.</div>` : ''; })()}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;padding:0 12px 10px">
       ${[['Contract value',tot.c,''],['Billed',tot.bl,tot.c?Math.round(tot.bl/tot.c*100)+'% of contracts':''],['Collected',tot.col,''],['Still owed',tot.ow,''],['Left to bill',tot.left,'']].map(([l,v,sub])=>`<div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${l}</div><div style="font-size:16px;font-weight:700">${arMoney0(v)}</div>${sub?`<div style="font-size:11px;color:var(--text-3)">${sub}</div>`:''}</div>`).join('')}
     </div>
@@ -6641,7 +6743,7 @@ function arContractsHtml(){
       <th style="${th}">Estimate</th><th style="${th};text-align:right">Contract</th><th style="${th};width:150px">Billed</th><th style="${th};text-align:right">Collected</th><th style="${th};text-align:right">Owed</th><th style="${th};text-align:right">Left to bill</th></tr></thead><tbody>
       ${rows.map(({e,b})=>{ const over = b.contract && b.billed > b.contract + 0.5; return `<tr style="cursor:pointer" onclick="openEstimateDetail('${e.id}')">
         <td style="${td}"><b>#${arEsc(e.qbNumber)}</b> · ${arEsc(e.projectName)}<div style="font-size:11px;color:var(--text-3)">${arEsc(e.client||'')}${e.acceptedDate?' · accepted '+arFmt(e.acceptedDate):''}</div>
-          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`👷 ${arEsc(e.pmName||e.pmEmail)}`:`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Assign PM</a>`}</div></td>
+          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`<a style="cursor:pointer;color:var(--text-2)" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 ${arEsc(e.pmName||e.pmEmail)}${e.apProject?' · '+arEsc(e.apProject):''}</a>`:`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Set up job</a>`}</div></td>
         <td style="${td};text-align:right">${arMoney0(b.contract)}</td>
         <td style="${td}"><div style="font-size:12px;${over?'color:#dc2626;font-weight:600':''}">${arMoney0(b.billed)} <span style="color:var(--text-3)">${b.contract?Math.round(b.pct)+'%':''}</span></div>
           <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:3px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>
@@ -7078,7 +7180,7 @@ async function openHandoff(estId){
     });
     handoff = {
       num, estId, qbTotal: Math.round((Number(qe[0].total)||0)*100)/100,
-      job: { job_name: e.projectName||'', client: qe[0].customer_name||e.client||'', site:'', po_number:'',
+      job: { job_name: e.projectName||'', client: e.apProject||qe[0].customer_name||e.client||'', site:'', po_number:'',
              accepted_date: e.acceptedDate||'', job_type: e.type==='Maintenance'?'Maintenance':'Project',
              billing_mode:'billed', closeout_mode:'turnkey', pm:e.pmName||'', pm_email:e.pmEmail||'', billing_contact:'', billing_email:'', notes:'' },
       items, pattern:'single_day',
@@ -8917,6 +9019,7 @@ function openModal(id=null,defaultDate=null){
           ${CLIENTS.map(c=>`<option value="${c}" ${job&&job.client===c?'selected':''}>${c}</option>`).join('')}
           <option value="__custom__" ${job&&job.client&&!CLIENTS.includes(job.client)?'selected':''}>Other (type below)</option>
         </select>
+        ${canEditClients()?`<div style="text-align:right;margin-top:3px"><a style="font-size:11px;cursor:pointer;color:var(--green-dark)" onclick="openManageClients()">+ Add / manage clients</a></div>`:''}
         <input type="text" id="f-client-custom" placeholder="Type a custom client..." value="${job&&job.client&&!CLIENTS.includes(job.client)?job.client:''}" style="display:${job&&job.client&&!CLIENTS.includes(job.client)?'block':'none'}">
       </div>
       <div class="form-group">
@@ -10064,20 +10167,24 @@ function openPmAssign(estId){
   const e = estimates.find(x=>x.id===estId); if(!e) return;
   if(!approvalRulesLoaded){ loadApprovalRules().then(()=>openPmAssign(estId)); return; }
   const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-  const people = approvalPeople(), proj = e.apProject || guessApProject(e);
+  const people = approvalPeople(), proj = e.apProject || matchTrackerClient(e) || shortClientName(e.client);
   const existing = proj ? approvalRuleFor(proj) : null;
   const inp = 'font-size:13px;padding:7px 9px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
   document.getElementById('pm-assign-overlay')?.remove();
   const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='pm-assign-overlay';
   o.innerHTML = `<div class="modal-sheet" style="max-width:520px"><div class="sheet-handle"></div>
-    <div class="sheet-title" style="margin-bottom:2px">${e.pmEmail?'Change':'Assign'} project manager</div>
+    <div class="sheet-title" style="margin-bottom:2px">${e.pmEmail?'Job setup':'Set up job'}</div>
     <div style="font-size:12px;color:var(--text-3);margin-bottom:14px">Estimate #${esc(e.qbNumber)} · ${esc(e.projectName)} · ${esc(e.client||'')}</div>
     <div class="form-label">Project manager</div>
     <select id="pm-who" style="${inp}"><option value="">Choose…</option>${people.map(p=>`<option value="${esc(p.email)}"${p.email===e.pmEmail?' selected':''}>${esc(p.name)}</option>`).join('')}</select>
-    <div class="form-label" style="margin-top:12px">Vendor invoices for this job are filed in Accounts Payable under</div>
-    <input id="pm-proj" list="pm-projs" style="${inp}" value="${esc(proj)}" placeholder="e.g. Elgin" oninput="pmProjHint()">
-    <datalist id="pm-projs">${approvalProjects().map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
+    <div class="form-label" style="margin-top:12px">Client in the tracker (the overarching place)</div>
+    <input id="pm-proj" list="pm-projs" style="${inp}" value="${esc(proj)}" placeholder="e.g. Logan Elm" oninput="pmProjHint()">
+    <datalist id="pm-projs">${CLIENTS.map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
+    <div id="pm-close"></div>
+    <div id="pm-new-client" style="display:none;margin-top:6px"><div style="font-size:12px;color:#92400e;margin-bottom:4px">New client: it'll be added to the tracker's client list.</div>
+      <input id="pm-new-addr" style="${inp}" placeholder="Address (optional), e.g. 9575 Tarlton Rd, Circleville, OH 43113"></div>
     <div id="pm-proj-hint" style="font-size:11px;color:var(--text-3);margin-top:4px"></div>
+    <div style="font-size:11px;color:var(--text-3);margin-top:2px">QuickBooks customer: ${esc(e.client||'')}. Use one name per place so scheduling, daily reports and vendor invoices all roll up together.</div>
     <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:12px"><input type="checkbox" id="pm-approver" checked> Make them the invoice approver for this project</label>
     <div id="pm-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
     <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
@@ -10092,9 +10199,13 @@ function openPmAssign(estId){
 function pmProjHint(){
   const el = document.getElementById('pm-proj-hint'); if(!el) return;
   const p = document.getElementById('pm-proj').value.trim(), r = p ? approvalRuleFor(p) : null;
-  el.innerHTML = !p ? 'Pick the project name used when uploading this job\u2019s vendor invoices.'
+  const isNew = !!p && !CLIENTS.some(c=>c.toLowerCase()===p.toLowerCase());
+  const nc = document.getElementById('pm-new-client'); if(nc) nc.style.display = isNew ? '' : 'none';
+  const close = isNew ? clientMatches(p).slice(0,4) : [];
+  const cm = document.getElementById('pm-close'); if(cm) cm.innerHTML = close.length ? `<div style="font-size:12px;margin-top:6px">Did you mean ${close.map(m=>`<a style="cursor:pointer;color:var(--green-dark);font-weight:600;border:1px solid var(--border-2);border-radius:99px;padding:2px 8px;margin:2px;display:inline-block" onclick="document.getElementById('pm-proj').value='${arEsc(m.c).replace(/'/g,"\\'")}';pmProjHint()">${arEsc(m.c)}</a>`).join('')}? Otherwise it'll be added as a new client.</div>` : '';
+  el.innerHTML = !p ? 'Pick an existing client or type a new one.'
     : r ? `Invoices for <b>${arEsc(p)}</b> currently go to <b>${arEsc(r.approver_name||r.approver_email)}</b>${r.project.toLowerCase()!==p.toLowerCase()?` (rule "${arEsc(r.project)}")`:''}. Saving changes that.`
-    : `No approval rule for <b>${arEsc(p)}</b> yet. Saving creates one.`;
+    : `${isNew?'':'Existing client. '}No invoice approver for <b>${arEsc(p)}</b> yet. Saving makes the PM the approver.`;
 }
 async function savePmAssign(estId, remove){
   const e = estimates.find(x=>x.id===estId); if(!e) return;
@@ -10102,15 +10213,19 @@ async function savePmAssign(estId, remove){
   const err = document.getElementById('pm-err');
   const pmEmail = remove ? '' : sel.value, pmName = remove ? '' : (sel.value ? sel.options[sel.selectedIndex].text : '');
   if(!remove && !pmEmail){ err.textContent = 'Choose the project manager.'; return; }
-  if(!remove && makeApprover && !proj){ err.textContent = 'Enter the Accounts Payable project name, or uncheck "Make them the invoice approver."'; return; }
+  if(!remove && !proj){ err.textContent = 'Enter the client.'; return; }
   try{
-    await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${e.id}`, { pm_email: pmEmail||null, pm_name: pmName||null, ap_project: proj||null });
-    e.pmEmail = pmEmail; e.pmName = pmName; e.apProject = proj;
-    if(!remove && makeApprover && proj){
-      const exact = approvalRules.find(r=>r.project.toLowerCase()===proj.toLowerCase());
+    let client = proj;
+    if(!remove && !CLIENTS.some(c=>c.toLowerCase()===proj.toLowerCase())){
+      client = await addClient(proj, (document.getElementById('pm-new-addr')||{}).value||'');
+    } else if(!remove){ client = CLIENTS.find(c=>c.toLowerCase()===proj.toLowerCase()) || proj; }
+    await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${e.id}`, { pm_email: pmEmail||null, pm_name: pmName||null, ap_project: client||null });
+    e.pmEmail = pmEmail; e.pmName = pmName; e.apProject = client;
+    if(!remove && makeApprover && client){
+      const exact = approvalRules.find(r=>r.project.toLowerCase()===client.toLowerCase());
       const fields = { approver_email: pmEmail, approver_name: pmName };
       if(exact){ await sbFetch('PATCH', `/rest/v1/invoice_approvers?id=eq.${exact.id}`, fields); Object.assign(exact, fields); }
-      else { const r = await sbFetch('POST','/rest/v1/invoice_approvers', { project: proj, ...fields, created_by: `${(currentUser&&currentUser.email)||''} (PM on estimate #${e.qbNumber})` }); approvalRules.push(...(r||[])); }
+      else { const r = await sbFetch('POST','/rest/v1/invoice_approvers', { project: client, ...fields, created_by: `${(currentUser&&currentUser.email)||''} (PM on estimate #${e.qbNumber})` }); approvalRules.push(...(r||[])); }
     }
     document.getElementById('pm-assign-overlay').remove();
     if(document.getElementById('est-pm-slot')) renderEstimatePm(e);
@@ -10125,11 +10240,11 @@ function renderEstimatePm(e){
   const approvesHere = r && e.pmEmail && String(r.approver_email).toLowerCase()===String(e.pmEmail).toLowerCase();
   slot.innerHTML = e.pmEmail
     ? `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:12px;font-size:13px">
-        <span>👷 Project manager: <b>${arEsc(e.pmName||e.pmEmail)}</b><span style="color:var(--text-3)">${e.apProject?` · ${approvesHere?'approves vendor invoices for':'invoices filed under'} <b>${arEsc(e.apProject)}</b>`:''}${e.apProject&&r&&!approvesHere?` (approver is ${arEsc(r.approver_name||r.approver_email)})`:''}</span></span>
+        <span>👷 Project manager: <b>${arEsc(e.pmName||e.pmEmail)}</b><span style="color:var(--text-3)">${e.apProject?` · client <b>${arEsc(e.apProject)}</b>${approvesHere?' · approves its vendor invoices':''}`:''}${e.apProject&&r&&!approvesHere?` (approver is ${arEsc(r.approver_name||r.approver_email)})`:''}</span></span>
         <button class="site-chip" style="margin-left:auto;padding:3px 10px;font-size:12px" onclick="openPmAssign('${e.id}')">Change</button></div>`
     : `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #fde68a;background:#fffbeb;border-radius:var(--radius-sm);margin-top:12px;font-size:13px">
-        <span>👷 <b>No project manager yet.</b> <span style="color:var(--text-3)">They'll approve this job's vendor invoices.</span></span>
-        <button class="site-chip active" style="margin-left:auto;padding:4px 12px;font-size:12px" onclick="openPmAssign('${e.id}')">Assign</button></div>`;
+        <span>👷 <b>Job not set up yet.</b> <span style="color:var(--text-3)">Pick the project manager (they approve vendor invoices) and the client.</span></span>
+        <button class="site-chip active" style="margin-left:auto;padding:4px 12px;font-size:12px" onclick="openPmAssign('${e.id}')">Set up job</button></div>`;
 }
 // =================== END PROJECT MANAGER ===================
 
@@ -13056,7 +13171,7 @@ async function doLogin(){
     currentUser = data.user;
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList();
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList();
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);
@@ -13169,7 +13284,7 @@ function checkSession(){
       currentToken = token;
       refreshToken = refresh;
       currentUser = JSON.parse(user);
-      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList();
+      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList();
       isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
       isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());

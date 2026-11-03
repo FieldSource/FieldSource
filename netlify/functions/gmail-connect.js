@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY;
 const REDIRECT = 'https://fieldsourcetracker.netlify.app/.netlify/functions/gmail-connect';
-const ALLOWED = ['jake@fieldsourceohio.com', 'ryan@fieldsourceohio.com', 'gibson@fieldsourceohio.com'];
+const ALLOWED = ['jake@fieldsourceohio.com', 'ryan@fieldsourceohio.com', 'gibson@fieldsourceohio.com', 'matt@fieldsourceohio.com', 'haller@fieldsourceohio.com'];
 const page = (title, msg, ok) => ({ statusCode: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' },
   body: `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui,sans-serif;max-width:520px;margin:60px auto;padding:0 20px;line-height:1.5">
   <h2 style="color:${ok ? '#166534' : '#991b1b'}">${title}</h2><p>${msg}</p>${ok ? '<p>You can close this tab and go back to the tracker.</p><script>setTimeout(()=>window.close(),2500)</script>' : ''}</body>` });
@@ -31,7 +31,7 @@ exports.handler = async function (event) {
       const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${q.t}` } });
       const u = r.ok ? await r.json() : null;
       if (!u || !u.email) return page('Please sign in again', 'Your tracker login expired. Refresh the tracker and click Connect Gmail again.');
-      if (!ALLOWED.includes(u.email.toLowerCase())) return page('Not available', 'Only Jake, Ryan and Ali can send invoices from Gmail.');
+      if (!ALLOWED.includes(u.email.toLowerCase())) return page('Not available', 'Only Jake, Ryan, Matt, Dan Haller and Ali can send from Gmail through the tracker.');
       const state = sign({ email: u.email.toLowerCase(), exp: Date.now() + 15 * 60 * 1000 });
       const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
         client_id: process.env.GOOGLE_CLIENT_ID, redirect_uri: REDIRECT, response_type: 'code', access_type: 'offline', prompt: 'consent',

@@ -7265,11 +7265,18 @@ async function loadFleetMaps(){
     fleetDrivers = {}; (d||[]).forEach(x=>fleetDrivers[x.driver_id]=x);
   }catch(e){ console.warn('Fleet cards/drivers not set up yet', e.message); }
 }
+// Names to pick from: people in WEX, anyone already assigned, plus the tracker's crew and logins
+// (so people without a WEX Driver ID, like Cameron, can still be chosen). Short names that match a
+// full name already in the list (Wes vs Wes Ganobcik) are left out to avoid doubles.
 function fleetPeople(){
-  const s = new Set();
-  Object.values(fleetDrivers).forEach(d=>{ if(!d.is_vehicle && d.person) s.add(d.person); if(d.person) s.add(d.person); });
-  Object.values(fleetCards).forEach(c=>{ if(c.assigned_to) s.add(c.assigned_to); });
-  return [...s].sort();
+  const full = new Set();
+  Object.values(fleetDrivers).forEach(d=>{ if(d.person && !isShared(d.person)) full.add(d.person); });
+  Object.values(fleetCards).forEach(c=>{ if(c.assigned_to && !isShared(c.assigned_to)) full.add(c.assigned_to); });
+  const extra = [ ...(typeof CREW!=='undefined'?CREW:[]), ...(typeof USER_DISPLAY_NAMES!=='undefined'?Object.values(USER_DISPLAY_NAMES):[]) ]
+    .map(n=>String(n).replace(/\s*-\s*Intern$/i,'').trim()).filter(n=>n && !/^(off|shop|home)$/i.test(n));
+  const lower = [...full].map(n=>n.toLowerCase());
+  extra.forEach(n=>{ const l = n.toLowerCase(); if(!lower.some(f=>f===l || f.startsWith(l+' '))) { full.add(n); lower.push(l); } });
+  return [...full].sort((a,b)=>a.localeCompare(b));
 }
 function fuelCardKind(r){
   const c = r.cardNumber && fleetCards[r.cardNumber];
@@ -7319,7 +7326,8 @@ async function importWexCards(text){
   const { rows } = wexParseCSV(text);
   const known = new Set(Object.keys(fleetCards));
   const people = Object.values(fleetDrivers).filter(d=>!d.is_vehicle && d.person).map(d=>d.person);
-  const guess = name=>{ // only when exactly one person matches the card's first word(s)
+  const guess = name=>{ // pool cards are shared; otherwise only when exactly one person matches the card's first word(s)
+    if(/^(office|dump|spare)\b/i.test(name.trim())) return 'Shared (no one)';
     const n = name.replace(/\b(can|truck|vehicle)\b/ig,'').trim().toLowerCase(); if(!n) return '';
     const hits = people.filter(p=>{ const pl = p.toLowerCase(); return pl===n || pl.startsWith(n+' ') || (n.split(' ').length===2 && pl.startsWith(n.split(' ')[0]+' '+n.split(' ')[1][0])); });
     return hits.length===1 ? hits[0] : '';
@@ -7349,6 +7357,7 @@ async function importWexDrivers(text){
     const veh = isVeh(r), wexName = `${r['First Name']} ${r['Last Name']}`.trim();
     let person = '';
     if(!veh) person = wexName;
+    else if(/^dump$/i.test((r['Last Name']||'').trim())) person = 'Shared (no one)';   // dump truck: credited to whoever keys in their own ID
     else { const same = realPeople.filter(p=>p.last.toLowerCase()===(r['Last Name']||'').toLowerCase()); if(same.length===1) person = same[0].full; }
     const base = { driver_id:id, wex_name:wexName, is_vehicle:veh, status:r['Status']||'', updated_at:new Date().toISOString() };
     if(known.has(id)) existing.push(base); else fresh.push({ ...base, person });

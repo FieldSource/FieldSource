@@ -8589,7 +8589,7 @@ function renderMaterials(){
 let invApprovalList = [];
 let invApprovalLoaded = false;
 const APPROVER_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','wes@fieldsourceohio.com','brian@fieldsourceohio.com'];
-const UPLOADER_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com'];
+const UPLOADER_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com','luanne@fieldsourceohio.com'];
 
 async function loadInvApproval(){
   if(invApprovalLoaded) return;
@@ -10306,7 +10306,7 @@ function renderInvoiceReports(){
 
 function renderInvoices(){
   const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
-  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com'].includes(userEmail);
+  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes(userEmail);
 
   // Unique projects from files + from jobs table
   const projectsFromFiles = [...new Set(invoiceFiles.map(f=>f.projectName).filter(Boolean))].sort();
@@ -10429,7 +10429,7 @@ function renderInvoiceList(){
     );
   }
 
-  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
+  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
   const canApprove = ['haller@fieldsourceohio.com','jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
 
   let html = '';
@@ -11861,7 +11861,7 @@ function showApp(){
   // Show/hide tabs based on role
   // Show pipeline tab only for Jake and Ryan
   const plTab2 = document.getElementById('pipeline-tab');
-  const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com'];
+  const PORTAL_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com','luanne@fieldsourceohio.com'];
   const CONSULTING_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','brian@fieldsourceohio.com','wes@fieldsourceohio.com'];
   const userEmail = (currentUser.email||'').toLowerCase();
   // Show portal bar
@@ -11876,7 +11876,7 @@ function showApp(){
   const HOURS_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const hoursTab = document.getElementById('hours-tab');
   if(hoursTab) hoursTab.style.display = HOURS_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
-  const FLEET_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com'];
+  const FLEET_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'];
   const fleetPortalTab = document.getElementById('ptab-fleet');
   if(fleetPortalTab) fleetPortalTab.style.display = FLEET_EMAILS.includes(userEmail) ? '' : 'none';
 

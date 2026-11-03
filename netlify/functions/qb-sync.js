@@ -165,15 +165,17 @@ function guessType(text) {
 }
 
 async function syncEstimatesTab(estimates, now) {
-  const withNum = estimates.filter(e => e.DocNumber && /^[\w-]+$/.test(e.DocNumber));
-  if (!withNum.length) return { updated: 0, added: 0 };
-  const nums = withNum.map(e => e.DocNumber);
-  const rows = await sb('GET', `estimates?qb_estimate_number=in.(${nums.join(',')})&select=id,qb_estimate_number,status`);
-  const byNum = new Map((rows || []).map(r => [String(r.qb_estimate_number), r]));
+  // Estimates are matched by QuickBooks estimate # and, for ones QuickBooks left unnumbered, by their QuickBooks Id.
+  const usable = estimates.filter(e => (e.DocNumber && /^[\w-]+$/.test(e.DocNumber)) || (!e.DocNumber && e.Id));
+  if (!usable.length) return { updated: 0, added: 0 };
+  const nums = usable.filter(e => e.DocNumber).map(e => e.DocNumber), ids = usable.map(e => String(e.Id));
+  const byNum = new Map(), byId = new Map();
+  if (nums.length) ((await sb('GET', `estimates?qb_estimate_number=in.(${nums.join(',')})&select=id,qb_estimate_number,qb_estimate_id,status`)) || []).forEach(r => byNum.set(String(r.qb_estimate_number), r));
+  ((await sb('GET', `estimates?qb_estimate_id=in.(${ids.join(',')})&select=id,qb_estimate_number,qb_estimate_id,status`)) || []).forEach(r => byId.set(String(r.qb_estimate_id), r));
   const cutoff = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10);
   let updated = 0;
   const adds = [];
-  await Promise.all(withNum.map(async e => {
+  await Promise.all(usable.map(async e => {
     const qbStatus = e.TxnStatus || 'Pending';
     const fields = {
       amount: parseFloat(e.TotalAmt || 0),
@@ -181,9 +183,11 @@ async function syncEstimatesTab(estimates, now) {
       est_created_date: e.TxnDate || null,
       accepted_date: e.AcceptedDate || null,
       qb_status: qbStatus,
+      qb_estimate_id: String(e.Id),
       qb_synced_at: now,
     };
-    const ex = byNum.get(String(e.DocNumber));
+    if (e.DocNumber) fields.qb_estimate_number = String(e.DocNumber);
+    const ex = (e.DocNumber && byNum.get(String(e.DocNumber))) || byId.get(String(e.Id));
     if (ex) {
       if (qbStatus === 'Accepted' && PRE_APPROVAL.includes(ex.status)) fields.status = 'Approved';
       await sb('PATCH', `estimates?id=eq.${ex.id}`, fields, 'return=minimal');
@@ -193,8 +197,8 @@ async function syncEstimatesTab(estimates, now) {
       const firstLine = first.split('\n')[0].replace(/\s+/g, ' ').trim().slice(0, 90);
       adds.push({
         ...fields,
-        qb_estimate_number: String(e.DocNumber),
-        project_name: [fields.client, firstLine].filter(Boolean).join(' - ').slice(0, 140) || `Estimate #${e.DocNumber}`,
+        qb_estimate_number: e.DocNumber ? String(e.DocNumber) : null,
+        project_name: [fields.client, firstLine].filter(Boolean).join(' - ').slice(0, 140) || (e.DocNumber ? `Estimate #${e.DocNumber}` : 'Estimate (no number)'),
         project_date: (e.TxnDate || '').slice(0, 4),
         type: guessType(first),
         scope: '',

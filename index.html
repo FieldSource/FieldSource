@@ -7324,8 +7324,18 @@ function wexParseCSV(text){
   const headers = parse(lines[0]||'');
   return { headers, rows: lines.slice(1).map(l=>{ const v = parse(l); const o = {}; headers.forEach((h,i)=>o[h]=v[i]??''); return o; }) };
 }
-// One button for all three WEX exports
+let fuelLastStatus = '';
+function fuelImportDone(msg){
+  fuelLastStatus = msg;
+  const st = document.getElementById('fuel-import-status'); if(st) st.textContent = msg;
+  alert(msg);
+}
+// One button for all three WEX exports (any unexpected error is shown instead of failing silently)
 async function importWexFile(file){
+  try{ return await importWexFileInner(file); }
+  catch(e){ console.error(e); const msg = 'Import stopped: ' + (e && e.message || e); fuelLastStatus = msg; const st = document.getElementById('fuel-import-status'); if(st) st.textContent = msg; alert(msg); }
+}
+async function importWexFileInner(file){
   const text = await file.text();
   if(!text.trim()){ alert("That file is empty (0 bytes). Download it from WEX again and make sure the download finishes."); return; }
   const { headers } = wexParseCSV(text.split(/\r?\n/)[0]);
@@ -7356,8 +7366,8 @@ async function importWexCards(text){
   try{ await fleetUpsert('fleet_cards','card_number', fresh); await fleetUpsert('fleet_cards','card_number', existing); }
   catch(e){ alert('Could not save cards: '+e.message+'\n\nHas fleet-cards-drivers.sql been run in Supabase?'); return; }
   await loadFleetMaps();
-  if(statusEl) statusEl.textContent = `✓ Cards: ${fresh.length} new, ${existing.length} updated. Check who each card is assigned to under Cards & Drivers.`;
   fuelView = 'setup'; renderFuel();
+  fuelImportDone(`✓ Cards imported: ${fresh.length} new, ${existing.length} updated. Assignments you already set were kept.`);
 }
 async function importWexDrivers(text){
   const statusEl = document.getElementById('fuel-import-status');
@@ -7379,8 +7389,8 @@ async function importWexDrivers(text){
   try{ await fleetUpsert('fleet_drivers','driver_id', fresh); await fleetUpsert('fleet_drivers','driver_id', existing); }
   catch(e){ alert('Could not save drivers: '+e.message+'\n\nHas fleet-cards-drivers.sql been run in Supabase?'); return; }
   await loadFleetMaps();
-  if(statusEl) statusEl.textContent = `✓ Drivers: ${fresh.length} new, ${existing.length} updated. Truck-number IDs that couldn't be matched to one person are flagged under Cards & Drivers.`;
   fuelView = 'setup'; renderFuel();
+  fuelImportDone(`✓ Drivers imported: ${fresh.length} new, ${existing.length} updated. Anyone already linked was kept.`);
 }
 async function saveFleetField(table, keyCol, key, field, value){
   try{
@@ -7580,7 +7590,7 @@ async function importFuelCSV(file){
 
   await loadFuelTransactions();
   const total = fuelTransactions.length;
-  if(statusEl) statusEl.textContent = `✓ Done: ${added} new, ${skipped} already here (card and driver details refreshed), ${errors} errors. ${total} total in database.`;
+  fuelImportDone(`✓ Transactions imported: ${added} new, ${skipped} already here (card and driver details refreshed), ${errors} error${errors===1?'':'s'}. ${total} total fill-ups.`);
   if(errors) alert(`${errors} transaction${errors===1?'':'s'} couldn't be imported:\n\n${errMsgs.join('\n')}${errors>errMsgs.length?'\n…':''}`);
   renderFuelDashboard();
 }
@@ -7611,7 +7621,7 @@ function renderFuel(){
         <button onclick="exportFuelCSV()" style="padding:6px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text-2)">Download CSV</button>
       </div>
     </div>
-    <div id="fuel-import-status" style="font-size:12px;color:var(--green-dark);margin-bottom:8px"></div>
+    <div id="fuel-import-status" style="font-size:12px;color:var(--green-dark);margin-bottom:8px">${fuelLastStatus||''}</div>
 
     <!-- Sub-tabs -->
     <div style="display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:16px">

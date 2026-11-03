@@ -13322,8 +13322,15 @@ function showApp(){
   if(woTab) woTab.style.display = isAdmin ? '' : 'none';
   if(equipTab) equipTab.style.display = isReportOnly ? 'none' : '';
   // Load data and start
+  // Time off loads alongside the jobs (not after), and the schedule redraws as soon as it arrives,
+  // so "off" shows right away instead of at the next background refresh.
+  const timeOffReady = loadTimeOff();
+  let jobsReady = false;
+  timeOffReady.then(()=>{ updateTimeOffBadge(); if(jobsReady && !document.querySelector('.modal-overlay') && typeof render==='function') render(); }).catch(()=>{});
   loadJobs().then(()=>{
-    loadReports(); loadWorkOrders(); loadTimeOff().then(()=>updateTimeOffBadge()); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates();
+    jobsReady = true;
+    timeOffReady.then(()=>{ if(!document.querySelector('.modal-overlay') && typeof render==='function') render(); }).catch(()=>{});
+    loadReports(); loadWorkOrders(); loadMileage(); loadPipelines(); loadPO(); loadConsulting(); loadCosts(); loadLaborRates();
     loadInvoices().then(()=>updateApprovalBell());
     startPolling();
     // Default portal based on user

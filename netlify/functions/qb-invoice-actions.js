@@ -151,7 +151,11 @@ exports.handler = async function (event) {
       }));
       const nums = await sb('GET', `qb_invoices?select=doc_number&order=txn_date.desc&limit=400`);
       const maxNum = (nums || []).map(r => parseInt(r.doc_number, 10)).filter(n => !isNaN(n)).reduce((m, n) => Math.max(m, n), 0);
-      return json(200, { estimate: { qb_id: String(est.Id), number: est.DocNumber, customer_id: est.CustomerRef.value, customer: est.CustomerRef.name, total: Number(est.TotalAmt || 0) },
+      let terms = [];
+      try { const t = await qb.call(`query?query=${encodeURIComponent('SELECT * FROM Term WHERE Active = true')}`);
+        terms = ((t.QueryResponse && t.QueryResponse.Term) || []).map(x => ({ id: String(x.Id), name: x.Name, days: x.DueDays != null ? Number(x.DueDays) : null })); } catch (e) { console.warn('terms', e.message); }
+      return json(200, { terms, customer_term_id: (cust.SalesTermRef && String(cust.SalesTermRef.value)) || '',
+        estimate: { qb_id: String(est.Id), number: est.DocNumber, customer_id: est.CustomerRef.value, customer: est.CustomerRef.name, total: Number(est.TotalAmt || 0) },
         lines, bill_email: (est.BillEmail && est.BillEmail.Address) || (cust.PrimaryEmailAddr && cust.PrimaryEmailAddr.Address) || '',
         terms: (cust.SalesTermRef && cust.SalesTermRef.name) || '', next_doc_number: maxNum ? String(maxNum + 1) : '', can_bill: canBill });
     }
@@ -171,7 +175,8 @@ exports.handler = async function (event) {
       if (!lines.length) throw new Error('Nothing to bill: every line is $0.');
       const inv = { CustomerRef: est.CustomerRef, Line: lines, LinkedTxn: [{ TxnId: String(est.Id), TxnType: 'Estimate' }] };
       if (b.txn_date) inv.TxnDate = b.txn_date;
-      if (b.due_date) inv.DueDate = b.due_date;
+      if (b.term_id) inv.SalesTermRef = { value: String(b.term_id) };   // QuickBooks works out the due date from the terms
+      if (b.due_date) inv.DueDate = b.due_date;                          // custom date (or terms not set up in QuickBooks)
       if (b.doc_number) inv.DocNumber = String(b.doc_number).slice(0, 21);
       if (b.memo) inv.CustomerMemo = { value: String(b.memo).slice(0, 1000) };
       inv.PrivateNote = `Created in Field Source Tracker by ${user.email} from estimate #${est.DocNumber}${b.po ? ' · PO ' + b.po : ''}`;

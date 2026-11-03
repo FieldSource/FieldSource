@@ -6398,6 +6398,7 @@ const arFmt = d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'sh
 function arToday(){ return new Date().toLocaleDateString('en-CA'); }
 function invDaysPast(inv){ if(!inv.due_date || Number(inv.balance)<=0.005) return 0; return Math.max(0, Math.floor((new Date(arToday()+'T12:00:00') - new Date(inv.due_date+'T12:00:00'))/864e5)); }
 function invStatus(inv){
+  if(inv.balance==null) return { label:'Not synced yet', bg:'#f1f5f9', fg:'#64748b' };
   if(Number(inv.balance)<=0.005) return { label:'Paid', bg:'#dcfce7', fg:'#166534' };
   const d = invDaysPast(inv);
   if(d>0) return { label:`Overdue ${d}d`, bg: d>60?'#fecaca':'#fee2e2', fg:'#991b1b' };
@@ -6405,16 +6406,32 @@ function invStatus(inv){
   return { label:'Open', bg:'#dbeafe', fg:'#1d4ed8' };
 }
 function invChip(inv){ const s = invStatus(inv); return `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:${s.bg};color:${s.fg};white-space:nowrap">${s.label}</span>`; }
+// An estimate's invoices: linked in QuickBooks, linked by hand in the tracker, or matched by the Billing Tracker
+// (by invoice number). Billing Tracker matches that haven't synced from QuickBooks yet still count as billed.
 function invoicesForEstimate(num){
   if(!num) return [];
-  const manual = new Set(invLinks.filter(l=>l.estimate_number===String(num)).map(l=>l.qb_invoice_id));
-  return qbInvoices.filter(i=>(i.linked_estimate_numbers||[]).includes(String(num)) || manual.has(i.qb_invoice_id));
+  num = String(num);
+  const manual = new Set(invLinks.filter(l=>l.estimate_number===num).map(l=>l.qb_invoice_id));
+  const out = qbInvoices.filter(i=>(i.linked_estimate_numbers||[]).includes(num) || manual.has(i.qb_invoice_id));
+  const have = new Set(out.map(i=>String(i.doc_number)));
+  const est = (typeof estimates!=='undefined' ? estimates : []).find(x=>String(x.qbNumber)===num);
+  (est && est.priorInvoices || []).forEach(p=>{
+    const n = String(p.number||'').trim(); if(!n || have.has(n)) return;
+    const q = qbInvoices.find(i=>String(i.doc_number)===n);
+    out.push(q ? { ...q, _via:'billing tracker' } : { qb_invoice_id:'bt-'+n, doc_number:n, txn_date:p.date||null, due_date:null, total:Number(p.amount)||0, balance:null, _via:'billing tracker', _unsynced:true });
+    have.add(n);
+  });
+  return out;
 }
 function estimateBilling(e){
   const inv = invoicesForEstimate(e.qbNumber);
-  const billed = inv.reduce((t,i)=>t+Number(i.total||0),0), open = inv.reduce((t,i)=>t+Number(i.balance||0),0);
+  const billed = inv.reduce((t,i)=>t+Number(i.total||0),0);
+  const known = inv.filter(i=>i.balance!=null);
+  const open = known.reduce((t,i)=>t+Number(i.balance||0),0);
+  const collected = known.reduce((t,i)=>t+Number(i.total||0)-Number(i.balance||0),0);
+  const unsynced = inv.filter(i=>i.balance==null).reduce((t,i)=>t+Number(i.total||0),0);
   const contract = Number(e.amount)||0;
-  return { inv, billed, collected: billed-open, open, contract, remaining: contract-billed, pct: contract ? billed/contract*100 : 0 };
+  return { inv, billed, collected, open, unsynced, contract, remaining: contract-billed, pct: contract ? billed/contract*100 : 0 };
 }
 
 // Billing section inside an estimate's detail view
@@ -6436,7 +6453,7 @@ async function renderEstimateBilling(e){
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${card('Billed', arMoney(b.billed), b.contract?`${Math.round(b.pct)}% of ${arMoney0(b.contract)}`:'', over?'#dc2626':null)}
       ${card('Collected', arMoney(b.collected))}
-      ${card('Still owed', arMoney(b.open), '', b.open>0.005?'#1d4ed8':null)}
+      ${card('Still owed', arMoney(b.open), b.unsynced?`+ ${arMoney0(b.unsynced)} not synced from QuickBooks yet`:'', b.open>0.005?'#1d4ed8':null)}
       ${b.contract?card('Left to bill', arMoney(b.remaining), over?'Billed more than the estimate':'', b.remaining<-0.5?'#dc2626':null):''}
     </div>
     ${b.inv.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:10px"><table style="width:100%;border-collapse:collapse">
@@ -6444,11 +6461,11 @@ async function renderEstimateBilling(e){
       <tbody>${b.inv.sort((x,y)=>(x.txn_date||'').localeCompare(y.txn_date||'')).map(i=>`<tr>
         <td style="${td}"><b>#${arEsc(i.doc_number)}</b></td><td style="${td}">${arFmt(i.txn_date)}</td><td style="${td}">${arFmt(i.due_date)}</td>
         <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right">${arMoney(i.balance)}</td><td style="${td}">${invChip(i)}</td>
-        <td style="${td};font-size:11px;color:var(--text-3)">${manual.has(i.qb_invoice_id)?`linked by hand · <a style="cursor:pointer;color:#b91c1c" onclick="unlinkInvoice('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">unlink</a>`:'from QuickBooks'}</td></tr>`).join('')}
+        <td style="${td};font-size:11px;color:var(--text-3)">${manual.has(i.qb_invoice_id)?`linked by hand · <a style="cursor:pointer;color:#b91c1c" onclick="unlinkInvoice('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">unlink</a>`:i._via?'matched by Billing Tracker':'linked in QuickBooks'}</td></tr>`).join('')}
       </tbody></table></div>
       <div id="est-billing-lines" style="margin-top:10px;font-size:12px;color:var(--text-3)">Loading line detail…</div>`
     : `<div style="font-size:12px;color:var(--text-3);margin-top:8px">No invoices on this estimate yet${qbInvoices.length?'':' (or the invoice sync hasn’t run yet)'}. Invoices created from this estimate in QuickBooks show up automatically; others can be linked with <b>+ Link an invoice</b>.</div>`}`;
-  if(b.inv.length) renderEstimateLineBilling(e, b.inv);
+  if(b.inv.some(i=>!i._unsynced)) renderEstimateLineBilling(e, b.inv.filter(i=>!i._unsynced)); else { const lb = document.getElementById('est-billing-lines'); if(lb) lb.textContent=''; }
 }
 // Line by line: estimate line vs. invoice lines (matched by QuickBooks item, then description)
 async function renderEstimateLineBilling(e, invs){
@@ -6568,7 +6585,8 @@ function renderReceivablesInner(){
   const el = document.getElementById('main-content');
   const open = qbInvoices.filter(i=>Number(i.balance)>0.005);
   const est = num=>estimates.find(x=>x.qbNumber===num);
-  const estFor = i=>{ const nums = [...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id).map(l=>l.estimate_number)]; return nums.map(n=>({ n, e:est(n) })); };
+  const btByDoc = {}; (typeof estimates!=='undefined'?estimates:[]).forEach(x=>(x.priorInvoices||[]).forEach(p=>{ const n = String(p.number||'').trim(); if(n) (btByDoc[n] = btByDoc[n]||[]).push(String(x.qbNumber)); }));
+  const estFor = i=>{ const nums = [...new Set([...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id).map(l=>l.estimate_number), ...(btByDoc[String(i.doc_number)]||[])])]; return nums.map(n=>({ n, e:est(n) })); };
   const buckets = [['Current',i=>invDaysPast(i)===0],['1–30',i=>invDaysPast(i)>=1&&invDaysPast(i)<=30],['31–60',i=>invDaysPast(i)>30&&invDaysPast(i)<=60],['61–90',i=>invDaysPast(i)>60&&invDaysPast(i)<=90],['90+',i=>invDaysPast(i)>90]];
   const sum = l=>l.reduce((t,i)=>t+Number(i.balance||0),0);
   const total = sum(open);

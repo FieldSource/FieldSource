@@ -67,6 +67,32 @@ async function getAccessToken() {
   return tokens.access_token;
 }
 
+// Safety net: QuickBooks has custom transaction numbers on, so estimates made outside its own screens
+// can arrive with no number. Give any recent unnumbered estimate the next available number.
+let nextEstNum = null;
+async function autoNumber(page, accessToken, realmId) {
+  const cutoff = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+  const todo = page.filter(e => !e.DocNumber && (e.TxnDate || '') >= cutoff);
+  if (!todo.length) return 0;
+  if (nextEstNum === null) {
+    const recent = await qbQuery(accessToken, realmId, 'SELECT DocNumber FROM Estimate ORDERBY MetaData.CreateTime DESC MAXRESULTS 300');
+    const nums = recent.map(e => parseInt(e.DocNumber, 10)).filter(n => !isNaN(n));
+    nextEstNum = (nums.length ? Math.max(...nums) : 1000) + 1;
+  }
+  let done = 0;
+  for (const e of todo.sort((a, b) => String(a.MetaData && a.MetaData.CreateTime).localeCompare(String(b.MetaData && b.MetaData.CreateTime)))) {
+    try {
+      const r = await fetch(`${QB_API}/v3/company/${realmId}/estimate?minorversion=73`, { method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ Id: e.Id, SyncToken: e.SyncToken, sparse: true, DocNumber: String(nextEstNum) }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.Estimate) { Object.assign(e, { DocNumber: d.Estimate.DocNumber, SyncToken: d.Estimate.SyncToken }); nextEstNum++; done++; }
+      else console.warn('auto-number failed', e.Id, JSON.stringify(d.Fault || d).slice(0, 200));
+    } catch (err) { console.warn('auto-number error', e.Id, err.message); }
+  }
+  return done;
+}
+
 async function qbQuery(accessToken, realmId, sql) {
   const r = await fetch(`${QB_API}/v3/company/${realmId}/query?query=${encodeURIComponent(sql)}&minorversion=73`, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
@@ -228,7 +254,7 @@ exports.handler = async function (event) {
     const accessToken = await getAccessToken();
 
     let cursor = q.reset === '1' ? null : await getSetting('QB_SYNC_CURSOR');
-    let synced = 0, inserted = 0, updated = 0, tabUpdated = 0, tabAdded = 0, hasMore = true;
+    let synced = 0, inserted = 0, updated = 0, tabUpdated = 0, tabAdded = 0, hasMore = true, numbered = 0;
 
     while (hasMore && Date.now() - started < TIME_BUDGET_MS) {
       const where = cursor ? ` WHERE MetaData.LastUpdatedTime > '${cursor}'` : '';
@@ -236,6 +262,7 @@ exports.handler = async function (event) {
         `SELECT * FROM Estimate${where} ORDERBY MetaData.LastUpdatedTime ASC MAXRESULTS ${PAGE}`);
       if (!page.length) { hasMore = false; break; }
 
+      numbered += await autoNumber(page, accessToken, realmId);
       const res = await saveBatch(page, realmId);
       synced += page.length; inserted += res.inserted; updated += res.updated;
       tabUpdated += res.tab.updated; tabAdded += res.tab.added;
@@ -246,7 +273,7 @@ exports.handler = async function (event) {
     }
 
     await setSetting('QB_LAST_SYNC_AT', new Date().toISOString());
-    return json(200, { synced, inserted, updated, estimates_tab: { updated: tabUpdated, added: tabAdded }, hasMore, cursor, errors: [], synced_at: new Date().toISOString() });
+    return json(200, { synced, inserted, updated, numbered, estimates_tab: { updated: tabUpdated, added: tabAdded }, hasMore, cursor, errors: [], synced_at: new Date().toISOString() });
   } catch (e) {
     return json(500, { error: e.message });
   }

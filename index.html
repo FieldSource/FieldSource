@@ -7276,12 +7276,16 @@ function fuelCardKind(r){
   if(c && c.kind) return c.kind==='Can' ? 'Can' : 'Truck';
   return r.category || 'Can';
 }
-// Who: the driver ID's person → else the card's assigned person → else WEX's name
+// Who: the driver ID's person → else the card's assigned person → else WEX's name.
+// "Shared (no one)" on a truck-number ID or a card means it's a pool vehicle: fuel shows as "Shared: <vehicle>".
+const isShared = v=>/^shared/i.test(String(v||'').trim());
 function fuelPersonInfo(r){
   const d = r.driverId && fleetDrivers[r.driverId];
-  if(d && d.person) return { name:d.person, linked:true };
   const c = r.cardNumber && fleetCards[r.cardNumber];
-  if(c && c.assigned_to) return { name:c.assigned_to, linked:true };
+  const shared = ()=>({ name:`Shared: ${cleanFuelVehicle(r)}`, linked:true, shared:true });
+  if(d && d.person && !isShared(d.person)) return { name:d.person, linked:true };
+  if(c && c.assigned_to && !isShared(c.assigned_to)) return { name:c.assigned_to, linked:true };
+  if((d && isShared(d.person)) || (c && isShared(c.assigned_to))) return shared();
   if(d && !d.is_vehicle && d.wex_name) return { name:d.wex_name, linked:true };
   if(d && d.is_vehicle) return { name:`Not linked: ${d.wex_name}`, linked:false };
   return { name:null, linked:false };
@@ -7365,7 +7369,7 @@ async function saveFleetField(table, keyCol, key, field, value){
 function renderFuelSetup(){
   const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const people = fleetPeople();
-  const dl = `<datalist id="fleet-people">${people.map(p=>`<option value="${esc(p)}">`).join('')}</datalist>`;
+  const dl = `<datalist id="fleet-people"><option value="Shared (no one)">${people.filter(p=>!isShared(p)).map(p=>`<option value="${esc(p)}">`).join('')}</datalist>`;
   const usage = {}; fuelTransactions.forEach(r=>{ if(r.cardNumber) usage['c'+r.cardNumber]=(usage['c'+r.cardNumber]||0)+1; if(r.driverId) usage['d'+r.driverId]=(usage['d'+r.driverId]||0)+1; });
   const cards = Object.values(fleetCards).sort((a,b)=>(a.kind||'').localeCompare(b.kind||'') || a.name.localeCompare(b.name));
   const drivers = Object.values(fleetDrivers).sort((a,b)=>(b.is_vehicle - a.is_vehicle) || (a.wex_name||'').localeCompare(b.wex_name||''));
@@ -7382,18 +7386,19 @@ function renderFuelSetup(){
       <table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Card</th><th style="${th}">Type</th><th style="${th}">Assigned to</th><th style="${th};text-align:right">Fill-ups</th></tr></thead><tbody>
       ${cards.map(c=>`<tr><td style="${td}"><b>${esc(c.name)}</b><div style="font-size:11px;color:var(--text-3)">${esc(c.card_number)}${c.plate?' · '+esc(c.plate):''}</div></td>
         <td style="${td}"><select style="${inp}" onchange="saveFleetField('fleet_cards','card_number','${esc(c.card_number)}','kind',this.value)">${['Vehicle','Can'].map(k=>`<option${c.kind===k?' selected':''}>${k}</option>`).join('')}</select></td>
-        <td style="${td}"><input style="${inp};${c.assigned_to?'':'border-color:#f59e0b'}" list="fleet-people" value="${esc(c.assigned_to)}" placeholder="Who uses it?" onchange="saveFleetField('fleet_cards','card_number','${esc(c.card_number)}','assigned_to',this.value.trim())"></td>
+        <td style="${td}"><input style="${inp};${c.assigned_to?(isShared(c.assigned_to)?'color:var(--text-3)':''):'border-color:#f59e0b'}" list="fleet-people" value="${esc(c.assigned_to)}" placeholder="Who uses it? (or Shared)" onchange="saveFleetField('fleet_cards','card_number','${esc(c.card_number)}','assigned_to',this.value.trim());fuelView='setup';renderFuelDashboard()"></td>
         <td style="${td};text-align:right;color:var(--text-3)">${usage['c'+c.card_number]||0}</td></tr>`).join('')}
       </tbody></table></div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
       <div style="padding:10px 12px;font-weight:700">Driver IDs <span style="font-weight:400;color:var(--text-3);font-size:12px">${drivers.length}</span></div>
       <table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">In WEX as</th><th style="${th}">Is really</th><th style="${th};text-align:right">Fill-ups</th></tr></thead><tbody>
       ${drivers.map(d=>`<tr><td style="${td}">${esc(d.wex_name)}<div style="font-size:11px;color:var(--text-3)">ID ${esc(d.driver_id)}${d.is_vehicle?' · <span style="color:#b45309">truck number, not a person</span>':''}</div></td>
-        <td style="${td}"><input style="${inp};${d.person?'':'border-color:#f59e0b'}" list="fleet-people" value="${esc(d.person)}" placeholder="${d.is_vehicle?'Who drives this truck?':'Name'}" onchange="saveFleetField('fleet_drivers','driver_id','${esc(d.driver_id)}','person',this.value.trim())"></td>
+        <td style="${td}"><div style="display:flex;gap:4px"><input style="${inp};${d.person?(isShared(d.person)?'color:var(--text-3)':''):'border-color:#f59e0b'}" list="fleet-people" value="${esc(d.person)}" placeholder="${d.is_vehicle?'Who drives this truck?':'Name'}" onchange="saveFleetField('fleet_drivers','driver_id','${esc(d.driver_id)}','person',this.value.trim());fuelView='setup';renderFuelDashboard()">
+          ${d.is_vehicle && !d.person ? `<button title="Pool / no one's standard truck" onclick="saveFleetField('fleet_drivers','driver_id','${esc(d.driver_id)}','person','Shared (no one)').then(()=>{fuelView='setup';renderFuelDashboard()})" style="font-size:11px;padding:4px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--surface);cursor:pointer;white-space:nowrap;font-family:inherit;color:var(--text-2)">Shared</button>` : ''}</div></td>
         <td style="${td};text-align:right;color:var(--text-3)">${usage['d'+d.driver_id]||0}</td></tr>`).join('')}
       </tbody></table></div>
   </div>
-  <div style="font-size:12px;color:var(--text-3);margin-top:10px">Orange boxes still need a name. For fill-ups where the Driver ID isn't linked to anyone, the card's assigned person is used instead.</div>`;
+  <div style="font-size:12px;color:var(--text-3);margin-top:10px">Orange boxes still need a name. Pool trucks and cards that aren't anyone's: choose <b>Shared (no one)</b>; their fuel shows as "Shared: vehicle name" under By Person. When a person keys in their own Driver ID, it's credited to them either way.</div>`;
 }
 
 async function loadFuelTransactions(){
@@ -7673,7 +7678,7 @@ function renderFuelVehicles(){
   rows.forEach(r=>{
     const catColor = r.category==='Truck'?{bg:'#dbeafe',text:'#1d4ed8'}:{bg:'#fef3c7',text:'#92400e'};
     html += `<div style="display:grid;grid-template-columns:2fr 70px 80px 80px 80px 80px 80px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center">
-      <div style="font-weight:500">${r.vehicle}<div style="font-size:11px;color:${r.assigned?'var(--text-3)':'#b45309'};font-weight:400">${r.assigned?'Assigned to '+r.assigned:'No one assigned'}${Object.keys(r.people).filter(n=>n!==r.assigned).length?' · also used by '+Object.keys(r.people).filter(n=>n!==r.assigned).join(', '):''}</div></div>
+      <div style="font-weight:500">${r.vehicle}<div style="font-size:11px;color:${r.assigned?'var(--text-3)':'#b45309'};font-weight:400">${r.assigned?(isShared(r.assigned)?'Shared vehicle':'Assigned to '+r.assigned):'No one assigned'}${Object.keys(r.people).filter(n=>n!==r.assigned).length?' · also used by '+Object.keys(r.people).filter(n=>n!==r.assigned).join(', '):''}</div></div>
       <div><span style="font-size:10px;padding:1px 6px;border-radius:99px;background:${catColor.bg};color:${catColor.text};font-weight:600">${r.category==='Truck'?'Vehicle':r.category}</span></div>
       <div style="font-family:'DM Mono',monospace">${r.count}</div>
       <div style="font-family:'DM Mono',monospace">${fmtNum(r.gallons)}</div>
@@ -7727,7 +7732,7 @@ function renderFuelPersons(){
   const byPerson = {};
   fuelTransactions.forEach(r=>{
     const key = cleanFuelDriver(r);
-    if(!byPerson[key]) byPerson[key]={name:key,truckGal:0,truckCost:0,canGal:0,canCost:0,unlinked:!fuelPersonInfo(r).linked};
+    if(!byPerson[key]) byPerson[key]={name:key,truckGal:0,truckCost:0,canGal:0,canCost:0,unlinked:!fuelPersonInfo(r).linked,shared:!!fuelPersonInfo(r).shared};
     if(fuelCardKind(r)==='Truck'){ byPerson[key].truckGal+=r.gallons; byPerson[key].truckCost+=r.netCost; }
     else { byPerson[key].canGal+=r.gallons; byPerson[key].canCost+=r.netCost; }
   });
@@ -7740,7 +7745,7 @@ function renderFuelPersons(){
 
   rows.forEach(r=>{
     html += `<div style="display:grid;grid-template-columns:1fr 80px 80px 80px 80px 80px 80px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;align-items:center">
-      <div style="font-weight:500;${r.unlinked?'color:#b45309':''}">${r.name}${r.unlinked?`<div style="font-size:11px;font-weight:400">Set who this is under Cards &amp; Drivers</div>`:''}</div>
+      <div style="font-weight:500;${r.unlinked?'color:#b45309':''}${r.shared?'color:var(--text-3);font-style:italic':''}">${r.name}${r.unlinked?`<div style="font-size:11px;font-weight:400">Set who this is under Cards &amp; Drivers</div>`:''}</div>
       <div style="font-family:'DM Mono',monospace">${fmtNum(r.truckGal)}</div>
       <div style="font-family:'DM Mono',monospace">${fmtCur(r.truckCost)}</div>
       <div style="font-family:'DM Mono',monospace">${fmtNum(r.canGal)}</div>

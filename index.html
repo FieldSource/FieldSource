@@ -275,6 +275,8 @@ main{padding:12px 16px 100px}
 .pipeline-search{width:100%;padding:10px 14px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;color:var(--text);background:var(--surface);outline:none;margin-bottom:12px}
 .pipeline-search:focus{border-color:var(--green);background:#fff}
 .declined-header{background:#fee2e2;border:1px solid #fca5a5;border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;font-size:13px;color:#991b1b;font-weight:500}
+
+@media (max-width:820px){.ar-grid{grid-template-columns:1fr!important}}
 </style>
 </head>
 <body>
@@ -433,8 +435,9 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting())">WIP</button>
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
     <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()" style="display:none">Clients</button>
-    <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'))">Estimates</button>
+    <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'));loadQbInvoices().then(()=>{ if(view==='estimates') renderEstimates(); })">Estimates</button>
     <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Invoices</button>
+    <button class="vtab" id="receivables-tab" onclick="setView('receivables');loadQbInvoices(true).then(()=>{ if(view==='receivables') renderReceivables(); })">Receivables</button>
     <button class="vtab" id="inv-approval-tab" onclick="Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="materials-tab" onclick="loadMaterials().then(()=>setView('materials'))">Materials</button>
   </div>
@@ -6154,7 +6157,9 @@ function renderEstimates(){
         <div style="font-size:12px;color:var(--text-2)">${e.type}</div>
         <div style="font-size:12px;color:var(--text)">
           <div style="font-weight:600">${e.amount!=null?fmtEstMoney(e.amount):'<span style="color:var(--text-3);font-weight:400">—</span>'}</div>
-          ${e.unbilledBalance!=null&&e.qbStatus==='Accepted'?`<div style="font-size:10px;color:var(--text-3)">${fmtEstMoney(e.unbilledBalance)} unbilled</div>`:''}
+          ${(()=>{ if(!qbInvLoaded || !e.qbNumber) return e.unbilledBalance!=null&&e.qbStatus==='Accepted'?`<div style="font-size:10px;color:var(--text-3)">${fmtEstMoney(e.unbilledBalance)} unbilled</div>`:'';
+             const b = estimateBilling(e); if(!b.inv.length) return '';
+             return `<div style="font-size:10px;color:${b.billed>b.contract+0.5&&b.contract?'#dc2626':'var(--text-3)'}">${b.contract?Math.round(b.pct)+'% billed':fmtEstMoney(b.billed)+' billed'}${b.open>0.005?` · <span style="color:#1d4ed8">${fmtEstMoney(b.open)} owed</span>`:''}</div>`; })()}
         </div>
         <div style="font-size:12px;color:var(--text-2)">${e.createdDate||'—'}</div>
         <div style="font-size:12px;color:${overdue?'#dc2626':'var(--text-2)'};font-weight:${overdue?'600':'400'}">${e.estDueDate||'TBD'}</div>
@@ -6236,6 +6241,7 @@ function openEstimateDetail(id){
     ${e.scope?`<div style="margin-top:12px">${field('Scope', escEst(e.scope))}</div>`:''}
     ${e.notes?`<div style="margin-top:12px">${field('Notes', `<span style="font-style:italic">${escEst(e.notes)}</span>`)}</div>`:''}
 
+    ${e.qbNumber?'<div id="est-billing-slot"><div style="font-size:12px;color:var(--text-3);margin-top:16px">Loading billing…</div></div>':''}
     <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Breakdown</div>`;
 
   if(lines.length){
@@ -6299,6 +6305,7 @@ function openEstimateDetail(id){
   document.body.appendChild(overlay);
   if(e.qbNumber && !lines.length) loadQbLines(e.qbNumber);
   if(e.qbNumber && canEdit) checkTrackerJob(e.qbNumber);
+  if(e.qbNumber) renderEstimateBilling(e);
 }
 
 // QuickBooks line items, from the qb_estimates / qb_estimate_lines tables kept fresh by qb-sync.
@@ -6361,6 +6368,213 @@ async function previewQbEstimatePdf(docNumber){
     if(btn){ btn.disabled = false; btn.textContent = '📄 Preview estimate PDF'; }
   }
 }
+
+// ===================== QUICKBOOKS INVOICES: billed-to-date + receivables =====================
+let qbInvoices = [], invLinks = [], qbInvLoaded = false, qbInvLoading = null;
+async function loadQbInvoices(force){
+  if(qbInvLoaded && !force) return;
+  if(qbInvLoading) return qbInvLoading;
+  qbInvLoading = (async ()=>{
+    try{
+      if(typeof ensureFreshToken==='function') await ensureFreshToken();
+      const all = [];
+      for(let from=0; from<200000; from+=1000){
+        const r = await fetch(`${SUPABASE_URL}/rest/v1/qb_invoices?select=*&order=txn_date.desc`, { headers:{ apikey:SUPABASE_KEY, Authorization:'Bearer '+sbToken(), Range:`${from}-${from+999}` } });
+        if(!r.ok) throw new Error(await r.text());
+        const page = await r.json(); all.push(...page); if(page.length < 1000) break;
+      }
+      qbInvoices = all.filter(i=>Number(i.total)!==0 || Number(i.balance)!==0); // leave out voided ($0) invoices
+      invLinks = (await sbFetch('GET','/rest/v1/invoice_estimate_links?select=*'))||[];
+      qbInvLoaded = true;
+    }catch(e){ console.warn('QuickBooks invoices not available yet:', e.message); qbInvoices = []; invLinks = []; qbInvLoaded = true; }
+    finally{ qbInvLoading = null; }
+  })();
+  return qbInvLoading;
+}
+const arMoney = n=>(Number(n)<0?'-$':'$')+Math.abs(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const arMoney0 = n=>'$'+Math.round(Number(n)||0).toLocaleString('en-US');
+const arEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const arFmt = d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
+function arToday(){ return new Date().toLocaleDateString('en-CA'); }
+function invDaysPast(inv){ if(!inv.due_date || Number(inv.balance)<=0.005) return 0; return Math.max(0, Math.floor((new Date(arToday()+'T12:00:00') - new Date(inv.due_date+'T12:00:00'))/864e5)); }
+function invStatus(inv){
+  if(Number(inv.balance)<=0.005) return { label:'Paid', bg:'#dcfce7', fg:'#166534' };
+  const d = invDaysPast(inv);
+  if(d>0) return { label:`Overdue ${d}d`, bg: d>60?'#fecaca':'#fee2e2', fg:'#991b1b' };
+  if(Number(inv.balance) < Number(inv.total)-0.005) return { label:'Partly paid', bg:'#fef3c7', fg:'#92400e' };
+  return { label:'Open', bg:'#dbeafe', fg:'#1d4ed8' };
+}
+function invChip(inv){ const s = invStatus(inv); return `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:${s.bg};color:${s.fg};white-space:nowrap">${s.label}</span>`; }
+function invoicesForEstimate(num){
+  if(!num) return [];
+  const manual = new Set(invLinks.filter(l=>l.estimate_number===String(num)).map(l=>l.qb_invoice_id));
+  return qbInvoices.filter(i=>(i.linked_estimate_numbers||[]).includes(String(num)) || manual.has(i.qb_invoice_id));
+}
+function estimateBilling(e){
+  const inv = invoicesForEstimate(e.qbNumber);
+  const billed = inv.reduce((t,i)=>t+Number(i.total||0),0), open = inv.reduce((t,i)=>t+Number(i.balance||0),0);
+  const contract = Number(e.amount)||0;
+  return { inv, billed, collected: billed-open, open, contract, remaining: contract-billed, pct: contract ? billed/contract*100 : 0 };
+}
+
+// Billing section inside an estimate's detail view
+async function renderEstimateBilling(e){
+  const slot = document.getElementById('est-billing-slot'); if(!slot) return;
+  await loadQbInvoices();
+  const b = estimateBilling(e);
+  const over = b.contract && b.billed > b.contract + 0.5;
+  const card = (l,v,sub,col)=>`<div style="flex:1;min-width:110px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 11px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3)">${l}</div><div style="font-size:15px;font-weight:700;color:${col||'var(--text)'}">${v}</div>${sub?`<div style="font-size:11px;color:var(--text-3)">${sub}</div>`:''}</div>`;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:6px 8px;text-align:left;background:var(--accent)';
+  const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border)';
+  const manual = new Set(invLinks.filter(l=>l.estimate_number===String(e.qbNumber)).map(l=>l.qb_invoice_id));
+  slot.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 6px">
+      <div style="font-size:13px;font-weight:700;color:var(--text)">Billing</div>
+      <button onclick="openLinkInvoices('${arEsc(e.qbNumber)}','${arEsc(e.client||'').replace(/'/g,"\\'")}')" class="site-chip" style="padding:4px 10px;font-size:12px">+ Link an invoice</button>
+    </div>
+    ${b.contract?`<div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>`:''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${card('Billed', arMoney(b.billed), b.contract?`${Math.round(b.pct)}% of ${arMoney0(b.contract)}`:'', over?'#dc2626':null)}
+      ${card('Collected', arMoney(b.collected))}
+      ${card('Still owed', arMoney(b.open), '', b.open>0.005?'#1d4ed8':null)}
+      ${b.contract?card('Left to bill', arMoney(b.remaining), over?'Billed more than the estimate':'', b.remaining<-0.5?'#dc2626':null):''}
+    </div>
+    ${b.inv.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:10px"><table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="${th}">Invoice</th><th style="${th}">Date</th><th style="${th}">Due</th><th style="${th};text-align:right">Amount</th><th style="${th};text-align:right">Balance</th><th style="${th}">Status</th><th style="${th}"></th></tr></thead>
+      <tbody>${b.inv.sort((x,y)=>(x.txn_date||'').localeCompare(y.txn_date||'')).map(i=>`<tr>
+        <td style="${td}"><b>#${arEsc(i.doc_number)}</b></td><td style="${td}">${arFmt(i.txn_date)}</td><td style="${td}">${arFmt(i.due_date)}</td>
+        <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right">${arMoney(i.balance)}</td><td style="${td}">${invChip(i)}</td>
+        <td style="${td};font-size:11px;color:var(--text-3)">${manual.has(i.qb_invoice_id)?`linked by hand · <a style="cursor:pointer;color:#b91c1c" onclick="unlinkInvoice('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">unlink</a>`:'from QuickBooks'}</td></tr>`).join('')}
+      </tbody></table></div>
+      <div id="est-billing-lines" style="margin-top:10px;font-size:12px;color:var(--text-3)">Loading line detail…</div>`
+    : `<div style="font-size:12px;color:var(--text-3);margin-top:8px">No invoices on this estimate yet${qbInvoices.length?'':' (or the invoice sync hasn’t run yet)'}. Invoices created from this estimate in QuickBooks show up automatically; others can be linked with <b>+ Link an invoice</b>.</div>`}`;
+  if(b.inv.length) renderEstimateLineBilling(e, b.inv);
+}
+// Line by line: estimate line vs. invoice lines (matched by QuickBooks item, then description)
+async function renderEstimateLineBilling(e, invs){
+  const box = document.getElementById('est-billing-lines'); if(!box) return;
+  try{
+    const est = await sbFetch('GET', `/rest/v1/qb_estimates?estimate_number=eq.${encodeURIComponent(e.qbNumber)}&select=id&limit=1`);
+    const elines = est && est.length ? (await sbFetch('GET', `/rest/v1/qb_estimate_lines?estimate_id=eq.${est[0].id}&item_type=eq.SalesItemLineDetail&select=line_number,item_name,description,amount&order=line_number`))||[] : [];
+    const ilines = (await sbFetch('GET', `/rest/v1/qb_invoice_lines?qb_invoice_id=in.(${invs.map(i=>i.qb_invoice_id).join(',')})&select=item_name,description,amount`))||[];
+    if(!elines.length){ box.textContent = ''; return; }
+    const norm = s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
+    const billed = elines.map(()=>0); let unmatched = 0;
+    ilines.forEach(il=>{
+      let idx = elines.findIndex(el=>el.item_name && norm(el.item_name)===norm(il.item_name) && norm(el.description)===norm(il.description));
+      if(idx<0){ const byItem = elines.map((el,k)=>el.item_name && norm(el.item_name)===norm(il.item_name)?k:-1).filter(k=>k>=0); if(byItem.length===1) idx = byItem[0]; }
+      if(idx<0) idx = elines.findIndex(el=>norm(el.description) && norm(el.description)===norm(il.description));
+      if(idx>=0) billed[idx] += Number(il.amount)||0; else unmatched += Number(il.amount)||0;
+    });
+    const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:6px 8px;text-align:left;background:var(--accent)';
+    const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border)';
+    box.innerHTML = `<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="${th}">Estimate line</th><th style="${th};text-align:right">Contract</th><th style="${th};text-align:right">Billed</th><th style="${th};text-align:right">Left</th><th style="${th};width:90px"></th></tr></thead>
+      <tbody>${elines.map((el,k)=>{ const c = Number(el.amount)||0, bl = billed[k], pct = c ? Math.min(100, bl/c*100) : 0, over = bl > c + 0.5;
+        return `<tr><td style="${td}">${arEsc(el.description||el.item_name)}</td><td style="${td};text-align:right">${arMoney(c)}</td>
+          <td style="${td};text-align:right;${over?'color:#dc2626;font-weight:600':''}">${arMoney(bl)}</td><td style="${td};text-align:right">${arMoney(c-bl)}</td>
+          <td style="${td}"><div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${over?'#dc2626':'var(--green)'}"></div></div></td></tr>`; }).join('')}
+      ${unmatched?`<tr><td style="${td};color:var(--text-3)" colspan="2">Invoice lines that don't match an estimate line (extras, change orders, reimbursables)</td><td style="${td};text-align:right">${arMoney(unmatched)}</td><td style="${td}" colspan="2"></td></tr>`:''}
+      </tbody></table></div>`;
+  }catch(err){ box.textContent = ''; console.warn(err); }
+}
+// Link invoices QuickBooks didn't connect to this estimate
+function openLinkInvoices(estNum, client){
+  const taken = new Set(invoicesForEstimate(estNum).map(i=>i.qb_invoice_id));
+  const c = String(client||'').toLowerCase();
+  const cand = qbInvoices.filter(i=>!taken.has(i.qb_invoice_id) && (!c || String(i.customer_name||'').toLowerCase()===c))
+    .sort((a,b)=>(b.txn_date||'').localeCompare(a.txn_date||'')).slice(0,200);
+  const linkedElsewhere = i=>{ const n = [...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id).map(l=>l.estimate_number)]; return n.length ? 'on #'+n.join(', #') : ''; };
+  document.getElementById('link-inv-overlay')?.remove();
+  const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='link-inv-overlay';
+  o.onclick = ev=>{ if(ev.target===o) o.remove(); };
+  o.innerHTML = `<div class="modal-sheet" style="max-width:640px;max-height:88vh;overflow-y:auto"><div class="sheet-handle"></div>
+    <div class="sheet-title" style="margin-bottom:2px">Link invoices to estimate #${arEsc(estNum)}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">${arEsc(client||'All customers')} · invoices QuickBooks didn't already connect to this estimate</div>
+    ${cand.length ? cand.map(i=>`<label style="display:flex;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer">
+      <input type="checkbox" class="link-inv-cb" value="${i.qb_invoice_id}">
+      <span style="flex:1"><b>#${arEsc(i.doc_number)}</b> · ${arFmt(i.txn_date)} ${linkedElsewhere(i)?`<span style="font-size:11px;color:#b45309">(${linkedElsewhere(i)})</span>`:''}</span>
+      <span>${arMoney(i.total)}</span>${invChip(i)}</label>`).join('') : '<div style="font-size:13px;color:var(--text-3);padding:10px 0">No other invoices for this customer.</div>'}
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><button class="btn-cancel" onclick="document.getElementById('link-inv-overlay').remove()">Cancel</button>
+      <button class="btn-save" onclick="saveInvoiceLinks('${arEsc(estNum)}')">Link selected</button></div></div>`;
+  document.body.appendChild(o);
+}
+async function saveInvoiceLinks(estNum){
+  const ids = [...document.querySelectorAll('.link-inv-cb:checked')].map(c=>c.value); if(!ids.length) return;
+  try{
+    const rows = ids.map(id=>({ qb_invoice_id:id, estimate_number:String(estNum), linked_by:(currentUser&&currentUser.email)||'' }));
+    await sbFetch('POST','/rest/v1/invoice_estimate_links', rows); invLinks.push(...rows);
+    document.getElementById('link-inv-overlay').remove();
+    const e = estimates.find(x=>x.qbNumber===String(estNum)); if(e) renderEstimateBilling(e);
+    if(view==='estimates') renderEstimates();
+  }catch(err){ alert('Could not link: '+err.message); }
+}
+async function unlinkInvoice(invId, estNum){
+  if(!confirm('Unlink this invoice from the estimate?')) return;
+  try{ await sbFetch('DELETE', `/rest/v1/invoice_estimate_links?qb_invoice_id=eq.${invId}&estimate_number=eq.${encodeURIComponent(estNum)}`);
+    invLinks = invLinks.filter(l=>!(l.qb_invoice_id===invId && l.estimate_number===String(estNum)));
+    const e = estimates.find(x=>x.qbNumber===String(estNum)); if(e) renderEstimateBilling(e); if(view==='estimates') renderEstimates(); }
+  catch(err){ alert(err.message); }
+}
+
+// Receivables: open invoices, aging, by customer
+let arCustomer = '', arOverdueOnly = false, arSort = 'days';
+function renderReceivables(){
+  const el = document.getElementById('main-content');
+  if(!qbInvLoaded){ el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-3)">Loading invoices…</div>'; loadQbInvoices().then(()=>{ if(view==='receivables') renderReceivables(); }); return; }
+  const open = qbInvoices.filter(i=>Number(i.balance)>0.005);
+  const est = num=>estimates.find(x=>x.qbNumber===num);
+  const estFor = i=>{ const nums = [...(i.linked_estimate_numbers||[]), ...invLinks.filter(l=>l.qb_invoice_id===i.qb_invoice_id).map(l=>l.estimate_number)]; return nums.map(n=>({ n, e:est(n) })); };
+  const buckets = [['Current',i=>invDaysPast(i)===0],['1–30',i=>invDaysPast(i)>=1&&invDaysPast(i)<=30],['31–60',i=>invDaysPast(i)>30&&invDaysPast(i)<=60],['61–90',i=>invDaysPast(i)>60&&invDaysPast(i)<=90],['90+',i=>invDaysPast(i)>90]];
+  const sum = l=>l.reduce((t,i)=>t+Number(i.balance||0),0);
+  const total = sum(open);
+  const customers = [...new Set(open.map(i=>i.customer_name).filter(Boolean))].sort();
+  if(arCustomer && !customers.includes(arCustomer)) arCustomer = '';
+  let list = open.filter(i=>(!arCustomer || i.customer_name===arCustomer) && (!arOverdueOnly || invDaysPast(i)>0));
+  list.sort(arSort==='amount' ? (a,b)=>Number(b.balance)-Number(a.balance) : arSort==='customer' ? (a,b)=>(a.customer_name||'').localeCompare(b.customer_name||'')||invDaysPast(b)-invDaysPast(a) : (a,b)=>invDaysPast(b)-invDaysPast(a)||(a.due_date||'').localeCompare(b.due_date||''));
+  const byCust = customers.map(c=>{ const l = open.filter(i=>i.customer_name===c); return { c, owed:sum(l), n:l.length, overdue:sum(l.filter(i=>invDaysPast(i)>0)), oldest:Math.max(...l.map(invDaysPast)) }; }).sort((a,b)=>b.owed-a.owed);
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)!important';
+  const td = 'font-size:13px;color:var(--text);padding:8px 10px;border-top:1px solid var(--border)';
+  const sel = 'font-size:13px;padding:6px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-family:inherit';
+  const lastSync = qbInvoices.reduce((m,i)=>i.synced_at>m?i.synced_at:m,'');
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <div style="font-size:18px;font-weight:700">Receivables</div>
+      <div style="font-size:12px;color:var(--text-3)">From QuickBooks${lastSync?' · updated '+new Date(lastSync).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''} · refreshes hourly</div>
+    </div>
+    ${!qbInvoices.length?`<div style="padding:20px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);font-size:14px">No QuickBooks invoices yet. Run <b>qb-invoice-setup.sql</b> and the invoice sync once (see setup notes), then refresh.</div>`:`
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid var(--green)"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">Total owed</div><div style="font-size:20px;font-weight:700">${arMoney0(total)}</div><div style="font-size:11px;color:var(--text-3)">${open.length} open invoice${open.length===1?'':'s'}</div></div>
+      ${buckets.map(([l,f],k)=>{ const v = sum(open.filter(f)); return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${['#3b82f6','#f59e0b','#f97316','#ef4444','#991b1b'][k]}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${l}${k?' days late':''}</div><div style="font-size:18px;font-weight:700;color:${v&&k?'#b91c1c':'var(--text)'}">${arMoney0(v)}</div><div style="font-size:11px;color:var(--text-3)">${open.filter(f).length} invoices</div></div>`; }).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr;gap:14px;align-items:start" class="ar-grid">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+        <div style="padding:10px 12px;font-weight:700">By customer</div>
+        <table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Customer</th><th style="${th};text-align:right">Owed</th></tr></thead><tbody>
+        ${byCust.map(x=>`<tr style="cursor:pointer;${arCustomer===x.c?'background:var(--accent)':''}" onclick="arCustomer=arCustomer==='${arEsc(x.c).replace(/'/g,"\\'")}'?'':'${arEsc(x.c).replace(/'/g,"\\'")}';renderReceivables()">
+          <td style="${td}">${arEsc(x.c)}<div style="font-size:11px;color:${x.overdue?'#b91c1c':'var(--text-3)'}">${x.n} invoice${x.n===1?'':'s'}${x.overdue?` · ${arMoney0(x.overdue)} overdue, oldest ${x.oldest}d`:''}</div></td>
+          <td style="${td};text-align:right;font-weight:600">${arMoney0(x.owed)}</td></tr>`).join('')}
+        </tbody></table></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+        <div style="padding:10px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <b>Open invoices</b>
+          <select style="${sel}" onchange="arCustomer=this.value;renderReceivables()"><option value="">All customers</option>${customers.map(c=>`<option${arCustomer===c?' selected':''}>${arEsc(c)}</option>`).join('')}</select>
+          <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arOverdueOnly?'checked':''} onchange="arOverdueOnly=this.checked;renderReceivables()"> Overdue only</label>
+          <select style="${sel};margin-left:auto" onchange="arSort=this.value;renderReceivables()">${[['days','Most overdue first'],['amount','Largest balance first'],['customer','By customer']].map(([v,l])=>`<option value="${v}"${arSort===v?' selected':''}>${l}</option>`).join('')}</select>
+        </div>
+        <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:620px"><thead><tr>
+          <th style="${th}">Invoice</th><th style="${th}">Customer / estimate</th><th style="${th}">Due</th><th style="${th};text-align:right">Amount</th><th style="${th};text-align:right">Balance</th><th style="${th}">Status</th></tr></thead><tbody>
+          ${list.map(i=>{ const ests = estFor(i); return `<tr>
+            <td style="${td}"><b>#${arEsc(i.doc_number)}</b><div style="font-size:11px;color:var(--text-3)">${arFmt(i.txn_date)}</div></td>
+            <td style="${td}">${arEsc(i.customer_name)}${ests.length?`<div style="font-size:11px">${ests.map(x=>x.e?`<a style="cursor:pointer;color:var(--green-dark)" onclick="loadEstimates().then(()=>{setView('estimates');setTimeout(()=>openEstimateDetail('${x.e.id}'),50)})">Est #${arEsc(x.n)} · ${arEsc(x.e.projectName)}</a>`:`Est #${arEsc(x.n)}`).join(' · ')}</div>`:`<div style="font-size:11px;color:var(--text-3)">not linked to an estimate</div>`}</td>
+            <td style="${td};white-space:nowrap">${arFmt(i.due_date)}</td>
+            <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right;font-weight:600">${arMoney(i.balance)}</td><td style="${td}">${invChip(i)}</td></tr>`; }).join('') || `<tr><td colspan="6" style="${td};color:var(--text-3)">Nothing here${arOverdueOnly?' that’s overdue':''}.</td></tr>`}
+        </tbody></table></div>
+        <div style="padding:8px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border)">${list.length} invoice${list.length===1?'':'s'} · ${arMoney(sum(list))} owed${arCustomer?` · <a style="cursor:pointer;color:var(--green-dark)" onclick="arCustomer='';renderReceivables()">show all customers</a>`:''}</div>
+      </div>
+    </div>`}`;
+}
+// =================== END QUICKBOOKS INVOICES ===================
 
 // ===================== TRACKER HANDOFF (Ryan's tracker-handoff spec, steps 2-6) =====================
 // Accepted QB estimate -> tracker_jobs + tracker_work_items (one per QB line) + tracker_visits.
@@ -7299,8 +7513,27 @@ function fuelCardKind(r){
 // Who: the driver ID's person → else the card's assigned person → else WEX's name.
 // "Shared (no one)" on a truck-number ID or a card means it's a pool vehicle: fuel shows as "Shared: <vehicle>".
 const isShared = v=>/^shared/i.test(String(v||'').trim());
+// Older fill-ups have no Driver ID, only the driver name WEX used then. Match that name to a Driver ID:
+// exactly ("TR12 - 0543 Moore"), or by truck number when WEX has since renamed it ("TR12 - BMoore Moore" -> TR12).
+let _drvIdx = null, _drvIdxFor = null;
+function fuelDriverOf(r){
+  if(r.driverId && fleetDrivers[r.driverId]) return fleetDrivers[r.driverId];
+  const name = `${r.driverFirst||''} ${r.driverLast||''}`.replace(/\s+/g,' ').trim().toUpperCase();
+  if(!name) return null;
+  if(_drvIdxFor !== fleetDrivers){
+    _drvIdxFor = fleetDrivers; _drvIdx = { byName:{}, byTruck:{} };
+    Object.values(fleetDrivers).forEach(d=>{
+      const n = String(d.wex_name||'').replace(/\s+/g,' ').trim().toUpperCase(); if(n) (_drvIdx.byName[n] = _drvIdx.byName[n]||[]).push(d);
+      const t = (n.match(/^(TR\s*\d+)\b/)||[])[1]; if(t && d.is_vehicle) (_drvIdx.byTruck[t.replace(/\s+/g,'')] = _drvIdx.byTruck[t.replace(/\s+/g,'')]||[]).push(d);
+    });
+  }
+  const exact = _drvIdx.byName[name]; if(exact && exact.length===1) return exact[0];
+  const t = (name.match(/^(TR\s*\d+)\b/)||[])[1];
+  const byT = t && _drvIdx.byTruck[t.replace(/\s+/g,'')]; if(byT && byT.length===1) return byT[0];
+  return null;
+}
 function fuelPersonInfo(r){
-  const d = r.driverId && fleetDrivers[r.driverId];
+  const d = fuelDriverOf(r);
   const c = fuelCardOf(r);
   const shared = ()=>({ name:`Shared: ${cleanFuelVehicle(r)}`, linked:true, shared:true });
   if(d && d.person && !isShared(d.person)) return { name:d.person, linked:true };
@@ -7308,6 +7541,7 @@ function fuelPersonInfo(r){
   if((d && isShared(d.person)) || (c && isShared(c.assigned_to))) return shared();
   if(d && !d.is_vehicle && d.wex_name) return { name:d.wex_name, linked:true };
   if(d && d.is_vehicle) return { name:`Not linked: ${d.wex_name}`, linked:false };
+  if(/^TR\s*\d+/i.test(r.driverFirst||'')) return { name:`${r.driverFirst} ${r.driverLast}`.trim(), linked:false };
   return { name:null, linked:false };
 }
 async function fleetUpsert(table, conflict, rows){
@@ -7867,15 +8101,15 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials','receivables'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   // Business Ops tabs are highlighted by id (button order no longer matches index)
-  const BIZOPS_TAB_IDS={po:'po-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab'};
+  const BIZOPS_TAB_IDS={po:'po-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab',receivables:'receivables-tab'};
   const byId = BIZOPS_TAB_IDS[v] && document.getElementById(BIZOPS_TAB_IDS[v]);
   if(byId) byId.classList.add('active');
   else { const localIdx = allIdx[v]; if(barTabs[localIdx]) barTabs[localIdx].classList.add('active'); }
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials'||v==='receivables';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -7914,6 +8148,7 @@ function render(){
   else if(view==='fleet-loans') renderFleet();
   else if(view==='fuel') renderFuel();
   else if(view==='estimates') renderEstimates();
+  else if(view==='receivables') renderReceivables();
   else if(view==='invoices'){ if(invoiceView==='reports') renderInvoiceReports(); else renderInvoices(); }
   else if(view==='inv-approval') renderInvApproval();
   else if(view==='materials') renderMaterials();

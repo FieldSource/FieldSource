@@ -382,7 +382,7 @@ main{padding:12px 16px 100px}
     </div>
   </div>
   <div style="display:flex;gap:8px;align-items:center">
-    <div id="approval-bell" style="display:none;position:relative;cursor:pointer" onclick="openApprovalPanel()" title="Invoices pending approval">
+    <div id="approval-bell" style="display:none;position:relative;cursor:pointer" onclick="openApprovalPanel()" title="Things waiting for your approval">
       <span style="font-size:20px">🔔</span>
       <span id="approval-badge" style="position:absolute;top:-4px;right:-6px;background:#dc2626;color:#fff;border-radius:99px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center">0</span>
     </div>
@@ -9275,7 +9275,21 @@ function openApprovalPanel(){
   // Remove existing panel if open
   document.getElementById('approval-panel')?.remove();
 
-  const pending = invoiceFiles.filter(f=>f.approvalStatus==='pending');
+  const pending = bellInvoices();
+  const toList = bellTimeOff().sort((a,b)=>a.startDate.localeCompare(b.startDate));
+  const toFmt = d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+  const toEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const toHtml = toList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Time off</div>` + toList.map(e=>`
+    <div style="background:var(--bg);border:1px solid var(--border);border-left:4px solid #ef4444;border-radius:var(--radius);padding:12px 14px;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:600;color:var(--text)">🗓 ${toEsc(e.person)}</div>
+      <div style="font-size:12px;color:var(--text-2);margin-top:2px">${toFmt(e.startDate)}${e.endDate!==e.startDate?' – '+toFmt(e.endDate):''}</div>
+      ${e.note?`<div style="font-size:12px;color:var(--text-3);margin-top:2px">${toEsc(e.note)}</div>`:''}
+      ${e.requestedBy&&e.requestedBy!==e.person?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">Requested by ${toEsc(e.requestedBy)}</div>`:''}
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button onclick="approveTimeOff('${e.id}')" style="flex:1;padding:7px;background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer">✓ Approve</button>
+        <button onclick="denyTimeOff('${e.id}')" style="flex:1;padding:7px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;color:#dc2626">✕ Deny</button>
+      </div>
+    </div>`).join('') + (pending.length?`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Invoices</div>`:'') : '';
 
   const panel = document.createElement('div');
   panel.id = 'approval-panel';
@@ -9285,12 +9299,13 @@ function openApprovalPanel(){
     <div style="padding:20px 20px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
       <div>
         <div style="font-size:16px;font-weight:700;color:var(--text)">Pending Approvals</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:2px">${pending.length} invoice${pending.length!==1?'s':''} waiting</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:2px">${[toList.length?`${toList.length} time-off request${toList.length!==1?'s':''}`:'', pending.length?`${pending.length} invoice${pending.length!==1?'s':''}`:''].filter(Boolean).join(' · ')||'Nothing'} waiting</div>
       </div>
       <button onclick="document.getElementById('approval-panel').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-3);padding:4px">✕</button>
     </div>
     <div style="flex:1;overflow-y:auto;padding:12px 16px">
-      ${pending.length===0?'<div style="text-align:center;padding:40px;color:var(--text-3)">No pending approvals</div>':
+      ${toHtml}
+      ${pending.length===0?(toList.length?'':'<div style="text-align:center;padding:40px;color:var(--text-3)">No pending approvals</div>'):
         pending.map(f=>{
           const safe = f.id.replace(/'/g,"\\'");
           const safePath = f.filePath.replace(/'/g,"\\'");
@@ -9367,21 +9382,25 @@ function goToInvoices(){
   loadInvoices().then(()=>setView('invoices'));
 }
 
-function updateApprovalBell(){
+// Invoices this person approves: Jake all, Dan Haller only Canal Winchester
+function bellInvoices(){
   const userEmail = (currentUser?.email||'').toLowerCase();
-  const isJake = userEmail === 'jake@fieldsourceohio.com';
-  const isDan = userEmail === 'haller@fieldsourceohio.com';
-  if(!isJake && !isDan){ document.getElementById('approval-bell').style.display='none'; return; }
-  const pending = invoiceFiles.filter(f=>{
-    if(f.approvalStatus !== 'pending') return false;
-    if(isJake) return true;
-    // Dan only sees his assigned projects
-    return ['canal winchester'].some(p=>f.projectName.toLowerCase().includes(p));
-  }).length;
+  if(userEmail === 'jake@fieldsourceohio.com') return (invoiceFiles||[]).filter(f=>f.approvalStatus==='pending');
+  if(userEmail === 'haller@fieldsourceohio.com') return (invoiceFiles||[]).filter(f=>f.approvalStatus==='pending' && ['canal winchester'].some(p=>(f.projectName||'').toLowerCase().includes(p)));
+  return [];
+}
+function bellTimeOff(){ return (typeof timeOffEntries!=='undefined' ? timeOffEntries : []).filter(e=>e.status==='Pending' && typeof timeOffForMe==='function' && timeOffForMe(e)); }
+function updateApprovalBell(pulse){
+  const inv = bellInvoices().length, to = bellTimeOff().length, total = inv + to;
   const bell = document.getElementById('approval-bell');
   const badge = document.getElementById('approval-badge');
-  if(bell) bell.style.display = pending > 0 ? '' : 'none';
-  if(badge) badge.textContent = pending;
+  if(bell){
+    bell.style.display = total > 0 ? '' : 'none';
+    bell.title = [to?`${to} time-off request${to===1?'':'s'}`:'', inv?`${inv} invoice${inv===1?'':'s'}`:''].filter(Boolean).join(' · ') + ' to review';
+    if(pulse && total){ bell.animate([{transform:'rotate(0)'},{transform:'rotate(-18deg)'},{transform:'rotate(16deg)'},{transform:'rotate(-10deg)'},{transform:'rotate(0)'}], {duration:700, iterations:2}); }
+  }
+  if(badge) badge.textContent = total;
+  if(document.getElementById('approval-panel')) openApprovalPanel();
 }
 
 async function approveInvoice(id){
@@ -11436,13 +11455,11 @@ function updateTimeOffBadge(){
   const mine = timeOffEntries.filter(e=>e.status==='Pending' && timeOffForMe(e));
   const badge = document.getElementById('timeoff-badge');
   if(badge){ badge.style.display = mine.length ? '' : 'none'; badge.textContent = mine.length; badge.title = mine.length ? `${mine.length} time-off request${mine.length===1?'':'s'} for you to review` : ''; }
-  // Pop-up for requests this person hasn't been told about yet (remembered per browser)
-  if(!mine.length) return;
+  // New requests: update the 🔔 in the top right and give it a short pulse
   let seen = []; try{ seen = JSON.parse(localStorage.getItem('to_seen')||'[]'); }catch(e){}
   const fresh = mine.filter(e=>!seen.includes(e.id));
-  if(!fresh.length) return;
-  try{ localStorage.setItem('to_seen', JSON.stringify([...seen, ...fresh.map(e=>e.id)].slice(-300))); }catch(e){}
-  showTimeOffNotice(fresh);
+  if(fresh.length){ try{ localStorage.setItem('to_seen', JSON.stringify([...seen, ...fresh.map(e=>e.id)].slice(-300))); }catch(e){} }
+  if(typeof updateApprovalBell==='function') updateApprovalBell(fresh.length>0);
 }
 function showTimeOffNotice(list){
   document.getElementById('to-notice')?.remove();
@@ -11595,7 +11612,7 @@ async function approveTimeOff(id){
   e.status = 'Approved';
   await dbSaveTimeOff(e, id);
   updateTimeOffBadge();
-  renderTimeOff();
+  if(view==='timeoff') renderTimeOff();
 }
 
 async function denyTimeOff(id){
@@ -11604,7 +11621,7 @@ async function denyTimeOff(id){
   e.status = 'Denied';
   await dbSaveTimeOff(e, id);
   updateTimeOffBadge();
-  renderTimeOff();
+  if(view==='timeoff') renderTimeOff();
 }
 
 function openTimeOffForm(id=null){

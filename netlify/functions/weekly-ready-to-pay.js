@@ -29,7 +29,9 @@ const money = n => '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFract
 const fmt = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
 
 async function buildAndSend(trigger) {
-  const to = (await setting('pay_email_to')).trim(), cc = (await setting('pay_email_cc')).trim();
+  // Defaults: Jason (accounting@) with Jake and Ali copied; can be changed on the Approve to Pay tab
+  const to = (await setting('pay_email_to')).trim() || 'accounting@fieldsourceohio.com';
+  const cc = (await setting('pay_email_cc')).trim() || 'jake@fieldsourceohio.com, gibson@fieldsourceohio.com';
   if (!to) return { sent: false, reason: 'No recipient set. Add Jason\'s email on the Approve to Pay tab.' };
   const approvals = (await sb('GET', 'bill_pay_approvals?select=*')) || [];
   if (!approvals.length) return { sent: false, reason: 'Nothing approved for payment yet.' };

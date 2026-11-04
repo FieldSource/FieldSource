@@ -2860,6 +2860,10 @@ async function timeOffCalendar(action, id){
     return d;
   }catch(e){ console.warn('Time off calendar:', e.message); return null; }
 }
+async function connectGoogleForCalendar(){
+  if(typeof ensureFreshToken==='function') await ensureFreshToken();
+  window.open('/.netlify/functions/gmail-connect?t=' + encodeURIComponent(sbToken()), '_blank');
+}
 async function backfillTimeOffCalendar(){
   if(!confirm('Put every approved time off that hasn\u2019t ended yet on the shared Google Calendar?')) return;
   const d = await timeOffCalendar('backfill');
@@ -13289,7 +13293,8 @@ function renderTimeOff(){
   // Request button (everyone)
   html += `<div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
     <button class="btn-save" style="font-size:13px;padding:8px 18px" onclick="openTimeOffForm()">+ Request Time Off</button>
-    ${canApprove?`<button class="btn-cancel" style="font-size:12px;padding:7px 12px;margin-left:6px" title="Put approved time off on the shared Google Calendar" onclick="backfillTimeOffCalendar()">📅 Sync Google Calendar</button>`:''}
+    ${canApprove?`<button class="btn-cancel" style="font-size:12px;padding:7px 12px;margin-left:6px" title="Put approved time off on the shared Google Calendar" onclick="backfillTimeOffCalendar()">📅 Sync Google Calendar</button>
+      <button class="btn-cancel" style="font-size:12px;padding:7px 12px;margin-left:6px" title="Let the tracker add time off to the shared calendar through your Google account" onclick="connectGoogleForCalendar()">🔗 Connect Google</button>`:''}
   </div>`;
 
   // Request form (hidden by default)

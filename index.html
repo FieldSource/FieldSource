@@ -7324,9 +7324,9 @@ function renderPayBills(){
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;margin-bottom:14px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <b>✉ Weekly "Ready to pay" email</b>
       <span style="color:var(--text-3)">Sunday nights, 8 PM · to</span>
-      <input id="pay-to" value="${esc(paySettings.pay_email_to||'')}" placeholder="Jason's email" style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:200px" onchange="savePaySetting('pay_email_to',this.value)">
+      <input id="pay-to" value="${esc(paySettings.pay_email_to||'accounting@fieldsourceohio.com')}" placeholder="Jason's email" style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:200px" onchange="savePaySetting('pay_email_to',this.value)">
       <span style="color:var(--text-3)">cc</span>
-      <input id="pay-cc" value="${esc(paySettings.pay_email_cc||'')}" placeholder="optional" style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:170px" onchange="savePaySetting('pay_email_cc',this.value)">
+      <input id="pay-cc" value="${esc(paySettings.pay_email_cc||'jake@fieldsourceohio.com, gibson@fieldsourceohio.com')}" placeholder="optional" style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:330px" onchange="savePaySetting('pay_email_cc',this.value)">
       <button class="site-chip" style="padding:4px 10px;font-size:12px;margin-left:auto" onclick="sendReadyToPay()">Email it now</button>
       <div style="width:100%;font-size:11px;color:var(--text-3)">${last?`Last sent ${new Date(last.at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})} to ${esc(last.to)}: ${last.count} bills, ${money(last.total)} (${last.trigger})`:'Not sent yet.'} Sent from Ryan's Gmail (or Jake's if Ryan hasn't connected Gmail). Lists every approved bill that's still unpaid; paid ones drop off.</div>
     </div>
@@ -7383,7 +7383,7 @@ async function unapproveBills(){
   catch(e){ alert('Could not undo: '+e.message); }
 }
 async function sendReadyToPay(){
-  const to = (document.getElementById('pay-to')||{}).value || paySettings.pay_email_to;
+  const to = (document.getElementById('pay-to')||{}).value || paySettings.pay_email_to || 'accounting@fieldsourceohio.com';
   if(!to){ alert("Enter Jason's email first."); return; }
   if(!confirm(`Email the Ready to pay list to ${to} now?`)) return;
   try{

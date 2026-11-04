@@ -3,3 +3,7 @@
 
 [functions."nightly-backup"]
   schedule = "0 7 * * *"
+
+# Sunday nights: Monday 01:00 UTC = Sunday 8 PM Eastern (9 PM during daylight time)
+[functions."weekly-ready-to-pay"]
+  schedule = "0 1 * * 1"

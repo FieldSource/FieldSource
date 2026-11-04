@@ -1,6 +1,6 @@
 // netlify/functions/gmail-connect.js
 // One-time "Connect Gmail" so the tracker can send invoice emails from your own address.
-// Permission requested: gmail.send only (send as you; it cannot read your mail).
+// Permissions requested: gmail.send (send as you; it cannot read your mail) and calendar.events (add time off to the shared calendar).
 //
 // Start:  /.netlify/functions/gmail-connect?t=<tracker login token>   (the tracker opens this for you)
 // Google sends you back here with ?code=…&state=…; the refresh token is stored in gmail_tokens
@@ -35,7 +35,7 @@ exports.handler = async function (event) {
       const state = sign({ email: u.email.toLowerCase(), exp: Date.now() + 15 * 60 * 1000 });
       const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
         client_id: process.env.GOOGLE_CLIENT_ID, redirect_uri: REDIRECT, response_type: 'code', access_type: 'offline', prompt: 'consent',
-        scope: 'https://www.googleapis.com/auth/gmail.send openid email', login_hint: u.email, state }).toString();
+        scope: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events openid email', login_hint: u.email, state }).toString();
       return { statusCode: 302, headers: { Location: url }, body: '' };
     }
     // Step 2: back from Google
@@ -51,8 +51,8 @@ exports.handler = async function (event) {
     if (idEmail && idEmail.toLowerCase() !== st.email) return page('Wrong Google account', `You signed in to Google as ${idEmail}, but the tracker login is ${st.email}. Connect with ${st.email} so invoices come from the right address.`);
     const r = await fetch(`${SUPABASE_URL}/rest/v1/gmail_tokens?on_conflict=user_email`, { method: 'POST',
       headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' },
-      body: JSON.stringify({ user_email: st.email, google_email: idEmail || st.email, refresh_token: tok.refresh_token, connected_at: new Date().toISOString() }) });
+      body: JSON.stringify({ user_email: st.email, google_email: idEmail || st.email, refresh_token: tok.refresh_token, scopes: tok.scope || '', connected_at: new Date().toISOString() }) });
     if (!r.ok) return page('Not saved', `Couldn't save the connection (${r.status}). Has the gmail_tokens table been created?`);
-    return page('Gmail connected ✓', `Invoices you send from the tracker with "Send via Gmail" will come from <b>${idEmail || st.email}</b>.`, true);
+    return page('Google connected ✓', `Emails you send from the tracker will come from <b>${idEmail || st.email}</b>${/calendar/.test(tok.scope||'') ? ', and approved time off can be added to the shared calendar' : ''}.`, true);
   } catch (e) { return page('Something went wrong', e.message); }
 };

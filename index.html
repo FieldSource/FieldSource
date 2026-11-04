@@ -7069,9 +7069,9 @@ async function openInvoiceBuilder(estNum){
 }
 // Terms: Due on receipt / Net 15 / Net 30 / Custom date. Uses QuickBooks' own terms when they exist.
 const BILL_TERMS = [ { key:'receipt', label:'Due on receipt', days:0, re:/due\s*on\s*receipt/i }, { key:'net15', label:'Net 15', days:15, re:/net\s*15\b/i }, { key:'net30', label:'Net 30', days:30, re:/net\s*30\b/i } ];
-function billQbTerm(prep, key){ const t = BILL_TERMS.find(x=>x.key===key); return t && (prep.terms||[]).find(q=>t.re.test(q.name)); }
+function billQbTerm(prep, key){ const t = BILL_TERMS.find(x=>x.key===key); return t && (Array.isArray(prep.terms)?prep.terms:[]).find(q=>t.re.test(q.name)); }
 function billDefaultTerm(prep){
-  const ct = (prep.terms||[]).find(q=>q.id===prep.customer_term_id);
+  const ct = (Array.isArray(prep.terms)?prep.terms:[]).find(q=>q.id===prep.customer_term_id);
   const m = ct && BILL_TERMS.find(t=>t.re.test(ct.name));
   return m ? m.key : 'net30';
 }
@@ -7172,6 +7172,35 @@ async function billCreate(){
 }
 
 // ---- 2. Send (confirm address + email) ----
+// ---- Extra attachments for Gmail sends (quotes and invoices) ----
+const ATTACH_LIMIT = 4 * 1024 * 1024;
+const attachSize = n=>n>=1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+function attachPickerHtml(files, key){
+  const total = files.reduce((t,f)=>t+f.size,0), over = total > ATTACH_LIMIT;
+  return `<div style="margin-top:8px">
+    ${files.map((f,i)=>`<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:4px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:4px">
+      📎 <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${String(f.name).replace(/</g,'&lt;')}</span><span style="color:var(--text-3)">${attachSize(f.size)}</span>
+      <button onclick="attachRemove('${key}',${i})" style="border:none;background:none;cursor:pointer;color:var(--text-3)" title="Remove">✕</button></div>`).join('')}
+    <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--green-dark);font-weight:600;border:1px dashed var(--border-2);border-radius:6px;padding:5px 10px">
+      📎 Add attachment<input type="file" multiple style="display:none" onchange="attachAdd('${key}',this)"></label>
+    <span style="font-size:11px;color:${over?'#b91c1c':'var(--text-3)'};margin-left:6px">${files.length?attachSize(total)+' of 4 MB':'Optional: photos, PDFs, documents (up to 4 MB total)'}${over?' · over the limit, remove something':''}</span>
+  </div>`;
+}
+function attachState(key){ return key==='quote' ? qqSend : sendState; }
+async function attachAdd(key, input){
+  const st = attachState(key); if(!st) return;
+  if(key==='quote') qqSendSave(); else sendSaveInputs();
+  st.files = st.files || [];
+  for(const f of [...input.files]){
+    if(f.size > ATTACH_LIMIT){ alert(`"${f.name}" is ${attachSize(f.size)}; the limit is 4 MB per email. Share it as a link in the message instead.`); continue; }
+    const b64 = await new Promise((res,rej)=>{ const r = new FileReader(); r.onload = ()=>res(String(r.result).split(',')[1]||''); r.onerror = rej; r.readAsDataURL(f); });
+    st.files.push({ name:f.name, type:f.type||'application/octet-stream', size:f.size, b64 });
+  }
+  if(key==='quote') renderSendQuote(); else renderSendDialog();
+}
+function attachRemove(key, i){ const st = attachState(key); if(!st || !st.files) return; if(key==='quote') qqSendSave(); else sendSaveInputs(); st.files.splice(i,1); if(key==='quote') renderSendQuote(); else renderSendDialog(); }
+function attachPayload(files){ return (files||[]).map(f=>({ name:f.name, type:f.type, b64:f.b64 })); }
+
 let sendState = null;
 // Fill QuickBooks template placeholders so the preview reads like the real email
 function fillQbPlaceholders(text, info){
@@ -7188,7 +7217,8 @@ async function openSendInvoice(qbInvoiceId, banner, reminder){
     sendState = { id:qbInvoiceId, info, reminder:!!reminder, banner,
       via: prev ? prev.via : (info.gmail_from ? 'gmail' : 'qb'),
       to: prev ? prev.to : info.to, cc: prev ? prev.cc : info.cc,
-      subject: prev ? prev.subject : gmailDefaultSubject(info, reminder), body: prev ? prev.body : gmailDefaultBody(info, reminder), memo: prev ? prev.memo : info.memo };
+      subject: prev ? prev.subject : gmailDefaultSubject(info, reminder), body: prev ? prev.body : gmailDefaultBody(info, reminder), memo: prev ? prev.memo : info.memo,
+      files: prev ? (prev.files||[]) : [] };
     renderSendDialog();
   }catch(err){ billOverlay('send-overlay', `<div class="sheet-title">Couldn't load the invoice</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('send-overlay').remove()">Close</button></div>`, 520); }
 }
@@ -7215,7 +7245,8 @@ function renderSendDialog(){
     : `<div style="font-size:12px;color:var(--text-3);margin:10px 0 4px">From: <b style="color:var(--text)">${arEsc(info.gmail_from)}</b> (your Gmail)</div>
        <div><div style="${billLbl}">Subject</div><input id="send-subj" style="${billInput}" value="${arEsc(st.subject)}"></div>
        <div style="margin-top:8px"><div style="${billLbl}">Message</div><textarea id="send-body" rows="11" style="${billInput};line-height:1.45">${arEsc(st.body)}</textarea></div>
-       <div style="margin-top:6px;font-size:12px">📎 Field Source Invoice ${arEsc(info.doc_number)}.pdf (the QuickBooks invoice) · <a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${st.id}','${arEsc(info.doc_number)}')">View it</a>${info.pay_link?'':' · <span style="color:var(--text-3)">no online pay link (online payments aren\u2019t on for this invoice)</span>'}</div>`;
+       <div style="margin-top:6px;font-size:12px">📎 Field Source Invoice ${arEsc(info.doc_number)}.pdf (the QuickBooks invoice) · <a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${st.id}','${arEsc(info.doc_number)}')">View it</a>${info.pay_link?'':' · <span style="color:var(--text-3)">no online pay link (online payments aren\u2019t on for this invoice)</span>'}</div>
+       ${attachPickerHtml(st.files||[], 'invoice')}`;
   const qbBlock = `
       <div style="margin-top:12px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
         <div style="background:var(--accent);padding:8px 12px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2)">The email they'll get (from QuickBooks)</div>
@@ -7254,6 +7285,7 @@ function sendInvoiceConfirm(){
   const st = sendState, to = (st.to||'').trim(), cc = (st.cc||'').trim();
   if(!to){ document.getElementById('send-err').textContent = 'Enter who it goes to.'; return; }
   if(st.via==='gmail' && (!st.subject.trim() || !st.body.trim())){ document.getElementById('send-err').textContent = 'The subject and message can\u2019t be empty.'; return; }
+  if(st.via==='gmail' && (st.files||[]).reduce((t,f)=>t+f.size,0) > ATTACH_LIMIT){ document.getElementById('send-err').textContent = 'The extra attachments are over 4 MB. Remove some first.'; return; }
   const btn = document.getElementById('send-go');
   if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent = `Yes, email it${st.via==='gmail'?' from '+st.info.gmail_from:' via QuickBooks'} to ${to}${cc?' (cc '+cc+')':''}`; btn.style.background = '#b45309'; return; }
   sendInvoiceNow(to, cc);
@@ -7262,11 +7294,11 @@ async function sendInvoiceNow(to, cc){
   const st = sendState, btn = document.getElementById('send-go'); btn.disabled = true; btn.textContent = 'Sending…';
   try{
     const res = st.via==='gmail'
-      ? await invAction({ action:'send_gmail', qb_invoice_id:st.id, to, cc, subject:st.subject, body:st.body, reminder:st.reminder })
+      ? await invAction({ action:'send_gmail', qb_invoice_id:st.id, to, cc, subject:st.subject, body:st.body, reminder:st.reminder, attachments: attachPayload(st.files) })
       : await invAction({ action:'send', qb_invoice_id:st.id, to, cc, memo:st.memo||'', reminder:st.reminder });
     document.getElementById('send-overlay').remove();
     await loadQbInvoices(true); if(view==='receivables') renderReceivables();
-    alert(`✓ Invoice #${st.info.doc_number} was emailed to ${res.sent_to}${res.from?' from '+res.from:' via QuickBooks'}.`);
+    alert(`✓ Invoice #${st.info.doc_number} was emailed to ${res.sent_to}${res.from?' from '+res.from:' via QuickBooks'}${res.extra_files?` with ${res.extra_files} extra attachment${res.extra_files===1?'':'s'}`:''}.`);
   }catch(err){ document.getElementById('send-err').textContent = 'Not sent: ' + err.message; btn.disabled = false; btn.dataset.armed=''; btn.style.background=''; btn.textContent = 'Send…'; }
 }
 async function viewInvoicePdf(qbInvoiceId, doc){
@@ -8092,7 +8124,7 @@ async function openSendQuote(){
     const st = await invAction({ action:'gmail_status' });
     const me = (typeof getDisplayName==='function' ? getDisplayName(currentUser&&currentUser.email) : '') || '';
     const first = String(d.contact_name||'').trim().split(/\s+/)[0];
-    qqSend = { pdf, st, to: d.contact_email||'', cc:'',
+    qqSend = { pdf, st, to: d.contact_email||'', cc:'', files: [],
       subject: `Quote${qq.docNumber?' #'+qq.docNumber:''} from Field Source: ${d.title||d.client}`,
       body: `${first?'Hi '+first:'Hello'},\n\nAttached is our quote${qq.docNumber?' #'+qq.docNumber:''} for ${d.title||'the work we discussed'} (${fmtEstMoney2(qqTotal())}).\n\nTo accept, sign and return the acceptance page, or reply to this email. Let me know if you have any questions or would like to adjust anything.\n\nThank you,\n${me}\nField Source LLC` };
     renderSendQuote();
@@ -8117,7 +8149,8 @@ function renderSendQuote(){
     ${!s.to?'<div style="font-size:12px;color:#b45309;margin-top:4px">No contact email saved for this client. Type one above (it\u2019s saved for next time).</div>':''}
     <div style="margin-top:10px"><div style="${billLbl}">Subject</div><input id="qqs-subject" style="${billInput}" value="${escEst(s.subject)}"></div>
     <div style="margin-top:8px"><div style="${billLbl}">Message</div><textarea id="qqs-body" rows="10" style="${billInput};line-height:1.45">${escEst(s.body)}</textarea></div>
-    <div style="margin-top:6px;font-size:12px">📎 ${escEst(s.pdf.name)} (the branded quote) · <a style="cursor:pointer;color:var(--green-dark)" onclick="qqPdf(false)">Preview it</a></div>
+    <div style="margin-top:6px;font-size:12px">📎 ${escEst(s.pdf.name)} (the quote) · <a style="cursor:pointer;color:var(--green-dark)" onclick="qqPdf(false)">Preview it</a></div>
+    ${attachPickerHtml(s.files||[], 'quote')}
     <div id="qqs-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>` : ''}
     <div style="display:flex;justify-content:space-between;margin-top:14px;gap:8px">
       <button class="btn-cancel" onclick="document.getElementById('qq-send').remove()">Cancel</button>
@@ -8128,10 +8161,11 @@ async function qqSendGo(){
   qqSendSave();
   const s = qqSend, btn = document.getElementById('qqs-go'), err = document.getElementById('qqs-err');
   if(!s.to.trim()){ err.textContent = 'Enter who it goes to.'; return; }
+  if((s.files||[]).reduce((t,f)=>t+f.size,0) > ATTACH_LIMIT){ err.textContent = 'The extra attachments are over 4 MB. Remove some first.'; return; }
   if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent = `Yes, email it from ${s.st.gmail_from} to ${s.to.trim()}${s.cc.trim()?' (cc '+s.cc.trim()+')':''}`; btn.style.background='#b45309'; return; }
   btn.disabled = true; btn.textContent = 'Sending…';
   try{
-    const res = await invAction({ action:'send_quote_gmail', to:s.to, cc:s.cc, subject:s.subject, body:s.body, filename:s.pdf.name, pdf_b64:s.pdf.b64, qb_estimate_id: qq.qbId||'', doc_number: qq.docNumber||'' });
+    const res = await invAction({ action:'send_quote_gmail', to:s.to, cc:s.cc, subject:s.subject, body:s.body, filename:s.pdf.name, pdf_b64:s.pdf.b64, qb_estimate_id: qq.qbId||'', doc_number: qq.docNumber||'', attachments: attachPayload(s.files) });
     if(!qq.d.contact_email && s.to){ qq.d.contact_email = s.to.split(/[,;]/)[0].trim(); try{ await qqSaveClientProfile(); }catch(e){} }
     document.getElementById('qq-send').remove();
     alert(`✓ Quote${qq.docNumber?' #'+qq.docNumber:''} was emailed to ${res.sent_to} from ${res.from}.`);

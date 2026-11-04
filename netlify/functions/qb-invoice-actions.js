@@ -135,6 +135,40 @@ exports.handler = async function (event) {
       return json(200, { ok: true });
     } catch (e) { return json(500, { error: e.message }); }
   }
+  // Approve vendor bills for payment (Ryan, Jake as backup). Records who/when, and notes it on the bill in QuickBooks.
+  if (b.action === 'bill_approve' || b.action === 'bill_unapprove') {
+    const PAY_APPROVERS = { 'ryan@fieldsourceohio.com': 'Ryan DeMay', 'jake@fieldsourceohio.com': 'Jake' };
+    const me = String(user.email).toLowerCase();
+    if (!PAY_APPROVERS[me]) return json(403, { error: 'Only Ryan and Jake can approve bills for payment.' });
+    try {
+      const ids = (b.qb_bill_ids || []).map(String).filter(Boolean).slice(0, 200);
+      if (!ids.length) throw new Error('No bills selected.');
+      const bills = await sb('GET', `qb_bills?qb_bill_id=in.(${ids.join(',')})&select=qb_bill_id,balance,doc_number,vendor_name`);
+      const stamp = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' });
+      let qbNoted = 0;
+      if (b.action === 'bill_approve') {
+        await sb('POST', 'bill_pay_approvals?on_conflict=qb_bill_id', (bills || []).map(x => ({ qb_bill_id: x.qb_bill_id, approved_by: me, approved_name: PAY_APPROVERS[me], approved_at: new Date().toISOString(), amount: x.balance, note: String(b.note || '').slice(0, 300), emailed_at: null })), 'resolution=merge-duplicates,return=minimal');
+      } else {
+        await sb('DELETE', `bill_pay_approvals?qb_bill_id=in.(${ids.join(',')})`, null, 'return=minimal');
+      }
+      if (b.write_qb !== false) {
+        try {
+          const qb = await qbAuth();
+          for (const id of ids) {
+            try {
+              const bill = (await qb.call(`bill/${id}`)).Bill;
+              let note = String(bill.PrivateNote || '').replace(/\s*\[Approved for payment[^\]]*\]/g, '').trim();
+              if (b.action === 'bill_approve') note = `${note} [Approved for payment by ${PAY_APPROVERS[me]}, ${stamp}]`.trim();
+              await qb.call('bill', { method: 'POST', body: JSON.stringify({ Id: bill.Id, SyncToken: bill.SyncToken, sparse: true, PrivateNote: note.slice(0, 4000) }) });
+              qbNoted++;
+            } catch (e) { console.warn('bill note', id, e.message); }
+          }
+        } catch (e) { console.warn('qb auth for notes', e.message); }
+      }
+      await logActivity(b.action === 'bill_approve' ? 'bills_approved_for_payment' : 'bills_unapproved', user, { bills: (bills || []).map(x => `${x.vendor_name} #${x.doc_number}`), note: b.note || '' });
+      return json(200, { ok: true, count: (bills || []).length, qb_noted: qbNoted, by: PAY_APPROVERS[me] });
+    } catch (e) { return json(500, { error: e.message }); }
+  }
   if (['create', 'send', 'send_gmail'].includes(b.action) && !canBill) return json(403, { error: 'Only Jake, Ryan and Ali can create or send invoices.' });
 
   try {

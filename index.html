@@ -38,6 +38,10 @@ header{background:var(--green-dark);padding:0 16px;display:flex;align-items:cent
 }
 .view-bar{background:var(--surface);border-bottom:1px solid var(--border);display:flex;flex-direction:column}
 .view-bar-row{display:flex}
+.biz-groups .vtab{font-size:13px;font-weight:700;color:var(--text-2);padding:11px 4px}
+.biz-groups .vtab.active{color:var(--green-dark);border-bottom-color:var(--green-dark)}
+.biz-subs{background:var(--surface);border-top:1px solid var(--border)}
+.biz-subs .vtab{font-size:12px;padding:8px 4px}
 .vtab{flex:1;padding:10px 4px;font-size:12px;font-weight:500;color:var(--text-3);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;font-family:'DM Sans',sans-serif;transition:color .15s;text-align:center}
 .vtab.active{color:var(--green);border-bottom-color:var(--green);font-weight:600}
 .view-bar-row:first-child{border-bottom:1px solid var(--border)}
@@ -428,19 +432,24 @@ main{padding:12px 16px 100px}
 </div>
 
 <div class="view-bar" id="bizops-bar" style="display:none">
-  <div class="view-bar-row">
-    <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Accounts Payable</button>
+  <div class="view-bar-row biz-groups" id="bizops-groups">
+    <button class="vtab" data-g="ap" onclick="openBizGroup('ap')">Accounts Payable <span id="biz-ap-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" data-g="ar" onclick="openBizGroup('ar')">Accounts Receivable</button>
+    <button class="vtab" data-g="jc" onclick="openBizGroup('jc')">Job Costs</button>
+  </div>
+  <div class="view-bar-row biz-subs">
+    <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Vendor Invoices</button>
     <button class="vtab" id="inv-approval-tab" onclick="Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="paybills-tab" onclick="payLoaded=false;setView('paybills')">Approve to Pay</button>
-    <button class="vtab" id="costs-tab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts())">Direct Cost</button>
-    <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting())">WIP</button>
-    <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
+    <button class="vtab" id="costs-tab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts());syncBizGroup()">Direct Cost</button>
+    <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting());syncBizGroup()">WIP</button>
+    <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor());syncBizGroup()">Labor Costs</button>
     <button class="vtab" id="estimates-tab" onclick="loadEstimates().then(()=>setView('estimates'));loadQbInvoices().then(()=>{ if(view==='estimates') renderEstimates(); })">Estimates</button>
-    <button class="vtab" id="receivables-tab" onclick="setView('receivables');loadQbInvoices(true).then(()=>{ if(view==='receivables') renderReceivables(); })">Accounts Receivable</button>
+    <button class="vtab" id="receivables-tab" onclick="setView('receivables');loadQbInvoices(true).then(()=>{ if(view==='receivables') renderReceivables(); })">Billing &amp; Collections</button>
     <button class="vtab" id="materials-tab" onclick="loadMaterials().then(()=>setView('materials'))">Materials</button>
-    <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPipeline()" style="display:none">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
-    <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPO()" style="display:none">PO Tracker</button>
-    <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients()" style="display:none">Clients</button>
+    <button class="vtab" id="pipeline-tab" onclick="view='pipeline';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPipeline();syncBizGroup()" style="display:none">Pipeline <span id="pl-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" id="po-tab" onclick="view='po';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderPO();syncBizGroup()" style="display:none">PO Tracker</button>
+    <button class="vtab" id="clients-tab" onclick="view='clients';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';renderClients();syncBizGroup()" style="display:none">Clients</button>
   </div>
 </div>
 
@@ -9113,6 +9122,7 @@ function exportFuelCSV(){
 }
 
 function setView(v){
+  setTimeout(()=>{ if(typeof syncBizGroup==='function') syncBizGroup(); }, 0);
   view=v;
   if(v!=='equipment') offset=0;
   document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));
@@ -9217,6 +9227,33 @@ async function removeOfficeClosure(ids){
   catch(e){ alert('Could not remove: '+e.message); }
 }
 // =================== END OFFICE CLOSED DAYS ===================
+
+// ===================== BUSINESS OPS: grouped tabs =====================
+const BIZ_GROUP_OF = { invoices:'ap', 'inv-approval':'ap', paybills:'ap', estimates:'ar', receivables:'ar',
+  costs:'jc', costing:'jc', labor:'jc', materials:'jc', pipeline:'jc', po:'jc', clients:'jc' };
+const BIZ_TAB_OF = { invoices:'invoices-tab', 'inv-approval':'inv-approval-tab', paybills:'paybills-tab', estimates:'estimates-tab', receivables:'receivables-tab',
+  costs:'costs-tab', costing:'costing-tab', labor:'labor-tab', materials:'materials-tab', pipeline:'pipeline-tab', po:'po-tab', clients:'clients-tab' };
+const BIZ_DEFAULT = { ap:'inv-approval', ar:'receivables', jc:'costs' };
+let bizGroup = 'ap', bizLast = {};
+function syncBizGroup(keepGroup){
+  if(!keepGroup && BIZ_GROUP_OF[view]){ bizGroup = BIZ_GROUP_OF[view]; bizLast[bizGroup] = view; }
+  document.querySelectorAll('#bizops-groups .vtab').forEach(b=>b.classList.toggle('active', b.dataset.g===bizGroup));
+  Object.entries(BIZ_TAB_OF).forEach(([v,id])=>{ const b = document.getElementById(id); if(!b) return;
+    if(b.dataset.alwaysHidden===undefined) b.dataset.alwaysHidden = b.style.display==='none' ? '1' : '0';
+    b.style.display = (b.dataset.alwaysHidden==='1' || BIZ_GROUP_OF[v]!==bizGroup) ? 'none' : '';
+    b.classList.toggle('active', v===view); });
+  const src = document.getElementById('inv-approval-badge'), dst = document.getElementById('biz-ap-badge');
+  if(src && dst){ const show = src.style.display!=='none' && src.textContent.trim() && src.textContent.trim()!=='0'; dst.style.display = show ? '' : 'none'; dst.textContent = show ? src.textContent : ''; }
+}
+function openBizGroup(g){
+  bizGroup = g;
+  const v = bizLast[g] || BIZ_DEFAULT[g], b = document.getElementById(BIZ_TAB_OF[v]);
+  syncBizGroup(true);          // show this group's tabs right away, before the page finishes loading
+  if(b) b.click();
+}
+// Re-sync the group row after any sub-tab click (some older tabs clear every highlight on the bar)
+document.addEventListener('click', e=>{ if(e.target.closest && e.target.closest('#bizops-bar .biz-subs .vtab')) setTimeout(()=>syncBizGroup(), 0); }, true);
+// =================== END BUSINESS OPS GROUPS ===================
 
 function render(){
   const wt=document.getElementById('week-view-toggle');

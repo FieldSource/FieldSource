@@ -20,5 +20,10 @@ exports.handler = async function () {
     const inv = require('./qb-invoice-sync.js');
     for (let i = 0; i < 3; i++) { const r = await inv.run(false); console.log('qb-invoice-sync pass', i + 1, JSON.stringify(r)); if (!r.hasMore) break; }
   }catch(e){ console.error('qb-invoice-sync failed:', e.message); }
+  // Then vendor bills (what we owe; paid status for "Approve to pay")
+  try{
+    const bills = require('./qb-bill-sync.js');
+    for (let i = 0; i < 3; i++) { const r = await bills.run(false); console.log('qb-bill-sync pass', i + 1, JSON.stringify(r)); if (!r.hasMore) break; }
+  }catch(e){ console.error('qb-bill-sync failed:', e.message); }
   return res;
 };

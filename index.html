@@ -431,6 +431,7 @@ main{padding:12px 16px 100px}
   <div class="view-bar-row">
     <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Accounts Payable</button>
     <button class="vtab" id="inv-approval-tab" onclick="Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
+    <button class="vtab" id="paybills-tab" onclick="payLoaded=false;setView('paybills')">Approve to Pay</button>
     <button class="vtab" id="costs-tab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts())">Direct Cost</button>
     <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting())">WIP</button>
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor())">Labor Costs</button>
@@ -7246,6 +7247,157 @@ async function viewInvoicePdf(qbInvoiceId, doc){
   }catch(err){ billOverlay('pdf-overlay', `<div class="sheet-title">Couldn't load the PDF</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('pdf-overlay').remove()">Close</button></div>`, 520); }
 }
 // =================== END BUILD & SEND INVOICES ===================
+// ===================== APPROVE TO PAY (QuickBooks bills) =====================
+// Open QuickBooks bills, matched to the tracker invoice (and PM approval) they came from. Ryan (Jake as backup)
+// approves for payment; Jason gets a weekly "Ready to pay" email of everything approved and still unpaid.
+const PAY_APPROVERS_UI = ['ryan@fieldsourceohio.com','jake@fieldsourceohio.com'];
+let payBills = [], payApprovals = {}, paySettings = {}, payLoaded = false, payFilter = 'needs', payVendor = '', paySel = new Set();
+function canApprovePay(){ return PAY_APPROVERS_UI.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
+async function loadPayBills(){
+  try{
+    const since = new Date(Date.now()-90*864e5).toLocaleDateString('en-CA');
+    const [open, paid, ap, st] = await Promise.all([
+      sbFetch('GET','/rest/v1/qb_bills?balance=gt.0&select=*&order=due_date.asc&limit=1000'),
+      sbFetch('GET',`/rest/v1/qb_bills?balance=lte.0&paid_on=gte.${since}&select=*&order=paid_on.desc&limit=500`),
+      sbFetch('GET','/rest/v1/bill_pay_approvals?select=*'),
+      sbFetch('GET','/rest/v1/tracker_settings?key=in.(pay_email_to,pay_email_cc,pay_email_last)&select=key,value')]);
+    payBills = [...(open||[]), ...(paid||[])];
+    payApprovals = {}; (ap||[]).forEach(a=>payApprovals[a.qb_bill_id] = a);
+    paySettings = {}; (st||[]).forEach(r=>paySettings[r.key] = r.value);
+    payLoaded = true; payLoadError = '';
+  }catch(e){ payLoadError = e.message; payLoaded = true; }
+}
+let payLoadError = '';
+const payNorm = s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+const payVendorKey = s=>String(s||'').toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(w=>w && !['the','inc','llc','co','company','corp','of','and'].includes(w))[0]||'';
+function payVendorsMatch(a,b){ const x = payVendorKey(a), y = payVendorKey(b); return !!x && !!y && (x===y || x.startsWith(y) || y.startsWith(x)); }
+// Find the tracker invoice a QuickBooks bill came from: same invoice #, else same amount and vendor within 60 days
+function payTrackerInvoice(b){
+  const files = (typeof invoiceFiles!=='undefined' ? invoiceFiles : []);
+  const n = payNorm(b.doc_number);
+  return (n && files.find(f=>payNorm(f.invoiceNum)===n && (payVendorsMatch(f.vendorName,b.vendor_name) || !f.vendorName)))
+    || files.find(f=>f.amount!=null && Math.abs(Number(f.amount)-Number(b.total))<0.01 && payVendorsMatch(f.vendorName,b.vendor_name)
+        && (!f.invoiceDate || !b.txn_date || Math.abs(new Date(f.invoiceDate)-new Date(b.txn_date)) < 60*864e5)) || null;
+}
+function payDays(d){ if(!d) return null; return Math.round((new Date(d+'T12:00:00') - new Date(new Date().toLocaleDateString('en-CA')+'T12:00:00'))/864e5); }
+function renderPayBills(){
+  const el = document.getElementById('main-content');
+  if(!payLoaded){ el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-3)">Loading bills from QuickBooks…</div>'; Promise.all([loadPayBills(), (typeof invoiceFiles!=='undefined' && invoiceFiles.length) ? null : loadInvoices()]).then(()=>{ if(view==='paybills') renderPayBills(); }); return; }
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const money = n=>'$'+(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const fmt = d=>d?new Date(String(d).slice(0,10)+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+  const canPay = canApprovePay();
+  const rows = payBills.map(b=>({ b, ap: payApprovals[b.qb_bill_id], f: payTrackerInvoice(b), paid: Number(b.balance)<=0.005, days: payDays(b.due_date) }));
+  const open = rows.filter(r=>!r.paid), needs = open.filter(r=>!r.ap), approved = open.filter(r=>r.ap), paid = rows.filter(r=>r.paid);
+  const sum = l=>l.reduce((t,r)=>t+Number(r.b.balance||0),0);
+  const pastDue = open.filter(r=>r.days!=null && r.days<0);
+  let list = payFilter==='needs'?needs:payFilter==='approved'?approved:payFilter==='paid'?paid:payFilter==='pastdue'?pastDue:payFilter==='nopm'?open.filter(r=>!r.f || r.f.approvalStatus==='pending'):open;
+  if(payVendor) list = list.filter(r=>r.b.vendor_name===payVendor);
+  list = list.slice().sort((a,b)=>payFilter==='paid' ? String(b.b.paid_on).localeCompare(String(a.b.paid_on)) : (a.b.due_date||'9').localeCompare(b.b.due_date||'9'));
+  // PM-approved tracker invoices that never became a QuickBooks bill (last 60 days)
+  const billFiles = new Set(rows.map(r=>r.f && r.f.id).filter(Boolean));
+  const cutoff = new Date(Date.now()-60*864e5).toISOString().slice(0,10);
+  const notInQb = (typeof invoiceFiles!=='undefined'?invoiceFiles:[]).filter(f=>f.approvalStatus!=='pending' && f.approvalStatus!=='rejected' && !billFiles.has(f.id) && (f.invoiceDate||f.createdAt||'').slice(0,10)>=cutoff && Number(f.amount)>0 && !(typeof isOverhead==='function' && false));
+  const vendors = [...new Set(open.map(r=>r.b.vendor_name))].sort();
+  const last = (()=>{ try{ return JSON.parse(paySettings.pay_email_last||'null'); }catch(e){ return null; } })();
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 8px;text-align:left;background:var(--surface)';
+  const td = 'font-size:13px;color:var(--text);padding:8px 8px;border-top:1px solid var(--border);vertical-align:top';
+  const card = (label,v,sub,c,key)=>`<div onclick="payFilter='${key}';paySel.clear();renderPayBills()" style="cursor:pointer;background:var(--surface);border:1px solid ${payFilter===key?'var(--green)':'var(--border)'};border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${c}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${label}</div><div style="font-size:18px;font-weight:700">${money(v)}</div><div style="font-size:11px;color:var(--text-3)">${sub}</div></div>`;
+  const pmCell = r=>!r.f ? `<span style="color:#b45309">⚠ No tracker invoice</span><div style="font-size:11px;color:var(--text-3)">skipped Ali and PM review</div>`
+    : r.f.approvalStatus==='pending' ? `<span style="color:#b45309">Waiting on PM</span>`
+    : r.f.approvalStatus==='rejected' ? `<span style="color:#b91c1c">PM rejected</span>`
+    : `<span style="color:#166534">✓ ${esc(r.f.approvedBy ? (typeof getDisplayName==='function'?getDisplayName(r.f.approvedBy):r.f.approvedBy) : 'Filed')}</span>${r.f.approvedAt?`<div style="font-size:11px;color:var(--text-3)">${fmt(r.f.approvedAt)}</div>`:''}`;
+  const dueCell = r=>r.paid ? `<span style="color:#166534">Paid ${fmt(r.b.paid_on)}</span>` : r.days==null ? '—' : `${fmt(r.b.due_date)}<div style="font-size:11px;color:${r.days<0?'#b91c1c':r.days<=7?'#b45309':'var(--text-3)'}">${r.days<0?Math.abs(r.days)+' days past due':r.days===0?'due today':'in '+r.days+' days'}</div>`;
+  el.innerHTML = `<div style="max-width:1180px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="font-size:18px;font-weight:700">Approve to Pay</div>
+      <div style="font-size:12px;color:var(--text-3)">QuickBooks bills · refreshes hourly · <a style="cursor:pointer;color:var(--green-dark)" onclick="payLoaded=false;renderPayBills()">↻ Refresh</a></div>
+    </div>
+    ${payLoadError?`<div style="padding:10px 14px;background:#fee2e2;border-radius:8px;font-size:13px;color:#991b1b;margin-bottom:12px">Couldn't load bills: ${esc(payLoadError).slice(0,200)}${/qb_bills|bill_pay/.test(payLoadError)?' (run the payment approvals SQL first)':''}</div>`:''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px">
+      ${card('Needs approval',sum(needs),`${needs.length} bills`,'#f59e0b','needs')}
+      ${card('Approved, unpaid',sum(approved),`${approved.length} bills · on Jason's list`,'#16a34a','approved')}
+      ${card('Past due',sum(pastDue),`${pastDue.length} bills`,'#dc2626','pastdue')}
+      ${card('All open',sum(open),`${open.length} bills`,'#3b82f6','all')}
+      ${card('Paid (90 days)',paid.reduce((t,r)=>t+Number(r.b.total||0),0),`${paid.length} bills`,'#64748b','paid')}
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;margin-bottom:14px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <b>✉ Weekly "Ready to pay" email</b>
+      <span style="color:var(--text-3)">Sunday nights, 8 PM · to</span>
+      <input id="pay-to" value="${esc(paySettings.pay_email_to||'')}" placeholder="Jason's email" style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:200px" onchange="savePaySetting('pay_email_to',this.value)">
+      <span style="color:var(--text-3)">cc</span>
+      <input id="pay-cc" value="${esc(paySettings.pay_email_cc||'')}" placeholder="optional" style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:170px" onchange="savePaySetting('pay_email_cc',this.value)">
+      <button class="site-chip" style="padding:4px 10px;font-size:12px;margin-left:auto" onclick="sendReadyToPay()">Email it now</button>
+      <div style="width:100%;font-size:11px;color:var(--text-3)">${last?`Last sent ${new Date(last.at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})} to ${esc(last.to)}: ${last.count} bills, ${money(last.total)} (${last.trigger})`:'Not sent yet.'} Sent from Ryan's Gmail (or Jake's if Ryan hasn't connected Gmail). Lists every approved bill that's still unpaid; paid ones drop off.</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="padding:10px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <b>${{needs:'Needs approval',approved:'Approved, waiting on payment',pastdue:'Past due',all:'All open bills',paid:'Paid in the last 90 days',nopm:'No PM approval on file'}[payFilter]}</b>
+        <select style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit" onchange="payVendor=this.value;paySel.clear();renderPayBills()"><option value="">All vendors</option>${vendors.map(v=>`<option${payVendor===v?' selected':''}>${esc(v)}</option>`).join('')}</select>
+        <a style="font-size:12px;cursor:pointer;color:${payFilter==='nopm'?'var(--green-dark)':'var(--text-3)'}" onclick="payFilter='nopm';paySel.clear();renderPayBills()">No PM approval (${open.filter(r=>!r.f || r.f.approvalStatus==='pending').length})</a>
+        ${canPay && payFilter!=='paid' ? `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+          <span style="font-size:12px;color:var(--text-3)" id="pay-selinfo">${paySel.size?`${paySel.size} selected · ${money(list.filter(r=>paySel.has(r.b.qb_bill_id)).reduce((t,r)=>t+Number(r.b.balance),0))}`:''}</span>
+          ${payFilter!=='approved'?`<button class="btn-save" style="flex:none;padding:6px 12px" onclick="approveBills()">✓ Approve for payment</button>`:''}
+          ${payFilter==='approved'||payFilter==='all'||payFilter==='pastdue'?`<button class="btn-cancel" style="flex:none;padding:6px 12px" onclick="unapproveBills()">Undo approval</button>`:''}</span>` : ''}
+      </div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:820px"><thead><tr>
+        ${canPay && payFilter!=='paid'?`<th style="${th};width:28px"><input type="checkbox" onchange="paySel=this.checked?new Set(${JSON.stringify(list.map(r=>r.b.qb_bill_id))}):new Set();renderPayBills()" ${list.length&&list.every(r=>paySel.has(r.b.qb_bill_id))?'checked':''}></th>`:''}
+        <th style="${th}">Vendor / bill #</th><th style="${th}">Project</th><th style="${th}">PM check</th><th style="${th};text-align:right">Amount due</th><th style="${th}">Due</th><th style="${th}">Payment approval</th><th style="${th}"></th></tr></thead><tbody>
+        ${list.map(r=>`<tr>
+          ${canPay && payFilter!=='paid'?`<td style="${td}"><input type="checkbox" ${paySel.has(r.b.qb_bill_id)?'checked':''} onchange="this.checked?paySel.add('${r.b.qb_bill_id}'):paySel.delete('${r.b.qb_bill_id}');renderPayBills()"></td>`:''}
+          <td style="${td}"><b>${esc(r.b.vendor_name)}</b><div style="font-size:11px;color:var(--text-3)">#${esc(r.b.doc_number)} · ${fmt(r.b.txn_date)}</div></td>
+          <td style="${td};font-size:12px">${esc((r.b.projects||[]).join(', ') || (r.f&&r.f.projectName) || '—')}</td>
+          <td style="${td};font-size:12px">${pmCell(r)}</td>
+          <td style="${td};text-align:right;font-weight:600">${money(r.paid?r.b.total:r.b.balance)}${!r.paid && Number(r.b.balance)<Number(r.b.total)-0.005?`<div style="font-size:11px;color:var(--text-3);font-weight:400">of ${money(r.b.total)}</div>`:''}</td>
+          <td style="${td};font-size:12px">${dueCell(r)}</td>
+          <td style="${td};font-size:12px">${r.ap?`<span style="color:#166534">✓ ${esc(r.ap.approved_name||r.ap.approved_by)}</span><div style="font-size:11px;color:var(--text-3)">${fmt(r.ap.approved_at)}${r.ap.emailed_at?' · emailed':' · not emailed yet'}</div>`:(r.paid?'<span style="color:var(--text-3)">paid without approval</span>':'<span style="color:#b45309">Not approved</span>')}</td>
+          <td style="${td}">${r.f && r.f.filePath?`<button class="site-chip" style="padding:2px 8px;font-size:11px" onclick="openInvoiceFile('${esc(r.f.filePath).replace(/'/g,"\\'")}','${esc(r.f.fileName).replace(/'/g,"\\'")}','${esc(r.f.projectName).replace(/'/g,"\\'")}')">📄 Invoice</button>`:''}</td></tr>`).join('') || `<tr><td colspan="8" style="${td};color:var(--text-3)">Nothing here.</td></tr>`}
+      </tbody></table></div>
+      <div style="padding:8px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border)">${list.length} bill${list.length===1?'':'s'} · ${money(list.reduce((t,r)=>t+Number(r.paid?r.b.total:r.b.balance),0))}. "PM check" is the tracker invoice this bill was matched to (by invoice # or amount) and who approved receipt.</div>
+    </div>
+    ${notInQb.length?`<div style="background:var(--surface);border:1px solid #fde68a;border-radius:var(--radius);margin-top:14px;overflow:hidden">
+      <div style="padding:10px 12px;font-weight:700;background:#fffbeb">PM-approved in the tracker, not in QuickBooks yet (${notInQb.length}) <span style="font-weight:400;font-size:12px;color:var(--text-3)">last 60 days · may still need to be entered by Jason, or the invoice # differs</span></div>
+      ${notInQb.slice(0,60).map(f=>`<div style="display:flex;gap:10px;padding:7px 12px;border-top:1px solid var(--border);font-size:13px;flex-wrap:wrap"><b style="min-width:180px">${esc(f.vendorName||'—')}</b><span>#${esc(f.invoiceNum||'—')}</span><span style="color:var(--text-3)">${esc(f.projectName)}</span><span style="margin-left:auto;font-weight:600">${money(f.amount)}</span><span style="color:var(--text-3);font-size:12px">${fmt(f.invoiceDate||f.createdAt)}</span></div>`).join('')}
+    </div>`:''}
+  </div>`;
+}
+async function savePaySetting(key, value){
+  try{ await sbFetch('POST','/rest/v1/tracker_settings?on_conflict=key', { key, value:String(value||'').trim(), updated_by:(currentUser&&currentUser.email)||'', updated_at:new Date().toISOString() }); paySettings[key] = String(value||'').trim(); if(typeof pmToast==='function') pmToast('Saved'); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+async function approveBills(){
+  const ids = [...paySel]; if(!ids.length){ alert('Tick the bills to approve.'); return; }
+  const chosen = payBills.filter(b=>ids.includes(b.qb_bill_id)), total = chosen.reduce((t,b)=>t+Number(b.balance),0);
+  const flagged = chosen.filter(b=>{ const f = payTrackerInvoice(b); return !f || f.approvalStatus==='pending' || f.approvalStatus==='rejected'; }).length;
+  const note = prompt(`Approve ${ids.length} bill${ids.length===1?'':'s'} for payment, $${total.toLocaleString('en-US',{minimumFractionDigits:2})}?${flagged?`\n\n⚠ ${flagged} of them have no PM approval in the tracker.`:''}\n\nOptional note for Jason (e.g. "pay by Friday"), then OK:`, '');
+  if(note===null) return;
+  try{ const r = await invAction({ action:'bill_approve', qb_bill_ids:ids, note });
+    paySel.clear(); await loadPayBills(); renderPayBills();
+    if(typeof pmToast==='function') pmToast(`✓ ${r.count} approved by ${r.by}${r.qb_noted?' · noted in QuickBooks':''}`); }
+  catch(e){ alert('Not approved: '+e.message); }
+}
+async function unapproveBills(){
+  const ids = [...paySel].filter(id=>payApprovals[id]); if(!ids.length){ alert('Tick approved bills to undo.'); return; }
+  if(!confirm(`Undo payment approval on ${ids.length} bill${ids.length===1?'':'s'}? They'll come off Jason's list.`)) return;
+  try{ await invAction({ action:'bill_unapprove', qb_bill_ids:ids }); paySel.clear(); await loadPayBills(); renderPayBills(); }
+  catch(e){ alert('Could not undo: '+e.message); }
+}
+async function sendReadyToPay(){
+  const to = (document.getElementById('pay-to')||{}).value || paySettings.pay_email_to;
+  if(!to){ alert("Enter Jason's email first."); return; }
+  if(!confirm(`Email the Ready to pay list to ${to} now?`)) return;
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    const r = await fetch('/.netlify/functions/weekly-ready-to-pay', { method:'POST', headers:{ Authorization:'Bearer '+sbToken() } });
+    const d = await r.json().catch(()=>({ error:`Server error (${r.status})` }));
+    if(!r.ok || d.error) throw new Error(d.error||r.status);
+    if(!d.sent){ alert('Not sent: '+d.reason); return; }
+    await loadPayBills(); renderPayBills();
+    alert(`✓ Emailed ${d.count} bills ($${Number(d.total).toLocaleString('en-US',{minimumFractionDigits:2})}) to ${d.to} from ${d.from}.`);
+  }catch(e){ alert('Not sent: '+e.message); }
+}
+// =================== END APPROVE TO PAY ===================
+
 
 
 // ===================== TRACKER HANDOFF (Ryan's tracker-handoff spec, steps 2-6) =====================
@@ -8942,15 +9094,15 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials','receivables'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials','receivables','paybills'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   // Business Ops tabs are highlighted by id (button order no longer matches index)
-  const BIZOPS_TAB_IDS={po:'po-tab',costs:'costs-tab',pipeline:'pipeline-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab',receivables:'receivables-tab'};
+  const BIZOPS_TAB_IDS={po:'po-tab',costs:'costs-tab',pipeline:'pipeline-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab',receivables:'receivables-tab',paybills:'paybills-tab'};
   const byId = BIZOPS_TAB_IDS[v] && document.getElementById(BIZOPS_TAB_IDS[v]);
   if(byId) byId.classList.add('active');
   else { const localIdx = allIdx[v]; if(barTabs[localIdx]) barTabs[localIdx].classList.add('active'); }
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials'||v==='receivables';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials'||v==='receivables'||v==='paybills';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -8990,6 +9142,7 @@ function render(){
   else if(view==='fuel') renderFuel();
   else if(view==='estimates') renderEstimates();
   else if(view==='receivables') renderReceivables();
+  else if(view==='paybills') renderPayBills();
   else if(view==='invoices'){ if(invoiceView==='reports') renderInvoiceReports(); else renderInvoices(); }
   else if(view==='inv-approval') renderInvApproval();
   else if(view==='materials') renderMaterials();

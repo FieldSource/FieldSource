@@ -7346,6 +7346,10 @@ function payTrackerInvoice(b){
     || files.find(f=>f.amount!=null && Math.abs(Number(f.amount)-Number(b.total))<0.01 && payVendorsMatch(f.vendorName,b.vendor_name)
         && (!f.invoiceDate || !b.txn_date || Math.abs(new Date(f.invoiceDate)-new Date(b.txn_date)) < 60*864e5)) || null;
 }
+const PAY_NO_JOB = '(no job applied)';
+// One name per job: QuickBooks customer names ("Elgin Local School District") are matched to the tracker's client ("Elgin")
+function payJobName(n){ n = String(n||'').trim(); if(!n) return ''; try{ const m = typeof matchTrackerClient==='function' ? matchTrackerClient({ client:n }) : ''; return m || n; }catch(e){ return n; } }
+function payJobOf(r){ const q = [...new Set((r.b.projects||[]).filter(Boolean).map(payJobName))]; return q.length ? q.join(', ') : (r.f && payJobName(r.f.projectName)) || PAY_NO_JOB; }
 function payDays(d){ if(!d) return null; return Math.round((new Date(d+'T12:00:00') - new Date(new Date().toLocaleDateString('en-CA')+'T12:00:00'))/864e5); }
 function renderPayBills(){
   const el = document.getElementById('main-content');
@@ -7361,7 +7365,11 @@ function renderPayBills(){
   let list = payFilter==='needs'?needs:payFilter==='approved'?approved:payFilter==='paid'?paid:payFilter==='pastdue'?pastDue:payFilter==='nopm'?open.filter(r=>!r.f || r.f.approvalStatus==='pending'):open;
   if(payVendor) list = list.filter(r=>r.b.vendor_name===payVendor);
   const byDue = (a,b)=>payFilter==='paid' ? String(b.b.paid_on).localeCompare(String(a.b.paid_on)) : (a.b.due_date||'9').localeCompare(b.b.due_date||'9');
-  list = list.slice().sort(payGroup==='vendor' ? (a,b)=>(a.b.vendor_name||'').localeCompare(b.b.vendor_name||'',undefined,{sensitivity:'base'}) || byDue(a,b) : byDue);
+  const byName = (x,y)=>String(x||'').localeCompare(String(y||''),undefined,{sensitivity:'base'});
+  list = list.slice().sort(payGroup==='vendor' ? (a,b)=>byName(a.b.vendor_name,b.b.vendor_name) || byDue(a,b)
+    : payGroup==='job' ? (a,b)=>((payJobOf(a)===PAY_NO_JOB)-(payJobOf(b)===PAY_NO_JOB)) || byName(payJobOf(a),payJobOf(b)) || byName(a.b.vendor_name,b.b.vendor_name) || byDue(a,b)
+    : byDue);
+  const groupKey = r=>payGroup==='job' ? payJobOf(r) : r.b.vendor_name;
   // PM-approved tracker invoices that never became a QuickBooks bill (last 60 days)
   const billFiles = new Set(rows.map(r=>r.f && r.f.id).filter(Boolean));
   const cutoff = new Date(Date.now()-60*864e5).toISOString().slice(0,10);
@@ -7403,7 +7411,7 @@ function renderPayBills(){
         <b>${{needs:'Needs approval',approved:'Approved, waiting on payment',pastdue:'Past due',all:'All open bills',paid:'Paid in the last 90 days',nopm:'No PM approval on file'}[payFilter]}</b>
         <select style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit" onchange="payVendor=this.value;paySel.clear();renderPayBills()"><option value="">All vendors</option>${vendors.map(v=>`<option${payVendor===v?' selected':''}>${esc(v)}</option>`).join('')}</select>
         <span style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--text-3)">Sort:
-          ${[['vendor','By vendor'],['due','Soonest due']].map(([k,l])=>`<button class="site-chip${payGroup===k?' active':''}" style="padding:3px 9px;font-size:12px" onclick="payGroup='${k}';renderPayBills()">${l}</button>`).join('')}</span>
+          ${[['vendor','By vendor'],['job','By job'],['due','Soonest due']].map(([k,l])=>`<button class="site-chip${payGroup===k?' active':''}" style="padding:3px 9px;font-size:12px" onclick="payGroup='${k}';renderPayBills()">${l}</button>`).join('')}</span>
         <a style="font-size:12px;cursor:pointer;color:${payFilter==='nopm'?'var(--green-dark)':'var(--text-3)'}" onclick="payFilter='nopm';paySel.clear();renderPayBills()">No PM approval (${open.filter(r=>!r.f || r.f.approvalStatus==='pending').length})</a>
         ${canPay && payFilter!=='paid' ? `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">
           <span style="font-size:12px;color:var(--text-3)" id="pay-selinfo">${paySel.size?`${paySel.size} selected · ${money(list.filter(r=>paySel.has(r.b.qb_bill_id)).reduce((t,r)=>t+Number(r.b.balance),0))}`:''}</span>
@@ -7412,20 +7420,20 @@ function renderPayBills(){
       </div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:820px"><thead><tr>
         ${canPay && payFilter!=='paid'?`<th style="${th};width:28px"><input type="checkbox" onchange="paySel=this.checked?new Set(${JSON.stringify(list.map(r=>r.b.qb_bill_id))}):new Set();renderPayBills()" ${list.length&&list.every(r=>paySel.has(r.b.qb_bill_id))?'checked':''}></th>`:''}
-        <th style="${th}">${payGroup==='vendor'?'Bill #':'Vendor / bill #'}</th><th style="${th}">Project</th><th style="${th}">PM check</th><th style="${th};text-align:right">Amount due</th><th style="${th}">Due</th><th style="${th}">Payment approval</th><th style="${th}"></th></tr></thead><tbody>
+        <th style="${th}">${payGroup==='vendor'?'Bill #':'Vendor / bill #'}</th><th style="${th}">Job</th><th style="${th}">PM check</th><th style="${th};text-align:right">Amount due</th><th style="${th}">Due</th><th style="${th}">Payment approval</th><th style="${th}"></th></tr></thead><tbody>
         ${list.map((r,i)=>{ const showSel = canPay && payFilter!=='paid', cols = showSel ? 8 : 7;
           let head = '';
-          if(payGroup==='vendor' && (i===0 || list[i-1].b.vendor_name!==r.b.vendor_name)){
-            const vb = list.filter(x=>x.b.vendor_name===r.b.vendor_name), ids = vb.map(x=>x.b.qb_bill_id), vt = vb.reduce((t,x)=>t+Number(x.paid?x.b.total:x.b.balance),0);
+          if((payGroup==='vendor' || payGroup==='job') && (i===0 || groupKey(list[i-1])!==groupKey(r))){
+            const gk = groupKey(r), vb = list.filter(x=>groupKey(x)===gk), ids = vb.map(x=>x.b.qb_bill_id), vt = vb.reduce((t,x)=>t+Number(x.paid?x.b.total:x.b.balance),0);
             const late = vb.filter(x=>!x.paid && x.days!=null && x.days<0).length, allSel = ids.every(id=>paySel.has(id));
-            head = `<tr style="background:var(--accent)">${showSel?`<td style="padding:8px;border-top:2px solid var(--border-2)"><input type="checkbox" title="Select all ${esc(r.b.vendor_name)} bills" ${allSel?'checked':''} onchange="${JSON.stringify(ids).replace(/"/g,'&quot;')}.forEach(id=>this.checked?paySel.add(id):paySel.delete(id));renderPayBills()"></td>`:''}
-              <td colspan="${showSel?cols-1:cols}" style="padding:8px;border-top:2px solid var(--border-2);font-size:13px"><b>${esc(r.b.vendor_name)}</b>
+            head = `<tr style="background:var(--accent)">${showSel?`<td style="padding:8px;border-top:2px solid var(--border-2)"><input type="checkbox" title="Select all ${esc(groupKey(r))} bills" ${allSel?'checked':''} onchange="${JSON.stringify(ids).replace(/"/g,'&quot;')}.forEach(id=>this.checked?paySel.add(id):paySel.delete(id));renderPayBills()"></td>`:''}
+              <td colspan="${showSel?cols-1:cols}" style="padding:8px;border-top:2px solid var(--border-2);font-size:13px"><b style="${gk===PAY_NO_JOB?'color:#b45309;font-style:italic':''}">${payGroup==='job'?'🏗 ':''}${esc(gk)}</b>
               <span style="color:var(--text-3);font-size:12px"> · ${vb.length} bill${vb.length===1?'':'s'} · <b style="color:var(--text)">${money(vt)}</b>${late?` · <span style="color:#b91c1c">${late} past due</span>`:''}</span></td></tr>`;
           }
           return head + `<tr>
           ${showSel?`<td style="${td}"><input type="checkbox" ${paySel.has(r.b.qb_bill_id)?'checked':''} onchange="this.checked?paySel.add('${r.b.qb_bill_id}'):paySel.delete('${r.b.qb_bill_id}');renderPayBills()"></td>`:''}
           <td style="${td}">${payGroup==='vendor' ? `<b>#${esc(r.b.doc_number)}</b><div style="font-size:11px;color:var(--text-3)">${fmt(r.b.txn_date)}</div>` : `<b>${esc(r.b.vendor_name)}</b><div style="font-size:11px;color:var(--text-3)">#${esc(r.b.doc_number)} · ${fmt(r.b.txn_date)}</div>`}</td>
-          <td style="${td};font-size:12px">${esc((r.b.projects||[]).join(', ') || (r.f&&r.f.projectName) || '—')}</td>
+          <td style="${td};font-size:12px">${payJobOf(r)===PAY_NO_JOB ? '<span style="color:#b45309;font-style:italic">(no job applied)</span>' : esc(payJobOf(r))}${!(r.b.projects||[]).length && r.f && r.f.projectName ? '<div style="font-size:10.5px;color:var(--text-3)">from tracker invoice</div>' : ''}</td>
           <td style="${td};font-size:12px">${pmCell(r)}</td>
           <td style="${td};text-align:right;font-weight:600">${money(r.paid?r.b.total:r.b.balance)}${!r.paid && Number(r.b.balance)<Number(r.b.total)-0.005?`<div style="font-size:11px;color:var(--text-3);font-weight:400">of ${money(r.b.total)}</div>`:''}</td>
           <td style="${td};font-size:12px">${dueCell(r)}</td>

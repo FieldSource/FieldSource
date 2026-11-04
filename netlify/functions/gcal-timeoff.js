@@ -3,9 +3,8 @@
 //   POST { action:'sync', id }     -> approved: add/update an all-day event; pending/denied: remove it
 //   POST { action:'delete', id }   -> remove the event (called just before a time-off entry is deleted)
 //   POST { action:'backfill' }     -> sync every approved time off that hasn't ended yet (Jake/Ryan/Matt)
-// Writes as a Google service account the calendar is shared with (no one's personal login).
-// Netlify env: GOOGLE_SA_EMAIL, GOOGLE_SA_KEY (the private key from the service account's JSON key),
-//              optional GCAL_TIMEOFF_ID (defaults to the Field Source time-off calendar).
+// Writes through a connected Google account (Connect Google, with calendar permission), or a service account if one is set up.
+// Optional Netlify env: GOOGLE_SA_EMAIL / GOOGLE_SA_KEY (service account), GCAL_TIMEOFF_ID (defaults to the Field Source time-off calendar).
 
 const crypto = require('crypto');
 const SUPABASE_URL = 'https://pldlvtlbgxizbppaliag.supabase.co';
@@ -19,18 +18,32 @@ async function sb(method, path, body) {
   const t = await r.text(); if (!r.ok) throw new Error(`Supabase ${r.status}: ${t.slice(0, 200)}`);
   try { return t ? JSON.parse(t) : null; } catch (e) { return t; }
 }
+// Sign in to Google: a service account if one is set up (GOOGLE_SA_EMAIL / GOOGLE_SA_KEY), otherwise the Google
+// connection of someone who clicked "Connect Gmail" with calendar permission (Jake's first).
 async function googleToken() {
   const email = process.env.GOOGLE_SA_EMAIL, key = String(process.env.GOOGLE_SA_KEY || '').replace(/\\n/g, '\n');
-  if (!email || !key.includes('PRIVATE KEY')) throw new Error('Google Calendar isn\'t set up yet (GOOGLE_SA_EMAIL / GOOGLE_SA_KEY missing in Netlify).');
-  const now = Math.floor(Date.now() / 1000);
-  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
-  const unsigned = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({ iss: email, scope: 'https://www.googleapis.com/auth/calendar.events', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 })}`;
-  const sig = crypto.createSign('RSA-SHA256').update(unsigned).sign(key, 'base64url');
-  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${sig}` }).toString() });
-  const t = await r.json().catch(() => ({}));
-  if (!t.access_token) throw new Error(`Google refused the service account (${t.error || r.status}: ${t.error_description || ''}).`);
-  return t.access_token;
+  if (email && key.includes('PRIVATE KEY')) {
+    const now = Math.floor(Date.now() / 1000);
+    const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const unsigned = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({ iss: email, scope: 'https://www.googleapis.com/auth/calendar.events', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 })}`;
+    const sig = crypto.createSign('RSA-SHA256').update(unsigned).sign(key, 'base64url');
+    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${unsigned}.${sig}` }).toString() });
+    const t = await r.json().catch(() => ({}));
+    if (!t.access_token) throw new Error(`Google refused the service account (${t.error || r.status}: ${t.error_description || ''}).`);
+    return t.access_token;
+  }
+  const rows = (await sb('GET', 'gmail_tokens?select=user_email,refresh_token,scopes')) || [];
+  const order = ['jake@fieldsourceohio.com', 'ryan@fieldsourceohio.com', 'gibson@fieldsourceohio.com', 'matt@fieldsourceohio.com', 'haller@fieldsourceohio.com'];
+  const usable = rows.filter(r => /calendar/.test(r.scopes || '')).sort((a, b) => order.indexOf(a.user_email) - order.indexOf(b.user_email));
+  if (!usable.length) throw new Error('Google Calendar isn\'t connected yet. Click Connect Google (Time Off page) and approve calendar access.');
+  for (const row of usable) {
+    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: process.env.GOOGLE_CLIENT_ID, client_secret: process.env.GOOGLE_CLIENT_SECRET, refresh_token: row.refresh_token, grant_type: 'refresh_token' }).toString() });
+    const t = await r.json().catch(() => ({}));
+    if (t.access_token) return t.access_token;
+  }
+  throw new Error('The Google connection expired. Click Connect Google on the Time Off page again.');
 }
 async function cal(token, method, path, body) {
   const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(CAL_ID)}/events${path}`, { method,

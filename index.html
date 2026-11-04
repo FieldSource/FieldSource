@@ -470,6 +470,7 @@ main{padding:12px 16px 100px}
   <div class="view-toggle" id="week-view-toggle" style="display:none">
     <button class="view-toggle-btn active" id="toggle-site" onclick="setWeekViewMode('site')">By Site</button>
     <button class="view-toggle-btn" id="toggle-person" onclick="setWeekViewMode('person')">By Person</button>
+    <button class="view-toggle-btn" onclick="openOfficeClosures()" title="Days the office is closed" style="margin-left:6px">🏢 Office closed days</button>
   </div>
 </div>
 
@@ -9145,6 +9146,78 @@ function navFwd(){
   else offset++;
   render();
 }
+// ===================== OFFICE CLOSED DAYS (field tracker) =====================
+// Uses the same closures list as the Design planner (pm_closures), so a holiday is entered once.
+let officeClosures = [];
+const CLOSURE_EDITORS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+function canEditClosures(){ return CLOSURE_EDITORS.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
+async function loadOfficeClosures(){
+  try{ officeClosures = (await sbFetch('GET','/rest/v1/pm_closures?select=id,date,label&order=date.asc'))||[]; }
+  catch(e){ console.warn('Office closures not loaded:', e.message); officeClosures = []; }
+}
+function officeClosedOn(ds){ const c = officeClosures.find(x=>x.date===ds); return c ? (c.label||'Office closed') : ''; }
+function closedBadge(ds, small){
+  const l = officeClosedOn(ds); if(!l) return '';
+  return `<div title="Office closed: ${String(l).replace(/"/g,'&quot;')}" style="margin-top:3px;font-size:${small?9.5:10.5}px;font-weight:700;color:#7c2d12;background:#fde2d8;border-radius:6px;padding:2px 5px;line-height:1.25">🏢 Closed${small?'':' · '+String(l).replace(/</g,'&lt;')}</div>`;
+}
+function closureGroups(){
+  const sorted = [...officeClosures].sort((a,b)=>a.date.localeCompare(b.date)), out = [];
+  const next = d=>{ const x = new Date(d+'T12:00:00'); x.setDate(x.getDate()+1); return x.toLocaleDateString('en-CA'); };
+  sorted.forEach(c=>{ const g = out[out.length-1]; if(g && g.label===c.label && next(g.end)===c.date){ g.end = c.date; g.ids.push(c.id); } else out.push({ start:c.date, end:c.date, label:c.label, ids:[c.id] }); });
+  return out;
+}
+function openOfficeClosures(){
+  const esc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const fmt = d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+  const today = new Date().toLocaleDateString('en-CA');
+  const groups = closureGroups(), upcoming = groups.filter(g=>g.end>=today), past = groups.filter(g=>g.end<today).slice(-5).reverse();
+  const edit = canEditClosures();
+  const inp = 'font-size:13px;padding:7px 9px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  const row = (g,dim)=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 2px;border-bottom:1px solid var(--border);font-size:13px;${dim?'color:var(--text-3)':''}">
+      <span style="flex:1"><b>${fmt(g.start)}${g.end!==g.start?' – '+fmt(g.end):''}</b> · ${esc(g.label)}</span>
+      ${edit?`<button onclick="removeOfficeClosure('${g.ids.join(',')}')" style="border:none;background:none;cursor:pointer;color:var(--text-3)" title="Remove">🗑</button>`:''}</div>`;
+  document.getElementById('closed-overlay')?.remove();
+  const o = document.createElement('div'); o.className='modal-overlay centered'; o.id='closed-overlay';
+  o.onclick = e=>{ if(e.target===o) o.remove(); };
+  o.innerHTML = `<div class="modal-sheet" style="max-width:520px;max-height:88vh;overflow-y:auto"><div class="sheet-handle"></div>
+    <div class="sheet-title" style="margin-bottom:2px">🏢 Office closed days</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Shown on the schedule so nobody books work those days. Same list the Design planner uses.</div>
+    ${edit?`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div><div class="form-label">First day</div><input id="oc-start" type="date" style="${inp};width:100%;box-sizing:border-box" onchange="const e=document.getElementById('oc-end'); if(!e.value||e.value<this.value) e.value=this.value"></div>
+        <div><div class="form-label">Last day</div><input id="oc-end" type="date" style="${inp};width:100%;box-sizing:border-box"></div></div>
+      <div style="display:flex;gap:8px;margin-top:8px"><input id="oc-label" placeholder="e.g. Thanksgiving, Christmas, Company event" style="${inp};flex:1">
+        <button class="btn-save" style="flex:none;padding:7px 14px" onclick="addOfficeClosure()">Add</button></div>
+      <div style="font-size:11px;color:var(--text-3);margin:4px 0 12px">For one day, leave the last day the same as the first.</div>`:''}
+    <div class="form-label">Coming up</div>
+    ${upcoming.map(g=>row(g,false)).join('') || '<div style="font-size:13px;color:var(--text-3);padding:6px 0">None scheduled.</div>'}
+    ${past.length?`<div class="form-label" style="margin-top:14px">Recent</div>${past.map(g=>row(g,true)).join('')}`:''}
+    <div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn-cancel" style="flex:none" onclick="document.getElementById('closed-overlay').remove()">Done</button></div></div>`;
+  document.body.appendChild(o);
+}
+async function addOfficeClosure(){
+  const a = document.getElementById('oc-start').value, b = document.getElementById('oc-end').value || a;
+  const label = (document.getElementById('oc-label').value||'').trim() || 'Office closed';
+  if(!a){ alert('Pick the first day.'); return; }
+  if(b < a){ alert('The last day is before the first day.'); return; }
+  const have = new Map(officeClosures.map(c=>[c.date,c])), rows = [], relabel = [];
+  for(let d = a, n = 0; d <= b && n < 120; n++){ const ex = have.get(d); if(!ex) rows.push({ date:d, label }); else if(ex.label!==label) relabel.push(ex);
+    const x = new Date(d+'T12:00:00'); x.setDate(x.getDate()+1); d = x.toLocaleDateString('en-CA'); }
+  try{
+    if(relabel.length) await sbFetch('PATCH', `/rest/v1/pm_closures?id=in.(${relabel.map(c=>c.id).join(',')})`, { label });
+    if(rows.length) await sbFetch('POST','/rest/v1/pm_closures', rows);
+    await loadOfficeClosures();
+    if(typeof pm!=='undefined' && pm.loaded) pm.loaded = false;   // Design planner re-reads closures (and reschedules) next time it opens
+    openOfficeClosures(); render();
+  }catch(e){ alert('Could not add: '+e.message); }
+}
+async function removeOfficeClosure(ids){
+  const list = ids.split(',').filter(Boolean);
+  if(!confirm(list.length>1 ? `Remove all ${list.length} days of this closure?` : 'Remove this closed day?')) return;
+  try{ await sbFetch('DELETE', `/rest/v1/pm_closures?id=in.(${list.join(',')})`); await loadOfficeClosures(); if(typeof pm!=='undefined' && pm.loaded) pm.loaded = false; openOfficeClosures(); render(); }
+  catch(e){ alert('Could not remove: '+e.message); }
+}
+// =================== END OFFICE CLOSED DAYS ===================
+
 function render(){
   const wt=document.getElementById('week-view-toggle');
   if(wt) wt.style.display=(view==='week'||view==='next')?'flex':'none';
@@ -9186,8 +9259,8 @@ function renderWeekByPerson(days){
   html += '<th style="padding:8px 10px;font-size:11px;color:var(--text-3);font-weight:600;border-bottom:2px solid var(--border);border-right:1px solid var(--border);background:var(--surface);position:sticky;left:0;z-index:2;min-width:90px;text-align:left">Person</th>';
   days.forEach((d,i)=>{
     const ds = isoDate(d);
-    const isToday = ds===todayStr;
-    html += `<th style="padding:8px 6px;font-size:11px;font-weight:600;border-bottom:2px solid var(--border);border-right:1px solid var(--border);background:${isToday?'var(--green-light)':'var(--surface)'};color:${isToday?'var(--green-dark)':'var(--text-2)'};text-align:center;min-width:110px">${DOW[i]}<br><span style="font-size:13px;font-weight:700;color:${isToday?'var(--green-dark)':'var(--text)'}">${d.getDate()}</span></th>`;
+    const isToday = ds===todayStr, closedTh = officeClosedOn(ds);
+    html += `<th style="padding:8px 6px;font-size:11px;font-weight:600;border-bottom:2px solid var(--border);border-right:1px solid var(--border);background:${isToday?'var(--green-light)':closedTh?'#fff1eb':'var(--surface)'};color:${isToday?'var(--green-dark)':'var(--text-2)'};text-align:center;min-width:110px">${DOW[i]}<br><span style="font-size:13px;font-weight:700;color:${isToday?'var(--green-dark)':'var(--text)'}">${d.getDate()}</span>${closedBadge(ds,true)}</th>`;
   });
   html += '</tr></thead><tbody>';
 
@@ -9208,7 +9281,7 @@ function renderWeekByPerson(days){
         if(j.crewDays) return jobDatesForPerson(j,person).includes(ds);
         return true;
       });
-      html += `<td style="padding:4px;border-bottom:1px solid var(--border);border-right:1px solid var(--border);vertical-align:top;background:${isToday?'rgba(42,106,34,0.04)':''}">`;
+      html += `<td style="padding:4px;border-bottom:1px solid var(--border);border-right:1px solid var(--border);vertical-align:top;background:${isToday?'rgba(42,106,34,0.04)':officeClosedOn(ds)?'rgba(251,146,60,0.08)':''}">`;
       if(!personJobs.length){
         // Check time off
         if(isPersonOff(person, ds)){
@@ -9263,11 +9336,11 @@ function renderWeek(){
     const dayJobs=jobsForDate(ds);
     const offPpl = offToday[ds]||[];
     const offBadge = offPpl.length ? `<div style="font-size:10px;color:#b45309;margin-top:2px">${offPpl.join(', ')} off</div>` : '';
-    html+=`<div class="day-col" id="daycol-${ds}"
+    html+=`<div class="day-col" id="daycol-${ds}"${officeClosedOn(ds)?' style="background:repeating-linear-gradient(45deg,rgba(251,146,60,.07) 0 10px,transparent 10px 20px)"':''}
       ondragover="handleDragOver(event,'${ds}')"
       ondragleave="handleDragLeave(event,'${ds}')"
       ondrop="handleDrop(event,'${ds}')">
-      <div class="day-header${ds===todayStr?' today':''}">${DOW[i]}<br><strong>${d.getDate()}</strong>${offBadge}</div>`;
+      <div class="day-header${ds===todayStr?' today':''}">${DOW[i]}<br><strong>${d.getDate()}</strong>${closedBadge(ds)}${offBadge}</div>`;
     if(!dayJobs.length) html+=`<div class="empty-col">—</div>`;
     dayJobs.forEach(j=>{
       const st=statusMeta(getStatus(j));
@@ -9322,8 +9395,8 @@ function renderMonth(){
     const dt=new Date(base.getFullYear(),base.getMonth(),d);
     const ds=isoDate(dt);
     const dayJobs=jobsForDate(ds);
-    html+=`<div class="month-cell${dt.getDay()===0||dt.getDay()===6?' other':''}">
-      <div class="m-num${ds===todayStr?' today-num':''}">${d}</div>`;
+    html+=`<div class="month-cell${dt.getDay()===0||dt.getDay()===6?' other':''}"${officeClosedOn(ds)?' style="background:#fff1eb"':''}>
+      <div class="m-num${ds===todayStr?' today-num':''}">${d}</div>${closedBadge(ds,true)}`;
     dayJobs.slice(0,2).forEach(j=>{
       const st=statusMeta(getStatus(j));
       const dur=parseInt(j.duration)||1;
@@ -13714,7 +13787,7 @@ function showApp(){
   // Load data and start
   // Time off loads alongside the jobs (not after), and the schedule redraws as soon as it arrives,
   // so "off" shows right away instead of at the next background refresh.
-  const timeOffReady = loadTimeOff();
+  const timeOffReady = Promise.all([loadTimeOff(), loadOfficeClosures()]);
   let jobsReady = false;
   timeOffReady.then(()=>{ updateTimeOffBadge(); if(jobsReady && !document.querySelector('.modal-overlay') && typeof render==='function') render(); }).catch(()=>{});
   loadJobs().then(()=>{

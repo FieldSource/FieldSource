@@ -485,6 +485,7 @@ main{padding:12px 16px 100px}
   <div class="view-toggle" id="week-view-toggle" style="display:none">
     <button class="view-toggle-btn active" id="toggle-person" onclick="setWeekViewMode('person')">By Person</button>
     <button class="view-toggle-btn" id="toggle-site" onclick="setWeekViewMode('site')">By Site</button>
+    <a id="view-default-link" onclick="if(weekViewMode!==myWeekViewDefault) makeWeekViewDefault()" style="font-size:11px;margin-left:8px;white-space:nowrap;align-self:center;text-decoration:none">★ My default</a>
     <button class="view-toggle-btn" onclick="openOfficeClosures()" title="Days the office is closed" style="margin-left:6px">🏢 Office closed days</button>
   </div>
 </div>
@@ -9426,7 +9427,32 @@ function setWeekViewMode(mode){
   weekViewMode=mode;
   document.getElementById('toggle-site').classList.toggle('active',mode==='site');
   document.getElementById('toggle-person').classList.toggle('active',mode==='person');
+  updateViewDefaultLink();
   render();
+}
+// Each person's default week layout (By Person or By Site), saved to their login so it follows them across devices.
+let myWeekViewDefault = 'person';
+const viewPrefKey = ()=>'week_view_default:' + (((currentUser&&currentUser.email)||'').toLowerCase());
+async function loadWeekViewDefault(){
+  let v = null;
+  try{ v = localStorage.getItem(viewPrefKey()); }catch(e){}
+  try{ const r = await sbFetch('GET', `/rest/v1/tracker_settings?key=eq.${encodeURIComponent(viewPrefKey())}&select=value`); if(r && r[0] && r[0].value) v = r[0].value; }catch(e){}
+  myWeekViewDefault = v==='site' ? 'site' : 'person';
+  setWeekViewMode(myWeekViewDefault);
+}
+async function makeWeekViewDefault(){
+  myWeekViewDefault = weekViewMode;
+  try{ localStorage.setItem(viewPrefKey(), weekViewMode); }catch(e){}
+  try{ await sbFetch('POST','/rest/v1/tracker_settings?on_conflict=key', { key:viewPrefKey(), value:weekViewMode, updated_by:(currentUser&&currentUser.email)||'', updated_at:new Date().toISOString() }); }catch(e){ console.warn('View default saved on this device only:', e.message); }
+  updateViewDefaultLink();
+}
+function updateViewDefaultLink(){
+  const el = document.getElementById('view-default-link'); if(!el) return;
+  const mine = weekViewMode===myWeekViewDefault;
+  el.innerHTML = mine ? '★ My default' : '☆ Make this my default';
+  el.style.cursor = mine ? 'default' : 'pointer';
+  el.style.color = mine ? 'var(--text-3)' : 'var(--green-dark)';
+  el.title = mine ? `${weekViewMode==='person'?'By Person':'By Site'} opens first for you` : `Open ${weekViewMode==='person'?'By Person':'By Site'} first every time`;
 }
 
 function renderWeek(){
@@ -13833,7 +13859,7 @@ async function doLogin(){
     currentUser = data.user;
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories();
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault();
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);
@@ -13953,7 +13979,7 @@ function checkSession(){
       currentToken = token;
       refreshToken = refresh;
       currentUser = JSON.parse(user);
-      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories();
+      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault();
       isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
       isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());

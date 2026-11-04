@@ -2837,14 +2837,33 @@ async function loadTimeOff(){
 }
 async function dbSaveTimeOff(data, id=null){
   const row = { person: data.person, start_date: data.startDate, end_date: data.endDate, note: data.note||'', status: data.status||'Pending', requested_by: data.requestedBy||'' };
+  let savedId = id;
   if(id){
     await sbFetch('PATCH', `/rest/v1/time_off?id=eq.${id}`, row);
   } else {
-    await sbFetch('POST', '/rest/v1/time_off', row);
+    const r = await sbFetch('POST', '/rest/v1/time_off', row);
+    savedId = r && r[0] && r[0].id;
   }
+  if(savedId) timeOffCalendar('sync', savedId);   // approved → on the shared Google Calendar; otherwise off it
 }
 async function dbDeleteTimeOff(id){
+  await timeOffCalendar('delete', id);              // take it off Google Calendar before the entry is gone
   await sbFetch('DELETE', `/rest/v1/time_off?id=eq.${id}`);
+}
+// Keep the shared "Time off" Google Calendar in step. Never blocks the tracker: problems are logged, not shown.
+async function timeOffCalendar(action, id){
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    const r = await fetch('/.netlify/functions/gcal-timeoff', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+sbToken() }, body: JSON.stringify({ action, id }) });
+    const d = await r.json().catch(()=>({}));
+    if(!r.ok || d.error) console.warn('Time off calendar:', d.error || r.status);
+    return d;
+  }catch(e){ console.warn('Time off calendar:', e.message); return null; }
+}
+async function backfillTimeOffCalendar(){
+  if(!confirm('Put every approved time off that hasn\u2019t ended yet on the shared Google Calendar?')) return;
+  const d = await timeOffCalendar('backfill');
+  alert(d && d.ok ? `✓ Checked ${d.checked} time off entries: ${d.created} added to the calendar, ${d.adopted||0} already there (now kept in sync), ${d.updated} updated, ${d.removed} removed.` : 'Not done: ' + ((d && d.error) || 'see setup notes'));
 }
 function isPersonOff(person, dateStr){
   return timeOffEntries.some(e => e.person === person && dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved');
@@ -13270,6 +13289,7 @@ function renderTimeOff(){
   // Request button (everyone)
   html += `<div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
     <button class="btn-save" style="font-size:13px;padding:8px 18px" onclick="openTimeOffForm()">+ Request Time Off</button>
+    ${canApprove?`<button class="btn-cancel" style="font-size:12px;padding:7px 12px;margin-left:6px" title="Put approved time off on the shared Google Calendar" onclick="backfillTimeOffCalendar()">📅 Sync Google Calendar</button>`:''}
   </div>`;
 
   // Request form (hidden by default)

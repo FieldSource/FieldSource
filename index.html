@@ -38,6 +38,12 @@ header{background:var(--green-dark);padding:0 16px;display:flex;align-items:cent
 }
 .view-bar{background:var(--surface);border-bottom:1px solid var(--border);display:flex;flex-direction:column}
 .view-bar-row{display:flex}
+.person-empty{color:var(--text-3);font-size:14px;text-align:center;padding:5px 0;border:1px dashed transparent;border-radius:6px;cursor:pointer;opacity:.35;transition:opacity .15s}
+.person-empty:hover{opacity:1;border-color:var(--border-2);color:var(--green-dark);background:var(--green-light)}
+.person-add{display:block;width:100%;margin-top:3px;font-size:12px;line-height:1;padding:3px 0;border:1px dashed var(--border-2);border-radius:6px;background:none;color:var(--text-3);cursor:pointer;opacity:0;transition:opacity .15s;font-family:inherit}
+td:hover > .person-add{opacity:1}
+.person-add:hover{color:var(--green-dark);border-color:var(--green-dark);background:var(--green-light)}
+@media (hover:none){ .person-add{opacity:.6} .person-empty{opacity:.6} }
 .biz-groups .vtab{font-size:13px;font-weight:700;color:var(--text-2);padding:11px 4px}
 .biz-groups .vtab.active{color:var(--green-dark);border-bottom-color:var(--green-dark)}
 .biz-subs{background:var(--surface);border-top:1px solid var(--border)}
@@ -477,8 +483,8 @@ main{padding:12px 16px 100px}
   <div class="period-label" id="period-label">—</div>
   <button class="nav-btn" onclick="navFwd()">&#8594;</button>
   <div class="view-toggle" id="week-view-toggle" style="display:none">
-    <button class="view-toggle-btn active" id="toggle-site" onclick="setWeekViewMode('site')">By Site</button>
-    <button class="view-toggle-btn" id="toggle-person" onclick="setWeekViewMode('person')">By Person</button>
+    <button class="view-toggle-btn active" id="toggle-person" onclick="setWeekViewMode('person')">By Person</button>
+    <button class="view-toggle-btn" id="toggle-site" onclick="setWeekViewMode('site')">By Site</button>
     <button class="view-toggle-btn" onclick="openOfficeClosures()" title="Days the office is closed" style="margin-left:6px">🏢 Office closed days</button>
   </div>
 </div>
@@ -3000,7 +3006,7 @@ function startPolling(){
   }, 10000);
 }
 
-let view='week',offset=0,editId=null,crewFilter='All',weekViewMode='site';
+let view='week',offset=0,editId=null,crewFilter='All',weekViewMode='person';   // week view opens By Person
 let pickedCrew=[],pickedEquip=[],pickedServices=[],touchUpOn=false,activeEquipTab=EQUIP_CATS[0];
 let pickedCrewDays={}; // {personName: [0,1,2,3,4,5,6]}
 let equipOffset=0;
@@ -9384,10 +9390,14 @@ function renderWeekByPerson(days){
         return true;
       });
       html += `<td style="padding:4px;border-bottom:1px solid var(--border);border-right:1px solid var(--border);vertical-align:top;background:${isToday?'rgba(42,106,34,0.04)':officeClosedOn(ds)?'rgba(251,146,60,0.08)':''}">`;
+      const pSafe = String(person).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      const addBtn = isScheduler ? `<button class="person-add" title="Add a job for ${String(person).replace(/"/g,'&quot;')} on ${d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}" onclick="event.stopPropagation();openModal(null,'${ds}','${pSafe}')">+</button>` : '';
       if(!personJobs.length){
         // Check time off
         if(isPersonOff(person, ds)){
           html += `<div style="font-size:10px;color:#b45309;background:#fef3c7;border-radius:4px;padding:3px 5px;text-align:center">Off</div>`;
+        } else if(isScheduler){
+          html += `<div class="person-empty" onclick="openModal(null,'${ds}','${pSafe}')" title="Add a job">+</div>`;
         } else {
           html += `<div style="color:var(--text-3);font-size:11px;text-align:center;padding:6px 0">—</div>`;
         }
@@ -9401,6 +9411,7 @@ function renderWeekByPerson(days){
             <div class="person-chip-detail">${services}${j.field?' · '+j.field:''}</div>
           </div>`;
         });
+        html += addBtn;
       }
       html += '</td>';
     });
@@ -9614,10 +9625,10 @@ function crewFilterBar(){
 }
 function setCrew(c){crewFilter=c;render()}
 
-function openModal(id=null,defaultDate=null){
+function openModal(id=null,defaultDate=null,defaultPerson=null){
   editId=id;
   const job=id?jobs.find(j=>j.id===id):null;
-  pickedCrew=job?[...(job.crew||[])]:[];
+  pickedCrew=job?[...(job.crew||[])]:(defaultPerson?[defaultPerson]:[]);   // By Person "+": that person is pre-picked
   // Initialize per-person days from existing job or default to Mon-Fri
   pickedCrewDays={};
   const todayDow = new Date().getDay();

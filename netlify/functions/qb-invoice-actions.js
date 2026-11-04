@@ -68,6 +68,17 @@ function mimeMessage({ from, to, cc, subject, body, filename, pdf }) {
     `Content-Disposition: attachment; filename="${filename}"`, 'Content-Transfer-Encoding: base64', '', pdf.toString('base64').replace(/(.{76})/g, '$1\r\n'), '', `--${boundary}--`];
   return Buffer.from(lines.join('\r\n')).toString('base64url');
 }
+// Find a QuickBooks estimate by its number: the synced copy first, otherwise ask QuickBooks directly
+// (a quote created minutes ago isn't in the hourly-synced copy yet).
+async function findEstimate(qb, number) {
+  const rows = await sb('GET', `qb_estimates?estimate_number=eq.${encodeURIComponent(number)}&select=qb_estimate_id&limit=1`);
+  if (rows && rows.length) return (await qb.call(`estimate/${rows[0].qb_estimate_id}`)).Estimate;
+  const safe = String(number).replace(/'/g, "\\'");
+  const q = await qb.call(`query?query=${encodeURIComponent(`SELECT * FROM Estimate WHERE DocNumber = '${safe}'`)}`);
+  const est = q.QueryResponse && q.QueryResponse.Estimate && q.QueryResponse.Estimate[0];
+  if (!est) throw new Error(`Estimate #${number} wasn't found in QuickBooks.`);
+  return est;
+}
 const money = n => Math.round((Number(n) || 0) * 100) / 100;
 async function logActivity(action, user, details) { try { await sb('POST', 'invoice_activity', { action, user_email: user.email, details }, 'return=minimal'); } catch (e) { console.warn('log', e.message); } }
 async function refreshInvoice(qb, id) {
@@ -175,9 +186,7 @@ exports.handler = async function (event) {
     const qb = await qbAuth();
 
     if (b.action === 'prepare') {
-      const rows = await sb('GET', `qb_estimates?estimate_number=eq.${encodeURIComponent(b.estimate_number)}&select=qb_estimate_id&limit=1`);
-      if (!rows || !rows.length) throw new Error(`Estimate #${b.estimate_number} hasn't synced from QuickBooks yet.`);
-      const est = (await qb.call(`estimate/${rows[0].qb_estimate_id}`)).Estimate;
+      const est = await findEstimate(qb, b.estimate_number);
       const cust = (await qb.call(`customer/${est.CustomerRef.value}`)).Customer;
       const lines = (est.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail').map(l => ({
         line_id: String(l.Id), item_id: l.SalesItemLineDetail.ItemRef.value, item_name: l.SalesItemLineDetail.ItemRef.name || '',
@@ -195,9 +204,7 @@ exports.handler = async function (event) {
     }
 
     if (b.action === 'create') {
-      const rows = await sb('GET', `qb_estimates?estimate_number=eq.${encodeURIComponent(b.estimate_number)}&select=qb_estimate_id&limit=1`);
-      if (!rows || !rows.length) throw new Error('Estimate not found.');
-      const est = (await qb.call(`estimate/${rows[0].qb_estimate_id}`)).Estimate;
+      const est = await findEstimate(qb, b.estimate_number);
       const byId = {}; (est.Line || []).forEach(l => { if (l.DetailType === 'SalesItemLineDetail') byId[String(l.Id)] = l; });
       const lines = (b.lines || []).filter(l => money(l.amount) !== 0).map(l => {
         const src = byId[String(l.line_id)]; if (!src) throw new Error('An estimate line changed in QuickBooks. Close and reopen the invoice builder.');

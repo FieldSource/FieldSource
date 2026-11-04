@@ -59,15 +59,28 @@ async function gmailAccess(userEmail) {
   if (!t.access_token) throw new Error('Gmail permission expired or was removed. Click Connect Gmail again.');
   return { token: t.access_token, from: rows[0].google_email };
 }
-function mimeMessage({ from, to, cc, subject, body, filename, pdf }) {
+function mimeMessage({ from, to, cc, subject, body, filename, pdf, extras }) {
   const boundary = 'fs_' + Date.now().toString(36);
   const enc = s => /[^\x20-\x7E]/.test(s) ? '=?UTF-8?B?' + Buffer.from(s).toString('base64') + '?=' : s;
+  const wrap = buf => buf.toString('base64').replace(/(.{76})/g, '$1\r\n');
+  const part = (name, type, buf) => [`--${boundary}`, `Content-Type: ${type}; name="${enc(name)}"`, `Content-Disposition: attachment; filename="${enc(name)}"`, 'Content-Transfer-Encoding: base64', '', wrap(buf), ''];
   const lines = [`From: ${from}`, `To: ${to}`, ...(cc ? [`Cc: ${cc}`] : []), `Subject: ${enc(subject)}`, 'MIME-Version: 1.0',
     `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '',
-    Buffer.from(body).toString('base64').replace(/(.{76})/g, '$1\r\n'), '', `--${boundary}`, `Content-Type: application/pdf; name="${filename}"`,
-    `Content-Disposition: attachment; filename="${filename}"`, 'Content-Transfer-Encoding: base64', '', pdf.toString('base64').replace(/(.{76})/g, '$1\r\n'), '', `--${boundary}--`];
+    wrap(Buffer.from(body)), '', ...part(filename, 'application/pdf', pdf),
+    ...(extras || []).flatMap(x => part(x.name, x.type, x.buf)), `--${boundary}--`];
   return Buffer.from(lines.join('\r\n')).toString('base64url');
 }
+// Extra files the sender attached (decoded and checked). Netlify caps a request near 6 MB, so extras are limited to ~4 MB.
+function extraAttachments(list) {
+  const files = (Array.isArray(list) ? list : []).slice(0, 10).map(x => ({
+    name: String(x.name || 'attachment').replace(/[\r\n"\\\/]/g, '').slice(0, 120) || 'attachment',
+    type: /^[\w.+-]+\/[\w.+-]+$/.test(String(x.type || '')) ? String(x.type) : 'application/octet-stream',
+    buf: Buffer.from(String(x.b64 || ''), 'base64') })).filter(x => x.buf.length);
+  const total = files.reduce((t, x) => t + x.buf.length, 0);
+  if (total > 4.3 * 1024 * 1024) throw new Error('The extra attachments are over 4 MB. Remove some, or share a large file as a link in the message.');
+  return files;
+}
+
 // Find a QuickBooks estimate by its number: the synced copy first, otherwise ask QuickBooks directly
 // (a quote created minutes ago isn't in the hourly-synced copy yet).
 async function findEstimate(qb, number) {
@@ -106,16 +119,17 @@ exports.handler = async function (event) {
       if (!toList.length || !toList.every(ok)) throw new Error('Check the To email address.');
       if (ccList.length && !ccList.every(ok)) throw new Error('Check the CC email address.');
       if (!String(b.subject || '').trim() || !String(b.body || '').trim()) throw new Error('The subject and message can\'t be empty.');
-      if (!b.pdf_b64 || b.pdf_b64.length > 9e6) throw new Error('The quote PDF is missing or too large.');
+      if (!b.pdf_b64 || b.pdf_b64.length > 2.5e6) throw new Error('The quote PDF is missing or too large.');
       const g = await gmailAccess(user.email); if (!g) throw new Error('Connect your Gmail first.');
-      const raw = mimeMessage({ from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), body: String(b.body), filename: String(b.filename || 'Field Source Quote.pdf').replace(/[\r\n"]/g, ''), pdf: Buffer.from(b.pdf_b64, 'base64') });
+      const extras = extraAttachments(b.attachments);
+      const raw = mimeMessage({ from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), body: String(b.body), filename: String(b.filename || 'Field Source Quote.pdf').replace(/[\r\n"]/g, ''), pdf: Buffer.from(b.pdf_b64, 'base64'), extras });
       const gr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: `Bearer ${g.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
       const gd = await gr.json().catch(() => ({}));
       if (!gr.ok) throw new Error(`Gmail didn't send it: ${(gd.error && gd.error.message) || gr.status}`);
       // Mark the QuickBooks estimate as emailed and save the client's address on it
       if (b.qb_estimate_id) { try { const qb = await qbAuth(); const est = (await qb.call(`estimate/${b.qb_estimate_id}`)).Estimate;
         await qb.call('estimate', { method: 'POST', body: JSON.stringify({ Id: est.Id, SyncToken: est.SyncToken, sparse: true, BillEmail: { Address: toList.join(', ') }, EmailStatus: 'EmailSent' }) }); } catch (e) { console.warn('mark estimate sent', e.message); } }
-      await logActivity('quote_sent_gmail', user, { estimate: b.doc_number || '', qb_estimate_id: b.qb_estimate_id || '', from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), gmail_id: gd.id });
+      await logActivity('quote_sent_gmail', user, { estimate: b.doc_number || '', qb_estimate_id: b.qb_estimate_id || '', from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), attachments: extras.map(x => x.name), gmail_id: gd.id });
       return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
     } catch (e) { return json(500, { error: e.message }); }
   }
@@ -200,7 +214,7 @@ exports.handler = async function (event) {
       return json(200, { terms, customer_term_id: (cust.SalesTermRef && String(cust.SalesTermRef.value)) || '',
         estimate: { qb_id: String(est.Id), number: est.DocNumber, customer_id: est.CustomerRef.value, customer: est.CustomerRef.name, total: Number(est.TotalAmt || 0) },
         lines, bill_email: (est.BillEmail && est.BillEmail.Address) || (cust.PrimaryEmailAddr && cust.PrimaryEmailAddr.Address) || '',
-        terms: (cust.SalesTermRef && cust.SalesTermRef.name) || '', next_doc_number: maxNum ? String(maxNum + 1) : '', can_bill: canBill });
+        customer_terms_name: (cust.SalesTermRef && cust.SalesTermRef.name) || '', next_doc_number: maxNum ? String(maxNum + 1) : '', can_bill: canBill });
     }
 
     if (b.action === 'create') {
@@ -279,15 +293,16 @@ exports.handler = async function (event) {
       const cur = (await qb.call(`invoice/${b.qb_invoice_id}`)).Invoice;
       const pdfRes = await qb.call(`invoice/${cur.Id}/pdf`, { raw: true, headers: { Accept: 'application/pdf' } });
       const pdf = Buffer.from(await pdfRes.arrayBuffer());
-      const raw = mimeMessage({ from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), body: String(b.body), filename: `Field Source Invoice ${cur.DocNumber}.pdf`, pdf });
+      const extras = extraAttachments(b.attachments);
+      const raw = mimeMessage({ from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), body: String(b.body), filename: `Field Source Invoice ${cur.DocNumber}.pdf`, pdf, extras });
       const gr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: `Bearer ${g.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
       const gd = await gr.json().catch(() => ({}));
       if (!gr.ok) throw new Error(`Gmail didn't send it: ${(gd.error && gd.error.message) || gr.status}`);
       // Keep QuickBooks in step: save the address and mark it emailed
       try { await qb.call('invoice', { method: 'POST', body: JSON.stringify({ Id: cur.Id, SyncToken: cur.SyncToken, sparse: true, BillEmail: { Address: toList.join(', ') }, EmailStatus: 'EmailSent' }) }); } catch (e) { console.warn('mark sent', e.message); }
       await refreshInvoice(qb, cur.Id);
-      await logActivity(b.reminder ? 'reminder_gmail' : 'sent_gmail', user, { qb_invoice_id: String(cur.Id), doc_number: cur.DocNumber, from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), gmail_id: gd.id });
-      return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
+      await logActivity(b.reminder ? 'reminder_gmail' : 'sent_gmail', user, { qb_invoice_id: String(cur.Id), doc_number: cur.DocNumber, from: g.from, to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), attachments: extras.map(x => x.name), gmail_id: gd.id });
+      return json(200, { ok: true, sent_to: toList.join(', '), from: g.from, extra_files: extras.length });
     }
 
     if (b.action === 'pdf') {

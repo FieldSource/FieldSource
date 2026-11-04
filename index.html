@@ -13310,6 +13310,7 @@ function showTimeOffNotice(list){
 // Check for new requests every 2 minutes for the people who get notified
 setInterval(()=>{ if(currentUser && TO_NOTIFY_RULES[(currentUser.email||'').toLowerCase()] && typeof loadTimeOff==='function') loadTimeOff().then(updateTimeOffBadge).catch(()=>{}); }, 120000);
 
+let toSummaryYear = null;   // null = the current year
 function renderTimeOff(){
   const today = isoDate(new Date());
   const TO_ADMIN_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
@@ -13391,30 +13392,43 @@ function renderTimeOff(){
   }
 
   // ── ADMIN SUMMARY TABLE ──────────────────────────────────────
+  // Work days off (weekends and office closed days don't count). Current year = year to date, plus what's booked
+  // later this year; past years show the full year. Time off spanning New Year's is split between the years.
   if(canApprove){
-    const allApproved = timeOffEntries.filter(e=>e.status==='Approved');
-    const byPerson = {};
-    allApproved.forEach(e=>{
-      if(!byPerson[e.person]) byPerson[e.person] = 0;
-      // Count calendar days inclusive
-      const start = new Date(e.startDate);
-      const end = new Date(e.endDate);
-      const days = Math.round((end-start)/86400000)+1;
-      byPerson[e.person] += days;
+    const thisYear = new Date().getFullYear(), todayIso = new Date().toLocaleDateString('en-CA');
+    const yr = toSummaryYear || thisYear;
+    const approved = timeOffEntries.filter(e=>e.status==='Approved' && e.startDate && e.endDate);
+    const years = [...new Set([thisYear, ...approved.flatMap(e=>[Number(e.startDate.slice(0,4)), Number(e.endDate.slice(0,4))])])].filter(Boolean).sort((a,b)=>b-a);
+    const closed = new Set((typeof officeClosures!=='undefined'?officeClosures:[]).map(c=>c.date));
+    const workDays = (from, to)=>{ let n = 0; for(let d = new Date(from+'T12:00:00'), e = new Date(to+'T12:00:00'); d <= e; d.setDate(d.getDate()+1)){ const w = d.getDay(), iso = d.toLocaleDateString('en-CA'); if(w!==0 && w!==6 && !closed.has(iso)) n++; } return n; };
+    const yStart = `${yr}-01-01`, yEnd = `${yr}-12-31`, ytdEnd = yr===thisYear ? todayIso : yEnd;
+    const taken = {}, booked = {};
+    approved.forEach(e=>{
+      const a = e.startDate > yStart ? e.startDate : yStart, b = e.endDate < yEnd ? e.endDate : yEnd;
+      if(a > b) return;
+      const tEnd = b < ytdEnd ? b : ytdEnd;
+      if(a <= tEnd) taken[e.person] = (taken[e.person]||0) + workDays(a, tEnd);
+      if(yr===thisYear && b > ytdEnd){ const fa = a > ytdEnd ? a : (()=>{ const x = new Date(ytdEnd+'T12:00:00'); x.setDate(x.getDate()+1); return x.toLocaleDateString('en-CA'); })(); booked[e.person] = (booked[e.person]||0) + workDays(fa, b); }
     });
-    const sorted = Object.entries(byPerson).sort((a,b)=>b[1]-a[1]);
-    if(sorted.length){
-      html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
-        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2);margin-bottom:10px">Time Off Summary — All Time</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
-          ${sorted.map(([person,days])=>`
-            <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;display:flex;align-items:center;justify-content:space-between">
-              <span style="font-size:13px;color:var(--text)">${person}</span>
-              <span style="font-size:16px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${days}d</span>
-            </div>`).join('')}
-        </div>
-      </div>`;
-    }
+    const people = [...new Set([...Object.keys(taken), ...Object.keys(booked)])].filter(p=>(taken[p]||0)+(booked[p]||0)>0)
+      .sort((p,q)=>((taken[q]||0)-(taken[p]||0)) || ((booked[q]||0)-(booked[p]||0)) || p.localeCompare(q));
+    const totalTaken = Object.values(taken).reduce((t,n)=>t+n,0), totalBooked = Object.values(booked).reduce((t,n)=>t+n,0);
+    html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Time Off Summary: ${yr}${yr===thisYear?' (year to date)':''}</div>
+        <select onchange="toSummaryYear=Number(this.value);renderTimeOff()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit">
+          ${years.map(y=>`<option value="${y}"${y===yr?' selected':''}>${y}${y===thisYear?' (this year)':''}</option>`).join('')}</select>
+        <span style="margin-left:auto;font-size:12px;color:var(--text-3)">${totalTaken} work day${totalTaken===1?'':'s'} ${yr===thisYear?'taken so far':'taken'}${totalBooked?` · ${totalBooked} more booked this year`:''}</span>
+      </div>
+      ${people.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">
+        ${people.map(p=>`
+          <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:6px">
+            <span style="font-size:13px;color:var(--text)">${p}</span>
+            <span style="text-align:right;line-height:1.15"><span style="font-size:16px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${taken[p]||0}d</span>${booked[p]?`<div style="font-size:10.5px;color:var(--text-3)">+${booked[p]} booked</div>`:''}</span>
+          </div>`).join('')}
+      </div>` : `<div style="font-size:13px;color:var(--text-3)">No approved time off ${yr===thisYear?'so far this year':'in '+yr}.</div>`}
+      <div style="font-size:11px;color:var(--text-3);margin-top:8px">Work days only: weekends and office closed days aren't counted.</div>
+    </div>`;
   }
 
   // Pending requests

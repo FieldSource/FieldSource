@@ -7251,7 +7251,7 @@ async function viewInvoicePdf(qbInvoiceId, doc){
 // Open QuickBooks bills, matched to the tracker invoice (and PM approval) they came from. Ryan (Jake as backup)
 // approves for payment; Jason gets a weekly "Ready to pay" email of everything approved and still unpaid.
 const PAY_APPROVERS_UI = ['ryan@fieldsourceohio.com','jake@fieldsourceohio.com'];
-let payBills = [], payApprovals = {}, paySettings = {}, payLoaded = false, payFilter = 'needs', payVendor = '', paySel = new Set();
+let payBills = [], payApprovals = {}, paySettings = {}, payLoaded = false, payFilter = 'needs', payVendor = '', paySel = new Set(), payGroup = 'vendor';
 function canApprovePay(){ return PAY_APPROVERS_UI.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
 async function loadPayBills(){
   try{
@@ -7275,7 +7275,9 @@ function payVendorsMatch(a,b){ const x = payVendorKey(a), y = payVendorKey(b); r
 function payTrackerInvoice(b){
   const files = (typeof invoiceFiles!=='undefined' ? invoiceFiles : []);
   const n = payNorm(b.doc_number);
-  return (n && files.find(f=>payNorm(f.invoiceNum)===n && (payVendorsMatch(f.vendorName,b.vendor_name) || !f.vendorName)))
+  const numMatch = f=>{ const fn = payNorm(f.invoiceNum); return n && fn && (fn===n || fn.replace(/^0+/,'')===n.replace(/^0+/,'')); };
+  return (n && files.find(f=>numMatch(f) && (payVendorsMatch(f.vendorName,b.vendor_name) || !f.vendorName)))
+    || (n && n.length>=4 && files.find(f=>numMatch(f) && f.amount!=null && Math.abs(Number(f.amount)-Number(b.total))<0.01))   // same # and amount, vendor named differently (AGI vs Associated Graphics)
     || files.find(f=>f.amount!=null && Math.abs(Number(f.amount)-Number(b.total))<0.01 && payVendorsMatch(f.vendorName,b.vendor_name)
         && (!f.invoiceDate || !b.txn_date || Math.abs(new Date(f.invoiceDate)-new Date(b.txn_date)) < 60*864e5)) || null;
 }
@@ -7293,7 +7295,8 @@ function renderPayBills(){
   const pastDue = open.filter(r=>r.days!=null && r.days<0);
   let list = payFilter==='needs'?needs:payFilter==='approved'?approved:payFilter==='paid'?paid:payFilter==='pastdue'?pastDue:payFilter==='nopm'?open.filter(r=>!r.f || r.f.approvalStatus==='pending'):open;
   if(payVendor) list = list.filter(r=>r.b.vendor_name===payVendor);
-  list = list.slice().sort((a,b)=>payFilter==='paid' ? String(b.b.paid_on).localeCompare(String(a.b.paid_on)) : (a.b.due_date||'9').localeCompare(b.b.due_date||'9'));
+  const byDue = (a,b)=>payFilter==='paid' ? String(b.b.paid_on).localeCompare(String(a.b.paid_on)) : (a.b.due_date||'9').localeCompare(b.b.due_date||'9');
+  list = list.slice().sort(payGroup==='vendor' ? (a,b)=>(a.b.vendor_name||'').localeCompare(b.b.vendor_name||'',undefined,{sensitivity:'base'}) || byDue(a,b) : byDue);
   // PM-approved tracker invoices that never became a QuickBooks bill (last 60 days)
   const billFiles = new Set(rows.map(r=>r.f && r.f.id).filter(Boolean));
   const cutoff = new Date(Date.now()-60*864e5).toISOString().slice(0,10);
@@ -7334,6 +7337,8 @@ function renderPayBills(){
       <div style="padding:10px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <b>${{needs:'Needs approval',approved:'Approved, waiting on payment',pastdue:'Past due',all:'All open bills',paid:'Paid in the last 90 days',nopm:'No PM approval on file'}[payFilter]}</b>
         <select style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit" onchange="payVendor=this.value;paySel.clear();renderPayBills()"><option value="">All vendors</option>${vendors.map(v=>`<option${payVendor===v?' selected':''}>${esc(v)}</option>`).join('')}</select>
+        <span style="display:flex;gap:4px;align-items:center;font-size:12px;color:var(--text-3)">Sort:
+          ${[['vendor','By vendor'],['due','Soonest due']].map(([k,l])=>`<button class="site-chip${payGroup===k?' active':''}" style="padding:3px 9px;font-size:12px" onclick="payGroup='${k}';renderPayBills()">${l}</button>`).join('')}</span>
         <a style="font-size:12px;cursor:pointer;color:${payFilter==='nopm'?'var(--green-dark)':'var(--text-3)'}" onclick="payFilter='nopm';paySel.clear();renderPayBills()">No PM approval (${open.filter(r=>!r.f || r.f.approvalStatus==='pending').length})</a>
         ${canPay && payFilter!=='paid' ? `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">
           <span style="font-size:12px;color:var(--text-3)" id="pay-selinfo">${paySel.size?`${paySel.size} selected · ${money(list.filter(r=>paySel.has(r.b.qb_bill_id)).reduce((t,r)=>t+Number(r.b.balance),0))}`:''}</span>
@@ -7342,22 +7347,32 @@ function renderPayBills(){
       </div>
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:820px"><thead><tr>
         ${canPay && payFilter!=='paid'?`<th style="${th};width:28px"><input type="checkbox" onchange="paySel=this.checked?new Set(${JSON.stringify(list.map(r=>r.b.qb_bill_id))}):new Set();renderPayBills()" ${list.length&&list.every(r=>paySel.has(r.b.qb_bill_id))?'checked':''}></th>`:''}
-        <th style="${th}">Vendor / bill #</th><th style="${th}">Project</th><th style="${th}">PM check</th><th style="${th};text-align:right">Amount due</th><th style="${th}">Due</th><th style="${th}">Payment approval</th><th style="${th}"></th></tr></thead><tbody>
-        ${list.map(r=>`<tr>
-          ${canPay && payFilter!=='paid'?`<td style="${td}"><input type="checkbox" ${paySel.has(r.b.qb_bill_id)?'checked':''} onchange="this.checked?paySel.add('${r.b.qb_bill_id}'):paySel.delete('${r.b.qb_bill_id}');renderPayBills()"></td>`:''}
-          <td style="${td}"><b>${esc(r.b.vendor_name)}</b><div style="font-size:11px;color:var(--text-3)">#${esc(r.b.doc_number)} · ${fmt(r.b.txn_date)}</div></td>
+        <th style="${th}">${payGroup==='vendor'?'Bill #':'Vendor / bill #'}</th><th style="${th}">Project</th><th style="${th}">PM check</th><th style="${th};text-align:right">Amount due</th><th style="${th}">Due</th><th style="${th}">Payment approval</th><th style="${th}"></th></tr></thead><tbody>
+        ${list.map((r,i)=>{ const showSel = canPay && payFilter!=='paid', cols = showSel ? 8 : 7;
+          let head = '';
+          if(payGroup==='vendor' && (i===0 || list[i-1].b.vendor_name!==r.b.vendor_name)){
+            const vb = list.filter(x=>x.b.vendor_name===r.b.vendor_name), ids = vb.map(x=>x.b.qb_bill_id), vt = vb.reduce((t,x)=>t+Number(x.paid?x.b.total:x.b.balance),0);
+            const late = vb.filter(x=>!x.paid && x.days!=null && x.days<0).length, allSel = ids.every(id=>paySel.has(id));
+            head = `<tr style="background:var(--accent)">${showSel?`<td style="padding:8px;border-top:2px solid var(--border-2)"><input type="checkbox" title="Select all ${esc(r.b.vendor_name)} bills" ${allSel?'checked':''} onchange="${JSON.stringify(ids).replace(/"/g,'&quot;')}.forEach(id=>this.checked?paySel.add(id):paySel.delete(id));renderPayBills()"></td>`:''}
+              <td colspan="${showSel?cols-1:cols}" style="padding:8px;border-top:2px solid var(--border-2);font-size:13px"><b>${esc(r.b.vendor_name)}</b>
+              <span style="color:var(--text-3);font-size:12px"> · ${vb.length} bill${vb.length===1?'':'s'} · <b style="color:var(--text)">${money(vt)}</b>${late?` · <span style="color:#b91c1c">${late} past due</span>`:''}</span></td></tr>`;
+          }
+          return head + `<tr>
+          ${showSel?`<td style="${td}"><input type="checkbox" ${paySel.has(r.b.qb_bill_id)?'checked':''} onchange="this.checked?paySel.add('${r.b.qb_bill_id}'):paySel.delete('${r.b.qb_bill_id}');renderPayBills()"></td>`:''}
+          <td style="${td}">${payGroup==='vendor' ? `<b>#${esc(r.b.doc_number)}</b><div style="font-size:11px;color:var(--text-3)">${fmt(r.b.txn_date)}</div>` : `<b>${esc(r.b.vendor_name)}</b><div style="font-size:11px;color:var(--text-3)">#${esc(r.b.doc_number)} · ${fmt(r.b.txn_date)}</div>`}</td>
           <td style="${td};font-size:12px">${esc((r.b.projects||[]).join(', ') || (r.f&&r.f.projectName) || '—')}</td>
           <td style="${td};font-size:12px">${pmCell(r)}</td>
           <td style="${td};text-align:right;font-weight:600">${money(r.paid?r.b.total:r.b.balance)}${!r.paid && Number(r.b.balance)<Number(r.b.total)-0.005?`<div style="font-size:11px;color:var(--text-3);font-weight:400">of ${money(r.b.total)}</div>`:''}</td>
           <td style="${td};font-size:12px">${dueCell(r)}</td>
           <td style="${td};font-size:12px">${r.ap?`<span style="color:#166534">✓ ${esc(r.ap.approved_name||r.ap.approved_by)}</span><div style="font-size:11px;color:var(--text-3)">${fmt(r.ap.approved_at)}${r.ap.emailed_at?' · emailed':' · not emailed yet'}</div>`:(r.paid?'<span style="color:var(--text-3)">paid without approval</span>':'<span style="color:#b45309">Not approved</span>')}</td>
-          <td style="${td}">${r.f && r.f.filePath?`<button class="site-chip" style="padding:2px 8px;font-size:11px" onclick="openInvoiceFile('${esc(r.f.filePath).replace(/'/g,"\\'")}','${esc(r.f.fileName).replace(/'/g,"\\'")}','${esc(r.f.projectName).replace(/'/g,"\\'")}')">📄 Invoice</button>`:''}</td></tr>`).join('') || `<tr><td colspan="8" style="${td};color:var(--text-3)">Nothing here.</td></tr>`}
+          <td style="${td}">${r.f && r.f.filePath?`<button class="site-chip" style="padding:2px 8px;font-size:11px" onclick="openInvoiceFile('${esc(r.f.filePath).replace(/'/g,"\\'")}','${esc(r.f.fileName).replace(/'/g,"\\'")}','${esc(r.f.projectName).replace(/'/g,"\\'")}')">📄 Invoice</button>`:''}</td></tr>`; }).join('') || `<tr><td colspan="8" style="${td};color:var(--text-3)">Nothing here.</td></tr>`}
       </tbody></table></div>
       <div style="padding:8px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border)">${list.length} bill${list.length===1?'':'s'} · ${money(list.reduce((t,r)=>t+Number(r.paid?r.b.total:r.b.balance),0))}. "PM check" is the tracker invoice this bill was matched to (by invoice # or amount) and who approved receipt.</div>
     </div>
     ${notInQb.length?`<div style="background:var(--surface);border:1px solid #fde68a;border-radius:var(--radius);margin-top:14px;overflow:hidden">
       <div style="padding:10px 12px;font-weight:700;background:#fffbeb">PM-approved in the tracker, not in QuickBooks yet (${notInQb.length}) <span style="font-weight:400;font-size:12px;color:var(--text-3)">last 60 days · may still need to be entered by Jason, or the invoice # differs</span></div>
-      ${notInQb.slice(0,60).map(f=>`<div style="display:flex;gap:10px;padding:7px 12px;border-top:1px solid var(--border);font-size:13px;flex-wrap:wrap"><b style="min-width:180px">${esc(f.vendorName||'—')}</b><span>#${esc(f.invoiceNum||'—')}</span><span style="color:var(--text-3)">${esc(f.projectName)}</span><span style="margin-left:auto;font-weight:600">${money(f.amount)}</span><span style="color:var(--text-3);font-size:12px">${fmt(f.invoiceDate||f.createdAt)}</span></div>`).join('')}
+      ${notInQb.slice(0,60).map(f=>{ const dup = f.invoiceNum && notInQb.some(g=>g!==f && payNorm(g.invoiceNum)===payNorm(f.invoiceNum) && Math.abs(Number(g.amount)-Number(f.amount))<0.01);
+        return `<div style="display:flex;gap:10px;padding:7px 12px;border-top:1px solid var(--border);font-size:13px;flex-wrap:wrap"><b style="min-width:180px">${esc(f.vendorName||'—')}</b><span>#${esc(f.invoiceNum||'—')}</span>${dup?'<span style="font-size:11px;background:#fee2e2;color:#991b1b;border-radius:99px;padding:1px 8px">uploaded twice?</span>':''}${!f.invoiceNum?'<span style="font-size:11px;color:#b45309">no invoice #</span>':''}<span style="color:var(--text-3)">${esc(f.projectName)}</span><span style="margin-left:auto;font-weight:600">${money(f.amount)}</span><span style="color:var(--text-3);font-size:12px">${fmt(f.invoiceDate||f.createdAt)}</span></div>`; }).join('')}
     </div>`:''}
   </div>`;
 }

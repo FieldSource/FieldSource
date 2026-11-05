@@ -216,6 +216,7 @@ async function syncEstimatesTab(estimates, now) {
     const ex = (e.DocNumber && byNum.get(String(e.DocNumber))) || byId.get(String(e.Id));
     if (ex) {
       if (qbStatus === 'Accepted' && PRE_APPROVAL.includes(ex.status)) fields.status = 'Approved';
+      if (qbStatus === 'Rejected' && PRE_APPROVAL.includes(ex.status)) fields.status = 'Declined';   // rejected in QuickBooks -> Declined in the tracker
       await sb('PATCH', `estimates?id=eq.${ex.id}`, fields, 'return=minimal');
       updated++;
     } else if ((qbStatus === 'Pending' || qbStatus === 'Accepted') && (e.TxnDate || '') >= cutoff) {

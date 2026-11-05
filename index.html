@@ -6269,7 +6269,7 @@ async function loadEstimates(){
       qbLink: r.qb_link||'',
       lineItems: Array.isArray(r.line_items)?r.line_items:[],
       priorInvoices: Array.isArray(r.prior_invoices)?r.prior_invoices:[],
-      pmEmail: r.pm_email||'', pmName: r.pm_name||'', apProject: r.ap_project||'',
+      pmEmail: r.pm_email||'', pmName: r.pm_name||'', apProject: r.ap_project||'', poNumber: r.po_number||'',
       qbSyncedAt: r.qb_synced_at||'',
     }));
   } catch(e){ estimates = []; }
@@ -6535,6 +6535,7 @@ function openEstimateDetail(id){
       ${field('Est. due', escEst(e.estDueDate))}
       ${field('Days', escEst(e.days))}
       ${field('Proposal / TIPS', `${e.proposalNeeded?'Proposal':''}${e.proposalNeeded&&e.tips?' · ':''}${e.tips?'TIPS':''}`)}
+      ${field('PO #', `<span id="est-po-view">${estPoView(e)}</span>`)}
     </div>
     ${e.scope?`<div style="margin-top:12px">${field('Scope', escEst(e.scope))}</div>`:''}
     ${e.notes?`<div style="margin-top:12px">${field('Notes', `<span style="font-style:italic">${escEst(e.notes)}</span>`)}</div>`:''}
@@ -6873,7 +6874,7 @@ function arContractsHtml(){
       <th style="${th}">Estimate</th><th style="${th};text-align:right">Contract</th><th style="${th};width:150px">Billed</th><th style="${th};text-align:right">Collected</th><th style="${th};text-align:right">Owed</th><th style="${th};text-align:right">Left to bill</th></tr></thead><tbody>
       ${rows.map(({e,b})=>{ const over = b.contract && b.billed > b.contract + 0.5; return `<tr style="cursor:pointer" onclick="openEstimateDetail('${e.id}')">
         <td style="${td}"><b>#${arEsc(e.qbNumber)}</b> · ${arEsc(e.projectName)}<div style="font-size:11px;color:var(--text-3)">${arEsc(e.client||'')}${e.acceptedDate?' · accepted '+arFmt(e.acceptedDate):''}</div>
-          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`<a style="cursor:pointer;color:var(--text-2)" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 ${arEsc(e.pmName||e.pmEmail)}${e.apProject?' · '+arEsc(e.apProject):''}</a>`:`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Set up job</a>`}</div></td>
+          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`<a style="cursor:pointer;color:var(--text-2)" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 ${arEsc(e.pmName||e.pmEmail)}${e.apProject?' · '+arEsc(e.apProject):''}</a>${e.poNumber?` · <span style="color:var(--text-2)">PO ${arEsc(e.poNumber)}</span>`:''}`:`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Set up job</a>`}</div></td>
         <td style="${td};text-align:right">${arMoney0(b.contract)}</td>
         <td style="${td}"><div style="font-size:12px;${over?'color:#dc2626;font-weight:600':''}">${arMoney0(b.billed)} <span style="color:var(--text-3)">${b.contract?Math.round(b.pct)+'%':''}</span></div>
           <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:3px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>
@@ -7069,7 +7070,7 @@ async function openInvoiceBuilder(estNum){
     const today = arToday();
     billState = { estNum, prep, e, billed, mode:'pct', unsyncedBilled,
       rows: prep.lines.map((l,k)=>({ ...l, billedAmt:billed[k].amt, billedQty:billed[k].qty, input:'', description:l.description })),
-      doc: prep.next_doc_number||'', date: today, due:'', po:'', memo:'',
+      doc: prep.next_doc_number||'', date: today, due:'', po: e.poNumber||'', memo:'',
       term: billDefaultTerm(prep) };
     renderInvoiceBuilder();
   }catch(err){ billOverlay('bill-overlay', `<div class="sheet-title">Couldn't load the estimate</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('bill-overlay').remove()">Close</button></div>`, 520); }
@@ -7110,7 +7111,7 @@ function renderInvoiceBuilder(){
       <div><div style="${billLbl}">Terms</div><select style="${billInput}" onchange="billState.term=this.value;if(this.value==='custom'&&!billState.due)billState.due=billDueDate({...billState,term:'net30'});renderInvoiceBuilder()">
         ${[...BILL_TERMS.map(t=>[t.key,t.label]), ['custom','Custom date']].map(([k,l])=>`<option value="${k}"${st.term===k?' selected':''}>${l}</option>`).join('')}</select>
         ${st.term==='custom' ? `<input type="date" style="${billInput};margin-top:4px" value="${st.due}" onchange="billState.due=this.value">` : `<div style="font-size:11px;color:var(--text-3);margin-top:3px">Due ${billDueDate(st)?arFmt(billDueDate(st)):'—'}</div>`}</div>
-      <div><div style="${billLbl}">PO #</div><input style="${billInput}" value="${arEsc(st.po)}" oninput="billState.po=this.value"></div>
+      <div><div style="${billLbl}">PO #${st.e.poNumber?' (from the estimate)':''}</div><input style="${billInput}" value="${arEsc(st.po)}" oninput="billState.po=this.value" placeholder="${st.e.id?'none on the estimate':''}"></div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
       <span style="font-size:12px;color:var(--text-2)">Bill each line by:</span>
@@ -7155,6 +7156,7 @@ function billConfirm(){
   const total = lines.reduce((t,x)=>t+x.amt,0), over = lines.filter(x=>x.r.billedAmt + x.amt > x.r.amount + 0.5);
   billOverlay('bill-confirm', `<div class="sheet-title">Create this invoice in QuickBooks?</div>
     <div style="font-size:13px;margin:8px 0">${arEsc(st.prep.estimate.customer)} · estimate #${arEsc(st.prep.estimate.number)}</div>
+    ${st.po?`<div style="font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-bottom:8px">🧾 <b>PO ${arEsc(st.po.replace(/^p\.?\s*o\.?\s*#?\s*/i,''))}</b> will be added on its own line at the end of ${lines.length>1?'the last line\u2019s':'the'} description.</div>`:''}
     <div style="font-size:13px;line-height:1.7">Invoice <b>#${arEsc(st.doc||'(next number)')}</b> · dated <b>${arFmt(st.date)}</b> · <b>${st.term==='custom'?'Custom':BILL_TERMS.find(t=>t.key===st.term).label}</b>${billDueDate(st)?`, due <b>${arFmt(billDueDate(st))}</b>`:''}${st.po?` · PO <b>${arEsc(st.po)}</b>`:''}</div>
     <div style="margin:10px 0;border:1px solid var(--border);border-radius:var(--radius-sm)">${lines.map(x=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px"><span>${arEsc(x.r.description||x.r.item_name).slice(0,90)}</span><b>${arMoney(x.amt)}</b></div>`).join('')}
       <div style="display:flex;justify-content:space-between;padding:8px 10px;font-size:14px;font-weight:700"><span>Total</span><span>${arMoney(total)}</span></div></div>
@@ -7174,7 +7176,7 @@ async function billCreate(){
     await loadQbInvoices(true);
     if(view==='receivables') renderReceivables(); else if(view==='estimates') renderEstimates();
     const e = estimates.find(x=>String(x.qbNumber)===String(st.estNum)); if(e && document.getElementById('est-billing-slot')) renderEstimateBilling(e);
-    openSendInvoice(res.qb_invoice_id, `Invoice #${res.doc_number} for ${arMoney(res.total)} was created in QuickBooks.`);
+    openSendInvoice(res.qb_invoice_id, `Invoice #${res.doc_number} for ${arMoney(res.total)} was created in QuickBooks${res.po_on?`, with PO ${arEsc(st.po.replace(/^p\.?\s*o\.?\s*#?\s*/i,''))} on its own line at the end of the description${res.po_on==='line+field'?' (and in the P.O. Number field)':''}`:''}.`);
   }catch(err){ const el = document.getElementById('bill-c-err'); if(el) el.textContent = 'Could not create: ' + err.message; btn.disabled = false; btn.textContent = 'Create invoice'; }
 }
 
@@ -10866,6 +10868,8 @@ function openPmAssign(estId){
     <div id="pm-proj-hint" style="font-size:11px;color:var(--text-3);margin-top:4px"></div>
     <div style="font-size:11px;color:var(--text-3);margin-top:2px">QuickBooks customer: ${esc(e.client||'')}. Use one name per place so scheduling, daily reports and vendor invoices all roll up together.</div>
     <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:12px"><input type="checkbox" id="pm-approver" checked> Make them the invoice approver for this project</label>
+    <div class="form-label" style="margin-top:12px">Customer PO # (optional)</div>
+    <input id="pm-po" style="${inp}" value="${esc(e.poNumber||'')}" placeholder="Added to every invoice for this job">
     <div id="pm-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
     <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
       <div>${e.pmEmail?`<button class="btn-cancel" style="flex:none;color:#b91c1c" onclick="savePmAssign('${e.id}',true)">Remove PM</button>`:''}</div>
@@ -10899,8 +10903,9 @@ async function savePmAssign(estId, remove){
     if(!remove && !CLIENTS.some(c=>c.toLowerCase()===proj.toLowerCase())){
       client = await addClient(proj, (document.getElementById('pm-new-addr')||{}).value||'');
     } else if(!remove){ client = CLIENTS.find(c=>c.toLowerCase()===proj.toLowerCase()) || proj; }
-    await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${e.id}`, { pm_email: pmEmail||null, pm_name: pmName||null, ap_project: client||null });
-    e.pmEmail = pmEmail; e.pmName = pmName; e.apProject = client;
+    const poVal = ((document.getElementById('pm-po')||{}).value||'').trim();
+    await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${e.id}`, { pm_email: pmEmail||null, pm_name: pmName||null, ap_project: client||null, po_number: poVal||null });
+    e.pmEmail = pmEmail; e.pmName = pmName; e.apProject = client; e.poNumber = poVal;
     if(!remove && makeApprover && client){
       const exact = approvalRules.find(r=>r.project.toLowerCase()===client.toLowerCase());
       const fields = { approver_email: pmEmail, approver_name: pmName };
@@ -10912,6 +10917,25 @@ async function savePmAssign(estId, remove){
     if(view==='receivables') renderReceivables(); else if(view==='estimates') renderEstimates(); else if(view==='inv-approval') renderInvApproval();
     updateApprovalBell();
   }catch(ex){ err.textContent = 'Could not save: ' + ex.message + (/pm_email|ap_project/.test(ex.message)?' (run the project manager SQL in Supabase first)':''); }
+}
+function estPoView(e){
+  return `<span style="cursor:pointer" onclick="estPoEdit('${e.id}')" title="Click to ${e.poNumber?'change':'add'} the customer PO # (it goes on every invoice for this job)">${e.poNumber?escEst(e.poNumber):'—'} <span style="font-size:12px;opacity:.6">✏️</span></span>`;
+}
+function estPoEdit(id){
+  const e = estimates.find(x=>x.id===id), el = document.getElementById('est-po-view'); if(!e || !el) return;
+  el.innerHTML = `<input id="est-po-input" value="${escEst(e.poNumber||'')}" placeholder="Customer PO #" style="width:100%;max-width:150px;box-sizing:border-box;font-size:13px;padding:4px 7px;border:1px solid var(--green);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit"
+    onkeydown="if(event.key==='Enter'){this.blur()} if(event.key==='Escape'){this.dataset.cancel='1';this.blur()}"
+    onblur="if(this.dataset.cancel){document.getElementById('est-po-view').innerHTML=estPoView(estimates.find(x=>x.id==='${id}'))} else saveEstimatePo('${id}',this.value)">`;
+  const inp = document.getElementById('est-po-input'); inp.focus(); inp.select();
+}
+async function saveEstimatePo(id, val){
+  const e = estimates.find(x=>x.id===id); if(!e) return;
+  const v = String(val||'').trim();
+  if(v === (e.poNumber||'')){ const el = document.getElementById('est-po-view'); if(el) el.innerHTML = estPoView(e); return; }
+  try{ await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, { po_number: v || null }); e.poNumber = v;
+    const el = document.getElementById('est-po-view'); if(el) el.innerHTML = estPoView(e) + `<span style="font-size:11px;color:var(--green-dark);margin-left:4px">✓ saved</span>`;
+    if(view==='receivables') renderReceivables(); }
+  catch(err){ alert('Could not save the PO #: '+err.message+(/po_number/.test(err.message)?' (run the PO SQL in Supabase first)':'')); }
 }
 function renderEstimatePm(e){
   const slot = document.getElementById('est-pm-slot'); if(!slot) return;

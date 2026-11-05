@@ -133,6 +133,21 @@ exports.handler = async function (event) {
       return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
     } catch (e) { return json(500, { error: e.message }); }
   }
+  if (b.action === 'estimate_status') {
+    if (!QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed.' });
+    try {
+      const want = b.status === 'Rejected' ? 'Rejected' : b.status === 'Accepted' ? 'Accepted' : b.status === 'Pending' ? 'Pending' : null;
+      if (!want) throw new Error('Unknown status.');
+      const qb = await qbAuth();
+      const est = (await qb.call(`estimate/${b.qb_estimate_id}`)).Estimate;
+      if (est.TxnStatus === 'Closed') return json(200, { ok: true, qb_status: 'Closed', note: 'Already invoiced (Closed) in QuickBooks; left as is.' });
+      if (est.TxnStatus !== want) await qb.call('estimate', { method: 'POST', body: JSON.stringify({ Id: est.Id, SyncToken: est.SyncToken, sparse: true, TxnStatus: want,
+        ...(want === 'Accepted' ? { AcceptedDate: new Date().toISOString().slice(0, 10), AcceptedBy: String(user.email) } : {}) }) });
+      await sb('PATCH', `estimates?qb_estimate_id=eq.${est.Id}`, { qb_status: want }, 'return=minimal').catch(() => {});
+      await logActivity('estimate_status', user, { qb_estimate_id: String(est.Id), doc_number: est.DocNumber || '', status: want });
+      return json(200, { ok: true, qb_status: want });
+    } catch (e) { return json(500, { error: e.message }); }
+  }
   if (b.action === 'estimate_number' || b.action === 'estimate_delete') {
     if (!QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed.' });
     try {
@@ -262,8 +277,21 @@ exports.handler = async function (event) {
       if (est.ShipAddr) inv.ShipAddr = est.ShipAddr;
       const created = (await qb.call('invoice', { method: 'POST', body: JSON.stringify(inv) })).Invoice;
       await refreshInvoice(qb, created.Id);
+      // Billing an estimate means it was accepted: mark it Accepted in QuickBooks (unless already Accepted/Closed) and Approved in the tracker
+      let estAccepted = false;
+      try {
+        const cur = (await qb.call(`estimate/${est.Id}`)).Estimate;
+        if (cur.TxnStatus === 'Pending' || cur.TxnStatus === 'Rejected' || !cur.TxnStatus) {
+          await qb.call('estimate', { method: 'POST', body: JSON.stringify({ Id: cur.Id, SyncToken: cur.SyncToken, sparse: true, TxnStatus: 'Accepted', AcceptedDate: cur.AcceptedDate || new Date().toISOString().slice(0, 10) }) });
+          estAccepted = true;
+        }
+        const pre = ['Not Started', 'Needs Site Visit', 'Needs Shot', 'Estimate In Progress', 'Estimate Distributed Internally', 'Estimate Sent', 'On Hold', 'Declined'];
+        const rows = await sb('GET', `estimates?or=(qb_estimate_id.eq.${est.Id},qb_estimate_number.eq.${encodeURIComponent(est.DocNumber || '-')})&select=id,status`).catch(() => []);
+        for (const r of rows || []) await sb('PATCH', `estimates?id=eq.${r.id}`, { qb_status: cur.TxnStatus === 'Closed' ? 'Closed' : 'Accepted', ...(pre.includes(r.status) ? { status: 'Approved' } : {}),
+          accepted_date: cur.AcceptedDate || new Date().toISOString().slice(0, 10) }, 'return=minimal');
+      } catch (e) { console.warn('accept estimate after invoicing', e.message); }
       await logActivity('created', user, { qb_invoice_id: String(created.Id), doc_number: created.DocNumber, estimate_number: est.DocNumber, total: created.TotalAmt });
-      return json(200, { ok: true, qb_invoice_id: String(created.Id), doc_number: created.DocNumber, total: Number(created.TotalAmt || 0), po_on: po ? (poOnField ? 'line+field' : 'line') : '' });
+      return json(200, { ok: true, est_accepted: estAccepted, qb_invoice_id: String(created.Id), doc_number: created.DocNumber, total: Number(created.TotalAmt || 0), po_on: po ? (poOnField ? 'line+field' : 'line') : '' });
     }
 
     if (b.action === 'email_info') {

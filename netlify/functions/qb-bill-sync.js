@@ -25,19 +25,38 @@ async function getAccessToken() {
   if (t.refresh_token && t.refresh_token !== refreshToken) await setSetting('QB_REFRESH_TOKEN', t.refresh_token);
   return t.access_token;
 }
-async function qbQuery(token, realm, sql) {
+async function qbQuery(token, realm, sql, entity = 'Bill') {
   const r = await fetch(`${QB_API}/v3/company/${realm}/query?query=${encodeURIComponent(sql)}&minorversion=73`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
   const d = await r.json().catch(() => ({}));
   if (!r.ok || d.Fault) { const f = d.Fault && d.Fault.Error && d.Fault.Error[0]; throw new Error(`QuickBooks query failed (${r.status}): ${f ? f.Message + ' - ' + (f.Detail || '') : ''}`); }
-  return (d.QueryResponse && d.QueryResponse.Bill) || [];
+  return (d.QueryResponse && d.QueryResponse[entity]) || [];
+}
+// Jason's Bill Payments: the real paid date, how it was paid, and the check #. One payment can cover several bills.
+async function savePayments(pays, now) {
+  const rows = [];
+  pays.forEach(p => (p.Line || []).forEach(l => (l.LinkedTxn || []).filter(t => t.TxnType === 'Bill').forEach(t => rows.push({
+    qb_payment_id: String(p.Id), qb_bill_id: String(t.TxnId), txn_date: p.TxnDate || null, amount: parseFloat(l.Amount || 0),
+    pay_type: p.PayType === 'CreditCard' ? 'Card' : p.PayType === 'Check' ? 'Check' : (p.PayType || ''), doc_number: p.DocNumber || '',
+    vendor_name: (p.VendorRef && p.VendorRef.name) || '', synced_at: now }))));
+  if (!rows.length) return 0;
+  await sb('POST', 'bill_payments?on_conflict=qb_payment_id,qb_bill_id', rows, 'resolution=merge-duplicates,return=minimal');
+  // stamp each touched bill with its latest payment
+  const billIds = [...new Set(rows.map(r => r.qb_bill_id))];
+  for (let i = 0; i < billIds.length; i += 80) {
+    const ids = billIds.slice(i, i + 80);
+    const all = (await sb('GET', `bill_payments?qb_bill_id=in.(${ids.join(',')})&select=qb_bill_id,txn_date,pay_type,doc_number&order=txn_date.desc`)) || [];
+    for (const id of ids) {
+      const last = all.find(x => x.qb_bill_id === id); if (!last) continue;
+      await sb('PATCH', `qb_bills?qb_bill_id=eq.${id}`, { paid_on: last.txn_date, paid_via: last.pay_type || '', pay_ref: last.doc_number || '' }, 'return=minimal');
+    }
+  }
+  return rows.length;
 }
 function billRow(b, now) {
   const projects = [...new Set((b.Line || []).map(l => { const d = l.AccountBasedExpenseLineDetail || l.ItemBasedExpenseLineDetail || {}; return d.CustomerRef && d.CustomerRef.name; }).filter(Boolean))];
-  const paid = Number(b.Balance || 0) <= 0.005;
-  const payDates = (b.LinkedTxn || []).filter(l => /Payment|Check/i.test(l.TxnType)).length;
   return { qb_bill_id: String(b.Id), doc_number: b.DocNumber || '', vendor_id: (b.VendorRef && b.VendorRef.value) || '', vendor_name: (b.VendorRef && b.VendorRef.name) || '',
     txn_date: b.TxnDate || null, due_date: b.DueDate || null, total: parseFloat(b.TotalAmt || 0), balance: parseFloat(b.Balance || 0), projects,
-    private_note: b.PrivateNote || '', memo: (b.Memo && b.Memo.value) || '', paid_on: paid && payDates ? ((b.MetaData && b.MetaData.LastUpdatedTime) || '').slice(0, 10) || null : null,
+    private_note: b.PrivateNote || '', memo: (b.Memo && b.Memo.value) || '',
     qb_updated_at: (b.MetaData && b.MetaData.LastUpdatedTime) || null, synced_at: now };
 }
 async function run(reset) {
@@ -54,7 +73,17 @@ async function run(reset) {
     cursor = page[page.length - 1].MetaData.LastUpdatedTime; await setSetting('QB_BILL_CURSOR', cursor);
     hasMore = page.length === PAGE;
   }
-  return { synced, hasMore, cursor };
+  // then payments (their own cursor)
+  let pcursor = reset ? null : await getSetting('QB_BILLPAY_CURSOR'), payments = 0, payMore = true;
+  while (!hasMore && payMore && Date.now() - started < TIME_BUDGET_MS) {
+    const where = pcursor ? ` WHERE MetaData.LastUpdatedTime > '${pcursor}'` : '';
+    const page = await qbQuery(token, realm, `SELECT * FROM BillPayment${where} ORDERBY MetaData.LastUpdatedTime ASC MAXRESULTS ${PAGE}`, 'BillPayment');
+    if (!page.length) { payMore = false; break; }
+    payments += await savePayments(page, now);
+    pcursor = page[page.length - 1].MetaData.LastUpdatedTime; await setSetting('QB_BILLPAY_CURSOR', pcursor);
+    payMore = page.length === PAGE;
+  }
+  return { synced, payments, hasMore: hasMore || payMore, cursor, payments_cursor: pcursor };
 }
 exports.run = run;
 exports.handler = async function (event) {

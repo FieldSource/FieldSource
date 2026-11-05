@@ -6535,6 +6535,7 @@ function openEstimateDetail(id){
       ${field('Est. due', escEst(e.estDueDate))}
       ${field('Days', escEst(e.days))}
       ${field('Proposal / TIPS', `${e.proposalNeeded?'Proposal':''}${e.proposalNeeded&&e.tips?' · ':''}${e.tips?'TIPS':''}`)}
+      ${field('PO #', `<span id="est-po-view">${estPoView(e)}</span>`)}
     </div>
     ${e.scope?`<div style="margin-top:12px">${field('Scope', escEst(e.scope))}</div>`:''}
     ${e.notes?`<div style="margin-top:12px">${field('Notes', `<span style="font-style:italic">${escEst(e.notes)}</span>`)}</div>`:''}
@@ -10916,30 +10917,37 @@ async function savePmAssign(estId, remove){
     updateApprovalBell();
   }catch(ex){ err.textContent = 'Could not save: ' + ex.message + (/pm_email|ap_project/.test(ex.message)?' (run the project manager SQL in Supabase first)':''); }
 }
+function estPoView(e){
+  return `<span style="cursor:pointer" onclick="estPoEdit('${e.id}')" title="Click to ${e.poNumber?'change':'add'} the customer PO # (it goes on every invoice for this job)">${e.poNumber?escEst(e.poNumber):'—'} <span style="font-size:12px;opacity:.6">✏️</span></span>`;
+}
+function estPoEdit(id){
+  const e = estimates.find(x=>x.id===id), el = document.getElementById('est-po-view'); if(!e || !el) return;
+  el.innerHTML = `<input id="est-po-input" value="${escEst(e.poNumber||'')}" placeholder="Customer PO #" style="width:100%;max-width:150px;box-sizing:border-box;font-size:13px;padding:4px 7px;border:1px solid var(--green);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit"
+    onkeydown="if(event.key==='Enter'){this.blur()} if(event.key==='Escape'){this.dataset.cancel='1';this.blur()}"
+    onblur="if(this.dataset.cancel){document.getElementById('est-po-view').innerHTML=estPoView(estimates.find(x=>x.id==='${id}'))} else saveEstimatePo('${id}',this.value)">`;
+  const inp = document.getElementById('est-po-input'); inp.focus(); inp.select();
+}
 async function saveEstimatePo(id, val){
   const e = estimates.find(x=>x.id===id); if(!e) return;
   const v = String(val||'').trim();
+  if(v === (e.poNumber||'')){ const el = document.getElementById('est-po-view'); if(el) el.innerHTML = estPoView(e); return; }
   try{ await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, { po_number: v || null }); e.poNumber = v;
-    const st = document.getElementById('est-po-status'); if(st){ st.textContent = v ? '✓ Saved. It goes on every invoice for this job.' : '✓ Cleared'; }
+    const el = document.getElementById('est-po-view'); if(el) el.innerHTML = estPoView(e) + `<span style="font-size:11px;color:var(--green-dark);margin-left:4px">✓ saved</span>`;
     if(view==='receivables') renderReceivables(); }
   catch(err){ alert('Could not save the PO #: '+err.message+(/po_number/.test(err.message)?' (run the PO SQL in Supabase first)':'')); }
 }
 function renderEstimatePm(e){
   const slot = document.getElementById('est-pm-slot'); if(!slot) return;
   if(!estIsAccepted(e)){ slot.innerHTML = ''; return; }
-  const poBox = `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;flex-wrap:wrap">
-      <span>🧾 <b>Customer PO #</b></span>
-      <input value="${arEsc(e.poNumber||'')}" placeholder="if the customer issued one" onchange="saveEstimatePo('${e.id}',this.value)" style="font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:180px">
-      <span id="est-po-status" style="font-size:11px;color:var(--text-3)">${e.poNumber?'Goes on every invoice for this job.':'Optional. Added to every invoice for this job.'}</span></div>`;
   const r = e.apProject ? approvalRuleFor(e.apProject) : null;
   const approvesHere = r && e.pmEmail && String(r.approver_email).toLowerCase()===String(e.pmEmail).toLowerCase();
   slot.innerHTML = e.pmEmail
     ? `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:12px;font-size:13px">
         <span>👷 Project manager: <b>${arEsc(e.pmName||e.pmEmail)}</b><span style="color:var(--text-3)">${e.apProject?` · client <b>${arEsc(e.apProject)}</b>${approvesHere?' · approves its vendor invoices':''}`:''}${e.apProject&&r&&!approvesHere?` (approver is ${arEsc(r.approver_name||r.approver_email)})`:''}</span></span>
-        <button class="site-chip" style="margin-left:auto;padding:3px 10px;font-size:12px" onclick="openPmAssign('${e.id}')">Change</button></div>` + poBox
+        <button class="site-chip" style="margin-left:auto;padding:3px 10px;font-size:12px" onclick="openPmAssign('${e.id}')">Change</button></div>`
     : `<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #fde68a;background:#fffbeb;border-radius:var(--radius-sm);margin-top:12px;font-size:13px">
         <span>👷 <b>Job not set up yet.</b> <span style="color:var(--text-3)">Pick the project manager (they approve vendor invoices) and the client.</span></span>
-        <button class="site-chip active" style="margin-left:auto;padding:4px 12px;font-size:12px" onclick="openPmAssign('${e.id}')">Set up job</button></div>` + poBox;
+        <button class="site-chip active" style="margin-left:auto;padding:4px 12px;font-size:12px" onclick="openPmAssign('${e.id}')">Set up job</button></div>`;
 }
 // =================== END PROJECT MANAGER ===================
 

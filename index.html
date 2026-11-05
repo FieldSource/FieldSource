@@ -13591,7 +13591,9 @@ function renderTimeOff(){
   // Name buttons instead of a drop-down (Chrome sometimes draws wide drop-down lists blank)
   const toEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const crewOpts = canApprove
-    ? `<div id="to-person-chips" style="display:flex;flex-wrap:wrap;gap:6px">${TIME_OFF_CREW.map(c=>`<button type="button" class="site-chip" data-person="${toEsc(c)}" onclick="toPickPerson(this.dataset.person)" style="padding:5px 11px;font-size:13px">${toEsc(c)}</button>`).join('')}</div>`
+    ? `<select id="to-person-sel" onchange="toPickPerson(this.value)" style="width:280px;max-width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:#fff;color:#1f2937">
+        <option value="" style="color:#6b7280;background:#fff">Choose a person…</option>
+        ${TIME_OFF_CREW.map(c=>`<option value="${toEsc(c)}" style="color:#1f2937;background:#fff">${toEsc(c)}</option>`).join('')}</select>`
     : `<div style="font-size:14px;padding:6px 0"><b>${toEsc(myName)}</b></div>`;
   html += `<div id="timeoff-form" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
     <div style="font-weight:600;margin-bottom:12px" id="timeoff-form-title">Request Time Off</div>
@@ -13763,9 +13765,8 @@ function toSetSpan(part, startT, endT){
   e.disabled = toPartial; e.style.opacity = toPartial ? '.5' : '';
 }
 function toPickPerson(name){
-  const inp = document.getElementById('to-person'); if(!inp) return;
-  if(document.getElementById('to-person-chips')) inp.value = name || '';
-  document.querySelectorAll('#to-person-chips .site-chip').forEach(b=>b.classList.toggle('active', b.dataset.person===inp.value && !!inp.value));
+  const inp = document.getElementById('to-person'), sel = document.getElementById('to-person-sel'); if(!inp) return;
+  if(sel){ inp.value = name || ''; sel.value = inp.value; }
 }
 function openTimeOffForm(id=null){
   editingTimeOffId = id;
@@ -13785,7 +13786,7 @@ function openTimeOffForm(id=null){
     delBtn.style.display = '';
   } else {
     title.textContent = 'Request Time Off';
-    toPickPerson(document.getElementById('to-person-chips') ? '' : document.getElementById('to-person').value);
+    toPickPerson(document.getElementById('to-person-sel') ? '' : document.getElementById('to-person').value);
     toSetSpan(false, '12:00', '16:00');
     document.getElementById('to-start').value = '';
     document.getElementById('to-end').value = '';
@@ -13824,7 +13825,7 @@ async function saveTimeOff(){
     closeTimeOffForm();
     renderTimeOff();
   } catch(e) {
-    errEl.textContent = 'Error saving. Please try again.';
+    errEl.textContent = /start_time|end_time/.test(e.message||'') ? 'Could not save: the database needs the part-of-the-day update (run timeoff-partial.sql in Supabase).' : 'Could not save: ' + (e.message||'please try again.');
   }
 }
 

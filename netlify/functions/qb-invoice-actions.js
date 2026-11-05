@@ -233,7 +233,22 @@ exports.handler = async function (event) {
       if (b.term_id) inv.SalesTermRef = { value: String(b.term_id) };   // QuickBooks works out the due date from the terms
       if (b.due_date) inv.DueDate = b.due_date;                          // custom date (or terms not set up in QuickBooks)
       if (b.doc_number) inv.DocNumber = String(b.doc_number).slice(0, 21);
-      if (b.memo) inv.CustomerMemo = { value: String(b.memo).slice(0, 1000) };
+      // PO # on the invoice itself: QuickBooks' "P.O. Number" custom field when it's turned on, otherwise in the message on the invoice
+      const po = String(b.po || '').trim();
+      let poOnField = false;
+      if (po) {
+        try {
+          const prefs = (await qb.call('preferences')).Preferences;
+          const defs = ((prefs.SalesFormsPrefs && prefs.SalesFormsPrefs.CustomField) || []).flatMap(g => g.CustomField || []);
+          const num = d => (String(d.Name).match(/(\d+)$/) || [])[1];
+          const on = defs.filter(d => d.Type === 'BooleanType' && d.BooleanValue && /UseSalesCustom\d+$/.test(d.Name)).map(num);
+          const named = defs.filter(d => d.Type === 'StringType' && /SalesCustomName\d+$/.test(d.Name)).map(d => ({ id: num(d), name: d.StringValue || '' }));
+          const poDef = named.find(n => /p\.?\s*o\.?\b|purchase\s*order/i.test(n.name) && (!on.length || on.includes(n.id)));
+          if (poDef) { inv.CustomField = [{ DefinitionId: poDef.id, Name: poDef.name, Type: 'StringType', StringValue: po.slice(0, 31) }]; poOnField = true; }
+        } catch (e) { console.warn('PO custom field', e.message); }
+      }
+      const memo = [!poOnField && po ? (/^p\.?\s*o\b/i.test(po) ? po : `PO #${po}`) : '', String(b.memo || '').trim()].filter(Boolean).join('\n');
+      if (memo) inv.CustomerMemo = { value: memo.slice(0, 1000) };
       inv.PrivateNote = `Created in Field Source Tracker by ${user.email} from estimate #${est.DocNumber}${b.po ? ' · PO ' + b.po : ''}`;
       if (est.BillEmail) inv.BillEmail = est.BillEmail;
       if (est.BillAddr) inv.BillAddr = est.BillAddr;
@@ -241,7 +256,7 @@ exports.handler = async function (event) {
       const created = (await qb.call('invoice', { method: 'POST', body: JSON.stringify(inv) })).Invoice;
       await refreshInvoice(qb, created.Id);
       await logActivity('created', user, { qb_invoice_id: String(created.Id), doc_number: created.DocNumber, estimate_number: est.DocNumber, total: created.TotalAmt });
-      return json(200, { ok: true, qb_invoice_id: String(created.Id), doc_number: created.DocNumber, total: Number(created.TotalAmt || 0) });
+      return json(200, { ok: true, qb_invoice_id: String(created.Id), doc_number: created.DocNumber, total: Number(created.TotalAmt || 0), po_on: po ? (poOnField ? 'field' : 'message') : '' });
     }
 
     if (b.action === 'email_info') {

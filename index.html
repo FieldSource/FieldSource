@@ -2833,6 +2833,7 @@ async function loadTimeOff(){
       person: row.person||'',
       startDate: row.start_date||'',
       endDate: row.end_date||'',
+      startTime: row.start_time||'', endTime: row.end_time||'',      // part of a day (both set) or all day (both blank)
       note: row.note||'',
       status: row.status||'Pending',
       requestedBy: row.requested_by||''
@@ -2843,7 +2844,8 @@ async function loadTimeOff(){
   }
 }
 async function dbSaveTimeOff(data, id=null){
-  const row = { person: data.person, start_date: data.startDate, end_date: data.endDate, note: data.note||'', status: data.status||'Pending', requested_by: data.requestedBy||'' };
+  const row = { person: data.person, start_date: data.startDate, end_date: data.endDate, note: data.note||'', status: data.status||'Pending', requested_by: data.requestedBy||'',
+    start_time: data.startTime||null, end_time: data.endTime||null };
   let savedId = id;
   if(id){
     await sbFetch('PATCH', `/rest/v1/time_off?id=eq.${id}`, row);
@@ -2876,11 +2878,23 @@ async function backfillTimeOffCalendar(){
   const d = await timeOffCalendar('backfill');
   alert(d && d.ok ? `✓ Checked ${d.checked} time off entries: ${d.created} added to the calendar, ${d.adopted||0} already there (now kept in sync), ${d.updated} updated, ${d.removed} removed.` : 'Not done: ' + ((d && d.error) || 'see setup notes'));
 }
-function isPersonOff(person, dateStr){
-  return timeOffEntries.some(e => e.person === person && dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved');
+// Part-of-a-day time off has a start and end time (single day only)
+function toIsPartial(e){ return !!(e && e.startTime && e.endTime); }
+function toFmtTime(t, short){
+  const [h,m] = String(t||'').split(':').map(Number); if(isNaN(h)) return '';
+  const ap = h>=12 ? (short?'p':' PM') : (short?'a':' AM'), h12 = ((h+11)%12)+1;
+  return short ? `${h12}${m?':'+String(m).padStart(2,'0'):''}${ap}` : `${h12}:${String(m||0).padStart(2,'0')}${ap}`;
+}
+function toTimeLabel(e, short){ return toIsPartial(e) ? `${toFmtTime(e.startTime,short)}${short?'–':' – '}${toFmtTime(e.endTime,short)}` : ''; }
+function toPartialHours(e){ if(!toIsPartial(e)) return 0; const f = t=>{ const [h,m]=t.split(':').map(Number); return h+(m||0)/60; }; return Math.max(0, f(e.endTime)-f(e.startTime)); }
+function isPersonOff(person, dateStr){   // off the whole day
+  return timeOffEntries.some(e => e.person === person && dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved' && !toIsPartial(e));
+}
+function partialOffOn(person, dateStr){  // off part of the day (returns the entry)
+  return timeOffEntries.find(e => e.person === person && e.startDate === dateStr && e.status==='Approved' && toIsPartial(e)) || null;
 }
 function getOffPeopleOnDate(dateStr){
-  return timeOffEntries.filter(e => dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved').map(e => e.person);
+  return timeOffEntries.filter(e => dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved').map(e => toIsPartial(e) ? `${e.person} (${toTimeLabel(e,true)})` : e.person);
 }
 
 async function dbSaveWorkOrder(data, id=null){
@@ -3355,6 +3369,27 @@ function pmComputeSchedule(projectId){
     if(!moved) break;
   }
   return [...changed.values()];
+}
+// Weather (or lost) day: every unfinished item from that day on moves one work day later (weekends and closures skipped)
+async function pmWeatherDay(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  const day = prompt(`Weather day for ${p.name}: everything not done on or after this date moves back one work day.\n\nDate (YYYY-MM-DD):`, pmToday());
+  if(!day) return;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day.trim())){ alert('Use the format YYYY-MM-DD.'); return; }
+  const d0 = day.trim();
+  const items = pm.items.filter(i=>i.project_id===projectId && i.status!=='done' && i.type!=='phase' && ((i.start_date||'') >= d0 || (i.due_date||'') >= d0));
+  if(!items.length){ alert('Nothing scheduled on or after that date.'); return; }
+  if(!confirm(`Move ${items.length} item${items.length===1?'':'s'} back one work day?`)) return;
+  try{
+    for(const it of items){
+      const up = {};
+      if(it.start_date && it.start_date >= d0) up.start_date = pmNextWorkday(it.start_date);
+      if(it.due_date && it.due_date >= d0) up.due_date = pmNextWorkday(it.due_date);
+      if(!Object.keys(up).length) continue;
+      await sbFetch('PATCH', `/rest/v1/pm_items?id=eq.${it.id}`, up); Object.assign(it, up);
+    }
+    pmRender(); pmToast(`🌧 ${items.length} item${items.length===1?'':'s'} pushed back a day`);
+  }catch(e){ alert('Could not move everything: '+e.message); }
 }
 async function pmReschedule(projectId){
   const changed = pmComputeSchedule(projectId);
@@ -4003,15 +4038,23 @@ function pmLogTime(itemId, projectId){
       <div><div class="pm-lbl">Hours</div><input id="pmt-hrs" type="number" step="0.25" min="0" class="pm-in" placeholder="2.5"></div>
     </div>
     <div style="margin-top:10px"><div class="pm-lbl">On</div><select id="pmt-item" class="pm-in"><option value="">General project time</option>${items.map(i=>`<option value="${i.id}"${itemId===i.id?' selected':''}>${pmEsc(i.title)}</option>`).join('')}</select></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div><div class="pm-lbl">Kind of time</div><select id="pmt-cat" class="pm-in">${PM_TIME_CATS.map(c=>`<option value="${c.key}">${c.label}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Where</div><select id="pmt-loc" class="pm-in"><option value="office">Office</option><option value="field">Field</option></select></div>
+    </div>
     <div style="margin-top:10px"><div class="pm-lbl">Note (optional)</div><input id="pmt-note" class="pm-in" placeholder="What you worked on"></div>
     ${it?`<div style="font-size:12px;color:var(--text-3);margin-top:8px">Logged so far on this item: <b>${pmH(pmHoursLogged(x=>x.item_id===it.id))}</b>${it.est_hours?` of ${pmH(it.est_hours)} estimated`:''}</div>`:''}
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px"><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">Cancel</button><button class="pm-btn primary" onclick="pmSaveTime('${projectId}')">Log it</button></div>`, 520);
   setTimeout(()=>document.getElementById('pmt-hrs')?.focus(), 0);
 }
+const PM_TIME_CATS = [ { key:'billable', label:'Project work (billable)' }, { key:'nb_admin', label:'Admin (non-billable)' }, { key:'nb_training', label:'Training (non-billable)' },
+  { key:'nb_bd', label:'Business development (non-billable)' }, { key:'nb_travel', label:'Travel (non-billable)' }, { key:'nb_rework', label:'Rework / extra, not billed' } ];
+function pmTimeCat(t){ return PM_TIME_CATS.find(c=>c.key===(t.category||'billable')) || PM_TIME_CATS[0]; }
 async function pmSaveTime(projectId){
   const hrs = Number(document.getElementById('pmt-hrs').value);
   if(!(hrs>0)){ alert('Enter the hours.'); return; }
   const row = { project_id:projectId, item_id:document.getElementById('pmt-item').value||null, person:document.getElementById('pmt-who').value, work_date:document.getElementById('pmt-date').value||pmToday(), hours:hrs, note:document.getElementById('pmt-note').value.trim(), created_by:(currentUser&&currentUser.email)||'' };
+  row.category = document.getElementById('pmt-cat')?.value || 'billable'; row.location = document.getElementById('pmt-loc')?.value || 'office';
   try{ const r = await sbFetch('POST','/rest/v1/pm_time', row); pm.time.push(r[0]); document.getElementById('pm-overlay').remove(); pmRender(); pmToast(`Logged ${pmH(hrs)}`); }
   catch(e){ alert('Could not save: '+e.message); }
 }
@@ -4032,13 +4075,19 @@ function pmOpenTime(projectId){
       ${rate?`<div class="pm-card" style="padding:10px"><div class="pm-lbl">Cost at ${pmMoney(rate)}/hr</div><div style="font-size:20px;font-weight:700">${pmMoney(cost)}</div>${p.budget?`<div style="font-size:11px;color:var(--text-3)">of ${pmMoney(p.budget)} budget (${Math.round(cost/p.budget*100)}%)</div>${bar(cost,p.budget)}`:''}</div>`:`<div class="pm-card" style="padding:10px;font-size:12px;color:var(--text-3)">Set an hourly rate on the project (Edit) to see cost against the budget.</div>`}
       <div class="pm-card" style="padding:10px"><div class="pm-lbl">By person</div>${byPerson.map(([n,h])=>`<div style="font-size:12px;display:flex;justify-content:space-between"><span>${n}</span><b>${pmH(h)}</b></div>`).join('')||'<div style="font-size:12px;color:var(--text-3)">—</div>'}</div>
     </div>
+    ${(()=>{ const nb = entries.filter(t=>(t.category||'billable')!=='billable'), nbH = nb.reduce((s,t)=>s+(Number(t.hours)||0),0), field = entries.filter(t=>t.location==='field').reduce((s,t)=>s+(Number(t.hours)||0),0);
+      if(!nbH && !field) return '';
+      const byCat = PM_TIME_CATS.filter(c=>c.key!=='billable').map(c=>[c.label.replace(/ \(.*\)|, not billed/,''), nb.filter(t=>t.category===c.key).reduce((s,t)=>s+(Number(t.hours)||0),0)]).filter(x=>x[1]);
+      return `<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;padding:8px 10px;background:var(--bg);border-radius:6px">
+        <span><b>${pmH(total-nbH)}</b> billable · <b style="color:#b45309">${pmH(nbH)}</b> non-billable${byCat.length?' ('+byCat.map(([l,h])=>`${l} ${pmH(h)}`).join(', ')+')':''}</span>
+        <span><b>${pmH(total-field)}</b> office · <b>${pmH(field)}</b> field</span></div>`; })()}
     <div class="pm-lbl">By phase: logged vs estimated</div>
     ${phases.map(x=>`<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:13px"><div style="display:flex;justify-content:space-between"><span>${pmEsc(x.ph.title)}</span><span><b>${pmH(x.act)}</b>${x.est?` / ${pmH(x.est)}`:''}</span></div>${bar(x.act,x.est)}</div>`).join('')}
     ${general?`<div style="padding:5px 0;font-size:13px;display:flex;justify-content:space-between"><span style="color:var(--text-3)">General project time</span><b>${pmH(general)}</b></div>`:''}
     <div class="pm-lbl" style="margin-top:12px">Entries</div>
     <div style="max-height:28vh;overflow-y:auto">${entries.slice(0,200).map(t=>{ const it = t.item_id && pmItem(t.item_id); return `<div style="display:flex;gap:8px;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">
       <span style="width:70px;color:var(--text-3)">${pmFmt(t.work_date)}</span><span style="width:60px">${pmEsc(t.person)}</span><b style="width:44px">${pmH(t.hours)}</b>
-      <span style="flex:1;min-width:0;color:var(--text-2)">${it?pmEsc(it.title):'General'}${t.note?' · '+pmEsc(t.note):''}</span>
+      <span style="flex:1;min-width:0;color:var(--text-2)">${it?pmEsc(it.title):'General'}${t.note?' · '+pmEsc(t.note):''}${(t.category||'billable')!=='billable'?` <span class="pm-chip" style="background:#fff7ed;color:#9a3412">${pmEsc(pmTimeCat(t).label.replace(/ \(non-billable\)/,''))}</span>`:''}${t.location==='field'?' <span class="pm-chip" style="background:#ecfdf5;color:#166534">field</span>':''}</span>
       <button class="pm-ic" onclick="pmDeleteRow('pm_time','time','${t.id}',()=>pmOpenTime('${projectId}'))">🗑</button></div>`; }).join('') || '<div style="font-size:12px;color:var(--text-3)">No time logged yet.</div>'}</div>`, 760);
 }
 
@@ -4170,11 +4219,12 @@ function pmHealth(p){
     overdue: leaves.filter(pmOverdue).length, client: its.filter(i=>i.party==='client'&&i.status!=='done').length, subs: its.filter(i=>i.party==='sub'&&i.status!=='done').length,
     qs: pm.questions.filter(q=>q.project_id===p.id && q.status==='Open').length, qsLate: pm.questions.filter(q=>q.project_id===p.id && q.status==='Open' && q.due_date && q.due_date<pmToday()).length,
     est, act, cost: act*(Number(p.hourly_rate)||0),
-    toBill: fees.filter(ph=>!ph.billed && pmPhaseStatus(ph).state==='complete'), feeTotal: fees.reduce((t,ph)=>t+Number(ph.fee),0),
+    toBill: fees.filter(ph=>!ph.billed && pmBillReady(ph)), feeTotal: fees.reduce((t,ph)=>t+Number(ph.fee),0),
     lastUpdate: p.last_update_at ? Math.floor((Date.now()-new Date(p.last_update_at))/864e5) : null };
 }
 function pmOverviewHtml(){
-  const hs = pm.projects.filter(p=>p.status!=='Complete').map(pmHealth)
+  const allTags = [...new Set(pm.projects.flatMap(p=>p.tags||[]))].sort();
+  const hs = pm.projects.filter(p=>p.status!=='Complete' && (!pm.ovTag || (p.tags||[]).includes(pm.ovTag))).map(pmHealth)
     .sort((a,b)=>(b.overdue>0)-(a.overdue>0) || (a.next?a.next.due_date:'9').localeCompare(b.next?b.next.due_date:'9'));
   const all = { overdue: hs.reduce((t,h)=>t+h.overdue,0), client: hs.reduce((t,h)=>t+h.client,0), qs: hs.reduce((t,h)=>t+h.qs,0), toBill: hs.reduce((t,h)=>t+h.toBill.length,0), toBillAmt: hs.reduce((t,h)=>t+h.toBill.reduce((s,ph)=>s+Number(ph.fee),0),0) };
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);padding:8px 6px;text-align:left;border-bottom:1px solid var(--border-2)';
@@ -4185,10 +4235,12 @@ function pmOverviewHtml(){
       ${stat(hs.length,'active projects','var(--text)')}${stat(all.overdue,'tasks past due','#dc2626')}${stat(all.client,'items waiting on clients','#9a3412')}${stat(all.qs,'open questions','#1d4ed8')}
       ${stat(all.toBill ? pmMoney(all.toBillAmt) : 0, all.toBill ? `ready to bill (${all.toBill} phase${all.toBill===1?'':'s'})` : 'ready to bill','#15803d')}
     </div>
+    ${allTags.length?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:12px;color:var(--text-3)">Tag:
+      ${['',...allTags].map(t=>`<button class="site-chip${(pm.ovTag||'')===t?' active':''}" style="padding:3px 9px;font-size:12px" onclick="pm.ovTag='${pmEsc(t).replace(/'/g,"\\'")}';pmRender()">${t?pmEsc(t):'All'}</button>`).join('')}</div>`:''}
     <div class="pm-card" style="padding:0;overflow-x:auto"><table class="pm-tbl" style="width:100%;border-collapse:collapse;min-width:760px">
       <thead><tr><th style="${th}">Project</th><th style="${th}">Phase</th><th style="${th}">Next deadline</th><th style="${th}">Attention</th><th style="${th}">Hours</th><th style="${th}">Billing</th><th style="${th}">Client update</th></tr></thead>
       <tbody>${hs.map(h=>`<tr style="cursor:pointer" onclick="pm.sel='${h.p.id}';pmShow('projects')">
-        <td style="${td}"><div style="display:flex;gap:8px"><span class="pm-dot" style="background:${pmEsc(h.p.color)}"></span><div><b>${pmEsc(h.p.name)}</b><div style="font-size:11px;color:var(--text-3)">${pmEsc(h.p.client||'Field Source')}</div></div></div></td>
+        <td style="${td}"><div style="display:flex;gap:8px"><span class="pm-dot" style="background:${pmEsc(h.p.color)}"></span><div><b>${pmEsc(h.p.name)}</b><div style="font-size:11px;color:var(--text-3)">${pmEsc(h.p.client||'Field Source')}${(h.p.tags||[]).length?' · '+h.p.tags.map(pmEsc).join(', '):''}</div></div></div></td>
         <td style="${td}">${h.cur?pmEsc(h.cur.title):'—'}<div style="height:5px;background:var(--border);border-radius:3px;margin-top:4px;width:110px;overflow:hidden"><div style="height:100%;width:${h.pct}%;background:${pmEsc(h.p.color)}"></div></div><div style="font-size:11px;color:var(--text-3)">${h.pct}% of ${h.total} tasks</div></td>
         <td style="${td}">${h.next?`${PM_TYPES[h.next.type].icon} ${pmEsc(h.next.title)}<div style="font-size:11px;color:var(--text-3)">${pmFmt(h.next.due_date)} · ${Math.max(0,pmWorkdaysBetween(pmToday(),h.next.due_date)-1)} work days</div>`:'<span style="color:var(--text-3)">—</span>'}</td>
         <td style="${td};font-size:12px">${[h.overdue?`<div style="color:#dc2626">${h.overdue} past due</div>`:'', h.client?`<div style="color:#9a3412">👤 ${h.client} on client</div>`:'', h.subs?`<div style="color:#5b21b6">🔧 ${h.subs} with subs</div>`:'', h.qs?`<div style="color:${h.qsLate?'#dc2626':'#1d4ed8'}">❓ ${h.qs} open question${h.qs===1?'':'s'}${h.qsLate?` (${h.qsLate} late)`:''}</div>`:''].join('')||'<span style="color:#16a34a">On track</span>'}</td>
@@ -4206,7 +4258,7 @@ function pmOpenFees(projectId){
   const p = pmProject(projectId); if(!p) return;
   const phases = pmKids(projectId, null);
   const tot = phases.reduce((t,ph)=>t+(Number(ph.fee)||0),0), billed = phases.filter(ph=>ph.billed).reduce((t,ph)=>t+(Number(ph.fee)||0),0);
-  const ready = phases.filter(ph=>!ph.billed && Number(ph.fee)>0 && pmPhaseStatus(ph).state==='complete');
+  const ready = phases.filter(ph=>!ph.billed && Number(ph.fee)>0 && pmBillReady(ph));
   pmModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
       <div><div class="sheet-title" style="margin-bottom:2px">💲 Fees &amp; billing</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)}</div></div>
       <button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">✕</button></div>
@@ -4221,12 +4273,17 @@ function pmOpenFees(projectId){
         <td style="padding:7px 6px;border-bottom:1px solid var(--border)"><input type="number" step="1" class="pm-in" style="width:110px;padding:4px 6px" value="${ph.fee??''}" placeholder="$" onchange="pmSavePhaseFee('${ph.id}',this.value)"></td>
         <td style="padding:7px 6px;border-bottom:1px solid var(--border);font-size:12px">${st.state==='empty'?'<span style="color:var(--text-3)">no tasks</span>':`${st.pct}% <span style="color:var(--text-3)">(${st.done}/${st.total})</span>`}</td>
         <td style="padding:7px 6px;border-bottom:1px solid var(--border);font-size:12px">${ph.billed?`<span class="pm-chip" style="background:#dcfce7;color:#166534">Billed${ph.invoice_no?' #'+pmEsc(ph.invoice_no):''}${ph.billed_on?' · '+pmFmt(ph.billed_on):''}</span> <button class="pm-ic" title="Undo" onclick="pmSetBilled('${ph.id}',false)">↺</button>`
-          : st.state==='complete' && Number(ph.fee)>0 ? `<button class="pm-btn primary" style="font-size:11px;padding:3px 8px" onclick="pmSetBilled('${ph.id}',true)">Ready: mark billed</button>`
-          : Number(ph.fee)>0 ? `<span style="color:var(--text-3)">Bill when complete</span> <button class="pm-ic" title="Mark billed anyway (partial / deposit)" onclick="pmSetBilled('${ph.id}',true)">＄</button>` : '<span style="color:var(--text-3)">—</span>'}</td></tr>`; }).join('')}
+          : pmBillReady(ph) && Number(ph.fee)>0 ? `<button class="pm-btn primary" style="font-size:11px;padding:3px 8px" onclick="pmSetBilled('${ph.id}',true)">Ready: mark billed</button>${st.state!=='complete'?` <span style="font-size:11px;color:var(--text-3)">marked ready early</span> <button class="pm-ic" title="Undo: wait until the phase is complete" onclick="pmSetBillReady('${ph.id}',false)">↺</button>`:''}`
+          : Number(ph.fee)>0 ? `<button class="pm-btn" style="font-size:11px;padding:3px 8px" title="Ready to bill now, even though some tasks are still open (e.g. waiting on one vendor item)" onclick="pmSetBillReady('${ph.id}',true)">Mark ready to bill</button> <button class="pm-ic" title="Mark billed anyway (partial / deposit)" onclick="pmSetBilled('${ph.id}',true)">＄</button>` : '<span style="color:var(--text-3)">—</span>'}</td></tr>`; }).join('')}
       </tbody>
       <tfoot><tr><td style="padding:8px 6px;font-weight:700">Total</td><td style="padding:8px 6px;font-weight:700">${pmMoney(tot)}</td><td colspan="2" style="padding:8px 6px;font-size:12px">${pmMoney(billed)} billed · <b style="color:#15803d">${pmMoney(ready.reduce((t,ph)=>t+Number(ph.fee),0))} ready to bill</b> · ${pmMoney(tot-billed)} remaining${p.budget&&tot&&tot!==Number(p.budget)?` · <span style="color:#b45309">fees ${tot>p.budget?'exceed':'are under'} the ${pmMoney(p.budget)} budget</span>`:''}</td></tr></tfoot>
     </table>
-    <div style="font-size:11px;color:var(--text-3);margin-top:8px">A phase becomes "ready to bill" when all its tasks are checked off. Invoicing itself still happens in QuickBooks; record the invoice number here.</div>`, 760);
+    <div style="font-size:11px;color:var(--text-3);margin-top:8px">A phase becomes "ready to bill" when all its tasks are checked off, or when you mark it ready (for example, everything's done but one vendor item). Invoicing itself still happens in QuickBooks; record the invoice number here.</div>`, 760);
+}
+function pmBillReady(ph){ return pmPhaseStatus(ph).state==='complete' || !!ph.bill_ready; }
+async function pmSetBillReady(id, on){
+  try{ await sbFetch('PATCH', `/rest/v1/pm_items?id=eq.${id}`, { bill_ready: !!on }); const it = pmItem(id); if(it) it.bill_ready = !!on; pmOpenFees(it.project_id); pmRender(); }
+  catch(e){ alert('Could not save: '+e.message+(/bill_ready/.test(e.message)?' (run the quick-changes SQL first)':'')); }
 }
 async function pmSaveProjField(projectId, field, value){ try{ await sbFetch('PATCH', `/rest/v1/pm_projects?id=eq.${projectId}`, { [field]: value }); pmProject(projectId)[field] = value; pmRender(); }catch(e){ alert(e.message); } }
 async function pmSavePhaseFee(id, v){ const ph = pmItem(id); ph.fee = v===''?null:Number(v); try{ await pmPatchItem(ph); pmOpenFees(ph.project_id); pmRender(); }catch(e){ alert(e.message); } }
@@ -4324,9 +4381,11 @@ function pmWorkspaceHtml(p){
   return `<div class="pm-card" style="border-left:5px solid ${pmEsc(p.color)};margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
       <div><div style="font-size:18px;font-weight:700">${pmEsc(p.name)}</div>
-        <div style="font-size:13px;color:var(--text-2)">${p.client?pmEsc(p.client):'Field Source'} · ${pmEsc(p.status)}${p.start_date?' · started '+pmFmt(p.start_date):''}</div></div>
+        <div style="font-size:13px;color:var(--text-2)">${p.client?pmEsc(p.client):'Field Source'} · ${pmEsc(p.status)}${p.start_date?' · started '+pmFmt(p.start_date):''}</div>
+        ${(p.tags||[]).length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${p.tags.map(t=>`<span class="pm-chip" style="background:var(--bg);border:1px solid var(--border);color:var(--text-2)">${pmEsc(t)}</span>`).join('')}</div>`:''}</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
         <button class="pm-btn" onclick="pmClientUpdate('${p.id}')">✉ Client update</button>
+        <button class="pm-btn" onclick="pmWeatherDay('${p.id}')" title="Push everything not done back one work day">🌧 Weather day</button>
         <button class="pm-btn" onclick="pmEditProject('${p.id}')">Edit</button>
       </div>
     </div>
@@ -4817,6 +4876,9 @@ function pmEditProject(id){
           return `<span onclick="document.getElementById('pmp-color').value='${c}'" title="${taken?'Used by '+pmEsc(taken.name):'Available'}" style="width:20px;height:20px;border-radius:50%;background:${c};cursor:pointer;display:inline-block;position:relative;${taken?'opacity:.35':''}"></span>`; }).join('')}
         <input id="pmp-color" type="color" value="${pmEsc(p.color||'#2563eb')}" style="width:32px;height:24px;border:none;background:none"></div></div>
     </div>
+    <div style="margin-top:10px"><div class="pm-lbl">Tags <span style="text-transform:none;font-weight:400">(comma separated, for reporting: e.g. Public, High school, Diamond, Synthetic)</span></div>
+      <input id="pmp-tags" class="pm-in" list="pmp-tag-list" value="${pmEsc((p.tags||[]).join(', '))}" placeholder="Public, High school, Diamond">
+      <datalist id="pmp-tag-list">${[...new Set(['Public','Private','High school','College','Park district','Municipal','Diamond','Rectangle','Synthetic','Natural grass','Design-build','Design only','Master plan',...pm.projects.flatMap(x=>x.tags||[])])].map(t=>`<option value="${pmEsc(t)}">`).join('')}</datalist></div>
     <div style="margin-top:10px"><div class="pm-lbl">Notes</div><textarea id="pmp-notes" class="pm-in" rows="2">${pmEsc(p.notes||'')}</textarea></div>
     ${id?'':`<div style="margin-top:14px;padding:12px;border:1px solid var(--border);border-radius:var(--radius-sm)">
       <div class="pm-lbl">Start from a template</div>
@@ -4845,6 +4907,7 @@ async function pmSaveProject(id){
   const name = g('pmp-name').trim();
   if(!name){ document.getElementById('pmp-err').textContent='Give the project a name.'; return; }
   const row = { name, client:g('pmp-client').trim(), kind: g('pmp-client').trim() ? 'client' : 'internal', budget: g('pmp-budget')===''?null:Number(g('pmp-budget')), hourly_rate: g('pmp-rate')===''?null:Number(g('pmp-rate')), status:g('pmp-status'), start_date:g('pmp-start')||null, color:g('pmp-color'), notes:g('pmp-notes'), updated_at:new Date().toISOString() };
+  row.tags = (document.getElementById('pmp-tags')?.value||'').split(',').map(t=>t.trim()).filter(Boolean).filter((t,k,a)=>a.findIndex(x=>x.toLowerCase()===t.toLowerCase())===k).slice(0,12);
   try{
     if(id){ await sbFetch('PATCH', `/rest/v1/pm_projects?id=eq.${id}`, row); Object.assign(pmProject(id), row); }
     else {
@@ -4969,6 +5032,7 @@ function pmCalendarHtml(){
     if(pm.calHideDone && it.status==='done') return;
     const key = pmIsMilestone(it.type) || it.type==='deliverable';
     if(pm.calKeyOnly && !key) return;
+    if(pm.calMine && pmMe() && it.owner!==pmMe()) return;
     if(pm.items.some(c=>c.parent_id===it.id)) return; // parents are summarized by their children
     let s = it.start_date || it.due_date, e = it.due_date || it.start_date;
     if(!s) return;
@@ -5007,6 +5071,7 @@ function pmCalendarHtml(){
       <span style="margin-left:auto"></span>
       ${pmProjectFilterSel(pm.calProject, "pm.calProject=this.value;pmRender()")}
       <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${pm.calKeyOnly?'checked':''} onchange="pm.calKeyOnly=this.checked;pmRender()"> Milestones &amp; deliverables only</label>
+      ${pmMe()?`<label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${pm.calMine?'checked':''} onchange="pm.calMine=this.checked;pmRender()"> Just mine</label>`:''}
       <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${pm.calHideDone?'checked':''} onchange="pm.calHideDone=this.checked;pmRender()"> Hide done</label>
     </div>
     <div style="margin-bottom:8px">${legend}</div>
@@ -5020,6 +5085,45 @@ function pmCalendarHtml(){
 
 // ── Timeline (Gantt) ──
 const PM_ZOOM = { day:{px:30,label:'Days'}, week:{px:14,label:'Weeks'}, month:{px:5,label:'Months'} };
+// Download the timeline as it looks on screen (same filters and zoom) as a landscape PDF
+async function pmGanttPdf(){
+  const sc = document.getElementById('pm-gantt-scroll'); if(!sc){ alert('Nothing on the timeline to download.'); return; }
+  pmToast('Building the PDF…');
+  try{
+    await qqLoadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+    await qqLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+    const inner = sc.firstElementChild, keep = { mh: sc.style.maxHeight, ov: sc.style.overflow, sl: sc.scrollLeft, st: sc.scrollTop };
+    sc.scrollLeft = 0; sc.scrollTop = 0; sc.style.maxHeight = 'none'; sc.style.overflow = 'visible';
+    let canvas;
+    try{ canvas = await html2canvas(inner, { scale: 2, backgroundColor: '#ffffff', width: inner.scrollWidth, height: inner.scrollHeight, windowWidth: inner.scrollWidth + 40 }); }
+    finally{ sc.style.maxHeight = keep.mh; sc.style.overflow = keep.ov; sc.scrollLeft = keep.sl; sc.scrollTop = keep.st; }
+    const { jsPDF } = window.jspdf, doc = new jsPDF({ unit:'pt', format:'tabloid', orientation:'landscape' });
+    const PW = doc.internal.pageSize.getWidth(), PH = doc.internal.pageSize.getHeight(), M = 28, top = 52;
+    const proj = pm.ganttProject && pm.ganttProject!=='all' ? (pmProject(pm.ganttProject)||{}).name : '';
+    const title = `Field Source · ${proj || 'Design timeline'}`, sub = `${PM_GANTT_SHOW[pm.ganttShow||'all']} · ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}`;
+    const scale = (PW - 2*M) / canvas.width, sliceH = Math.floor((PH - top - M) / scale);
+    for(let y = 0, pg = 0; y < canvas.height; y += sliceH, pg++){
+      if(pg) doc.addPage();
+      doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.setTextColor(30,86,49); doc.text(title, M, 30);
+      doc.setFont('helvetica','normal'); doc.setFontSize(9); doc.setTextColor(110); doc.text(sub, M, 43);
+      const h = Math.min(sliceH, canvas.height - y), part = document.createElement('canvas'); part.width = canvas.width; part.height = h;
+      part.getContext('2d').drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+      doc.addImage(part.toDataURL('image/png'), 'PNG', M, top, canvas.width*scale, h*scale);
+    }
+    doc.save(`${(proj||'Design timeline').replace(/[^\w .,&()-]/g,'')} timeline ${new Date().toLocaleDateString('en-CA')}.pdf`);
+  }catch(e){ alert('Could not build the PDF: '+e.message); }
+}
+// Timeline "Show" filter: everything, milestones & deliverables, our work, client items, sub/vendor items
+const PM_GANTT_SHOW = { all:'Everything', key:'Milestones & deliverables', ours:'Our work', client:'Client items', subs:'Sub & vendor items' };
+function pmGanttShows(it){
+  const f = pm.ganttShow || 'all';
+  if(f==='all') return true;
+  if(f==='key') return pmIsMilestone(it.type) || it.type==='deliverable';
+  if(f==='ours') return pmParty(it)==='fs';
+  if(f==='client') return pmParty(it)==='client' || it.type==='milestone_ext';
+  if(f==='subs') return pmParty(it)==='sub';
+  return true;
+}
 function pmGanttHtml(){
   const px = PM_ZOOM[pm.ganttZoom].px;
   const projs = pmVisibleProjects(pm.ganttProject);
@@ -5029,8 +5133,9 @@ function pmGanttHtml(){
     if(pm.collapsed['proj-'+p.id]) return;
     const walk = (pid, depth)=>pmKids(p.id, pid).forEach(it=>{
       if(pm.ganttHideDone && it.status==='done' && it.type!=='phase') return;
-      rows.push({ kind:'item', p, it, depth, hasKids: pm.items.some(c=>c.parent_id===it.id) });
-      if(!pm.collapsed[it.id]) walk(it.id, depth+1);
+      const show = it.type==='phase' || pmGanttShows(it);
+      if(show) rows.push({ kind:'item', p, it, depth, hasKids: pm.items.some(c=>c.parent_id===it.id) });
+      if(!pm.collapsed[it.id]) walk(it.id, show ? depth+1 : depth);
     });
     walk(null, 0);
   });
@@ -5114,6 +5219,8 @@ function pmGanttHtml(){
       <div style="display:flex;border:1px solid var(--border-2);border-radius:6px;overflow:hidden">${Object.entries(PM_ZOOM).map(([k,z])=>`<button onclick="pm.ganttZoom='${k}';pmRender();pmGanttToday()" style="font-size:12px;padding:5px 10px;border:none;cursor:pointer;font-family:inherit;background:${pm.ganttZoom===k?'var(--green)':'var(--surface)'};color:${pm.ganttZoom===k?'#fff':'var(--text)'}">${z.label}</button>`).join('')}</div>
       <button class="pm-btn" onclick="pmGanttToday()">Today</button>
       <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${pm.ganttHideDone?'checked':''} onchange="pm.ganttHideDone=this.checked;pmRender()"> Hide done</label>
+      <select class="pm-in" style="width:auto;font-size:12px;padding:4px 8px" onchange="pm.ganttShow=this.value;pmRender()" title="Show">${Object.entries(PM_GANTT_SHOW).map(([k,l])=>`<option value="${k}"${(pm.ganttShow||'all')===k?' selected':''}>Show: ${l}</option>`).join('')}</select>
+      <button class="pm-btn" onclick="pmGanttPdf()" title="Download this timeline as a PDF">⬇ PDF</button>
       <span style="margin-left:auto;font-size:11px;color:var(--text-3)">◆ client milestone · ◇ internal · ■ deliverable · striped = client or sub · blue line = today · grey = weekend/closure</span>
     </div>
     ${rows.length?`<div id="pm-gantt-scroll" style="overflow:auto;max-height:72vh;border:1px solid var(--border);border-radius:var(--radius-sm)">
@@ -6307,7 +6414,7 @@ async function seedEstimates(){
   await loadEstimates();
 }
 
-const ESTIMATE_STATUSES = ['Not Started','Needs Site Visit','Needs Shot','Estimate In Progress','Estimate Distributed Internally','Estimate Sent','Approved','Scheduled','In Progress','Completed','On Hold'];
+const ESTIMATE_STATUSES = ['Not Started','Needs Site Visit','Needs Shot','Estimate In Progress','Estimate Distributed Internally','Estimate Sent','Approved','Scheduled','In Progress','Completed','On Hold','Declined'];
 const ESTIMATE_TYPES = ['Construction','Maintenance','Consulting'];
 const ESTIMATE_STATUS_COLORS = {
   'Not Started':          {bg:'#f1f5f9',text:'#475569'},
@@ -6321,6 +6428,7 @@ const ESTIMATE_STATUS_COLORS = {
   'In Progress':          {bg:'#bfdbfe',text:'#1e40af'},
   'Completed':            {bg:'#f0fdf4',text:'#166534'},
   'On Hold':              {bg:'#fee2e2',text:'#991b1b'},
+  'Declined':             {bg:'#f3f4f6',text:'#6b7280'},
 };
 
 function renderEstimates(){
@@ -6333,7 +6441,7 @@ function renderEstimates(){
     return;
   }
 
-  const STATUS_PRIORITY = {'Needs Shot':0,'Needs Site Visit':1,'Estimate In Progress':2,'Not Started':3,'Estimate Sent':4,'Approved':5,'Scheduled':6,'In Progress':7,'On Hold':8,'Completed':9};
+  const STATUS_PRIORITY = {'Needs Shot':0,'Needs Site Visit':1,'Estimate In Progress':2,'Not Started':3,'Estimate Sent':4,'Approved':5,'Scheduled':6,'In Progress':7,'On Hold':8,'Completed':9,'Declined':10};
 
   let filtered = [...estimates];
   if(estimateStatusFilter!=='All') filtered = filtered.filter(e=>e.status===estimateStatusFilter);
@@ -6544,6 +6652,7 @@ function openEstimateDetail(id){
       <span>⚠ <b>QuickBooks gave this estimate no number.</b> <span style="color:var(--text-3)">Billing, invoices and approvals need one.</span></span>
       ${canEstAdmin()?`<button class="site-chip active" style="margin-left:auto;padding:4px 12px;font-size:12px" onclick="estAssignNumber('${e.id}')">Assign next number</button>`:''}</div>` : ''}
     <div id="est-pm-slot"></div>
+    <div id="est-docs-slot"></div>
     ${e.qbNumber?'<div id="est-billing-slot"><div style="font-size:12px;color:var(--text-3);margin-top:16px">Loading billing…</div></div>':''}
     <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Breakdown</div>`;
 
@@ -6611,6 +6720,7 @@ function openEstimateDetail(id){
   if(e.qbNumber && canEdit) checkTrackerJob(e.qbNumber);
   if(e.qbNumber) renderEstimateBilling(e);
   if(!approvalRulesLoaded) loadApprovalRules().then(()=>renderEstimatePm(e)); else renderEstimatePm(e);
+  estDocsRender(e);
 }
 
 // QuickBooks line items, from the qb_estimates / qb_estimate_lines tables kept fresh by qb-sync.
@@ -6852,9 +6962,12 @@ async function unlinkInvoice(invId, estNum){
 
 // Accepted estimates = contracts to bill (shown at the top of Accounts Receivable)
 let arHideFullyBilled = true, arContractSort = 'left', arEstTried = false;
+let arContractClient = '';
 function arContractsHtml(){
   const accepted = (typeof estimates!=='undefined'?estimates:[]).filter(e=>e.qbNumber && (e.qbStatus==='Accepted' || e.qbStatus==='Closed' || e.status==='Approved' || e.status==='Scheduled' || e.status==='In Progress'));
-  const rows = accepted.map(e=>({ e, b: estimateBilling(e) })).filter(x=>!arHideFullyBilled || x.b.remaining > 0.5 || x.b.open > 0.005 || !x.b.inv.length);
+  const clientOf = e=>e.apProject || e.client || '';
+  const clientList = [...new Set(accepted.map(clientOf).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const rows = accepted.filter(e=>!arContractClient || clientOf(e)===arContractClient).map(e=>({ e, b: estimateBilling(e) })).filter(x=>!arHideFullyBilled || x.b.remaining > 0.5 || x.b.open > 0.005 || !x.b.inv.length);
   rows.sort(arContractSort==='pct' ? (a,b)=>a.b.pct-b.b.pct : arContractSort==='date' ? (a,b)=>(b.e.acceptedDate||b.e.createdDate||'').localeCompare(a.e.acceptedDate||a.e.createdDate||'') : (a,b)=>b.b.remaining-a.b.remaining);
   const tot = rows.reduce((t,x)=>({ c:t.c+x.b.contract, bl:t.bl+x.b.billed, col:t.col+x.b.collected, ow:t.ow+x.b.open, left:t.left+Math.max(0,x.b.remaining) }), { c:0, bl:0, col:0, ow:0, left:0 });
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)!important';
@@ -6863,7 +6976,8 @@ function arContractsHtml(){
   return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:14px">
     <div style="padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <b>Accepted estimates</b><span style="font-size:12px;color:var(--text-3)">contracts to bill · added automatically when an estimate is accepted</span>
-      <label style="font-size:12px;display:flex;gap:4px;align-items:center;margin-left:auto"><input type="checkbox" ${arHideFullyBilled?'checked':''} onchange="arHideFullyBilled=this.checked;renderReceivables()"> Hide fully billed and paid</label>
+      <select style="${sel};margin-left:auto" onchange="arContractClient=this.value;renderReceivables()"><option value="">All clients</option>${clientList.map(c=>`<option value="${arEsc(c)}"${arContractClient===c?' selected':''}>${arEsc(c)}</option>`).join('')}</select>
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arHideFullyBilled?'checked':''} onchange="arHideFullyBilled=this.checked;renderReceivables()"> Hide fully billed and paid</label>
       <select style="${sel}" onchange="arContractSort=this.value;renderReceivables()">${[['left','Most left to bill'],['pct','Least billed %'],['date','Newest accepted']].map(([v,l])=>`<option value="${v}"${arContractSort===v?' selected':''}>${l}</option>`).join('')}</select>
     </div>
     ${(()=>{ const n = estimatesNeedingPm().length; return n ? `<div style="margin:0 12px 10px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px">👷 <b>${n} accepted estimate${n===1?'':'s'}</b> ${n===1?'needs':'need'} setting up. Click <b>Set up job</b> to pick the project manager (who approves vendor invoices) and the client.</div>` : ''; })()}
@@ -7176,6 +7290,7 @@ async function billCreate(){
     await loadQbInvoices(true);
     if(view==='receivables') renderReceivables(); else if(view==='estimates') renderEstimates();
     const e = estimates.find(x=>String(x.qbNumber)===String(st.estNum)); if(e && document.getElementById('est-billing-slot')) renderEstimateBilling(e);
+    if(st.e){ st.e.qbStatus = st.e.qbStatus==='Closed' ? 'Closed' : 'Accepted'; if(['Not Started','Needs Site Visit','Needs Shot','Estimate In Progress','Estimate Distributed Internally','Estimate Sent','On Hold','Declined'].includes(st.e.status)) st.e.status = 'Approved'; }
     openSendInvoice(res.qb_invoice_id, `Invoice #${res.doc_number} for ${arMoney(res.total)} was created in QuickBooks${res.po_on?`, with PO ${arEsc(st.po.replace(/^p\.?\s*o\.?\s*#?\s*/i,''))} on its own line at the end of the description${res.po_on==='line+field'?' (and in the P.O. Number field)':''}`:''}.`);
   }catch(err){ const el = document.getElementById('bill-c-err'); if(el) el.textContent = 'Could not create: ' + err.message; btn.disabled = false; btn.textContent = 'Create invoice'; }
 }
@@ -8561,6 +8676,11 @@ async function saveEstimate(id){
     if(id){
       await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, row);
       const est = estimates.find(e=>e.id===id);
+      // keep QuickBooks in step: Declined -> Rejected, Approved -> Accepted (only when the status actually changed)
+      if(est && est.qbId && est.status!==row.status && (row.status==='Declined' || row.status==='Approved')){
+        invAction({ action:'estimate_status', qb_estimate_id: est.qbId, status: row.status==='Declined' ? 'Rejected' : 'Accepted' })
+          .then(r=>{ if(r && r.qb_status) est.qbStatus = r.qb_status; }).catch(e=>console.warn('QuickBooks estimate status', e.message));
+      }
       if(est) Object.assign(est, {projectName:row.project_name, type:row.type, status:row.status, projectDate:row.project_date, estDueDate:row.est_due_date||'', days:row.days, scope:row.scope, notes:row.notes, proposalNeeded:row.proposal_needed, tips:row.tips, createdDate:row.est_created_date||'', amount:row.amount, qbNumber:row.qb_estimate_number||''});
     } else {
       const res = await sbFetch('POST', '/rest/v1/estimates', row);
@@ -9406,6 +9526,8 @@ function renderWeekByPerson(days){
         return true;
       });
       html += `<td style="padding:4px;border-bottom:1px solid var(--border);border-right:1px solid var(--border);vertical-align:top;background:${isToday?'rgba(42,106,34,0.04)':officeClosedOn(ds)?'rgba(251,146,60,0.08)':''}">`;
+      const pOff = partialOffOn(person, ds);
+      if(pOff) html += `<div title="Off ${toTimeLabel(pOff)}${pOff.note?' · '+String(pOff.note).replace(/"/g,'&quot;'):''}" style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:4px;padding:2px 5px;text-align:center;margin-bottom:3px">Off ${toTimeLabel(pOff,true)}</div>`;
       const pSafe = String(person).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
       const addBtn = isScheduler ? `<button class="person-add" title="Add a job for ${String(person).replace(/"/g,'&quot;')} on ${d.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}" onclick="event.stopPropagation();openModal(null,'${ds}','${pSafe}')">+</button>` : '';
       if(!personJobs.length){
@@ -9866,8 +9988,8 @@ function buildCrewGrid(){
   const subPicked = pickedCrew.some(c=>c.startsWith('Sub:'));
   const subName = subPicked ? (pickedCrew.find(c=>c.startsWith('Sub:'))||'Sub:').slice(4) : '';
   return CREW.map(c=>{
-    const off = start && isPersonOff(c, start);
-    return `<div class="sel-opt${pickedCrew.includes(c)?' picked':''}${off?' crew-off':''}" onclick="toggleCrew('${c}',${off})">${c}${off?'<span style=\"font-size:9px;margin-left:4px;opacity:0.7\">OFF</span>':''}</div>`;
+    const off = start && isPersonOff(c, start), part = !off && start && partialOffOn(c, start);
+    return `<div class="sel-opt${pickedCrew.includes(c)?' picked':''}${off?' crew-off':''}" onclick="toggleCrew('${c}',${off})">${c}${off?'<span style=\"font-size:9px;margin-left:4px;opacity:0.7\">OFF</span>':part?`<span style="font-size:9px;margin-left:4px;color:#92400e">off ${toTimeLabel(part,true)}</span>`:''}</div>`;
   }).join('')
   + `<div class="sel-opt${subPicked?' picked':''}" onclick="toggleSubcontractor()">Subcontractor</div>`
   + `<div id="f-sub-wrap" style="display:${subPicked?'block':'none'};grid-column:1/-1;margin-top:4px"><input type="text" id="f-sub-name" placeholder="Company or person name..." value="${subName}" oninput="updateSubName(this.value)" style="width:100%;padding:8px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:'DM Sans',sans-serif;background:var(--bg);box-sizing:border-box"></div>`;
@@ -10917,6 +11039,57 @@ async function savePmAssign(estId, remove){
     if(view==='receivables') renderReceivables(); else if(view==='estimates') renderEstimates(); else if(view==='inv-approval') renderInvApproval();
     updateApprovalBell();
   }catch(ex){ err.textContent = 'Could not save: ' + ex.message + (/pm_email|ap_project/.test(ex.message)?' (run the project manager SQL in Supabase first)':''); }
+}
+// ---- PO and approval documents on an estimate (PO PDF, or a PDF of the approving email/text) ----
+async function estDocsRender(e){
+  const slot = document.getElementById('est-docs-slot'); if(!slot || !e) return;
+  let docs = [];
+  try{ docs = (await sbFetch('GET', `/rest/v1/estimate_files?estimate_id=eq.${encodeURIComponent(e.id)}&select=*&order=created_at.desc`))||[]; }
+  catch(err){ slot.innerHTML = /estimate_files/.test(err.message) ? '<div style="font-size:11px;color:var(--text-3);margin-top:10px">PO documents: run the quick-changes SQL to turn this on.</div>' : ''; return; }
+  const kindLbl = { po:'PO', approval:'Approval', other:'Document' };
+  slot.innerHTML = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;font-size:13px">
+    <span>📎 <b>PO &amp; approval documents</b></span>
+    ${docs.map(d=>`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:99px;padding:2px 4px 2px 9px;font-size:12px">
+        <a style="cursor:pointer;color:var(--green-dark)" onclick="estDocOpen('${d.id}')" title="Added by ${escEst(d.uploaded_by||'')} ${new Date(d.created_at).toLocaleDateString('en-US')}">${kindLbl[d.kind]||'Document'}: ${escEst(d.file_name)}</a>
+        <button onclick="estDocDelete('${d.id}','${e.id}')" style="border:none;background:none;cursor:pointer;color:var(--text-3);font-size:11px" title="Remove">✕</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-3)">none yet</span>'}
+    <select id="est-doc-kind" style="font-size:12px;padding:3px 6px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit">
+      <option value="po">PO</option><option value="approval">Approval (email / text)</option><option value="other">Other</option></select>
+    <label style="font-size:12px;cursor:pointer;color:var(--green-dark);font-weight:600;border:1px dashed var(--border-2);border-radius:6px;padding:3px 9px">+ Upload<input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.heic,.eml,.msg,.doc,.docx" style="display:none" onchange="estDocUpload('${e.id}',this)"></label>
+  </div>`;
+  window._estDocs = docs;
+}
+async function estDocUpload(estId, input){
+  const kind = (document.getElementById('est-doc-kind')||{}).value || 'po';
+  const files = [...input.files]; if(!files.length) return;
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    for(const file of files){
+      if(file.size > 20*1024*1024){ alert(`${file.name} is over 20 MB.`); continue; }
+      const path = `estimates/${estId}/${Date.now()}-${file.name.replace(/[^\w.\- ]+/g,'_')}`;
+      const up = await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(path)}`, { method:'POST',
+        headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type': file.type||'application/octet-stream', 'x-upsert':'true' }, body: await file.arrayBuffer() });
+      if(!up.ok) throw new Error(`${file.name}: ${up.status} ${(await up.text()).slice(0,150)}`);
+      await sbFetch('POST','/rest/v1/estimate_files', { estimate_id:String(estId), kind, file_name:file.name, file_path:path, size_bytes:file.size, uploaded_by:(currentUser&&currentUser.email)||'' });
+    }
+    estDocsRender(estimates.find(x=>x.id===estId));
+  }catch(err){ alert('Upload failed: '+err.message); }
+}
+async function estDocOpen(id){
+  const d = (window._estDocs||[]).find(x=>x.id===id); if(!d) return;
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    const r = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${PM_BUCKET}/${encodeURI(d.file_path)}`, { method:'POST', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type':'application/json' }, body: JSON.stringify({ expiresIn: 600 }) });
+    const j = await r.json(); if(!j.signedURL) throw new Error(j.message||'no link');
+    window.open(`${SUPABASE_URL}/storage/v1${j.signedURL}`, '_blank');
+  }catch(err){ alert('Could not open it: '+err.message); }
+}
+async function estDocDelete(id, estId){
+  const d = (window._estDocs||[]).find(x=>x.id===id); if(!d || !confirm(`Remove ${d.file_name}?`)) return;
+  try{
+    await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(d.file_path)}`, { method:'DELETE', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY } });
+    await sbFetch('DELETE', `/rest/v1/estimate_files?id=eq.${id}`);
+    estDocsRender(estimates.find(x=>x.id===estId));
+  }catch(err){ alert('Could not remove it: '+err.message); }
 }
 function estPoView(e){
   return `<span style="cursor:pointer" onclick="estPoEdit('${e.id}')" title="Click to ${e.poNumber?'change':'add'} the customer PO # (it goes on every invoice for this job)">${e.poNumber?escEst(e.poNumber):'—'} <span style="font-size:12px;opacity:.6">✏️</span></span>`;
@@ -13430,7 +13603,7 @@ function renderTimeOff(){
     <div class="form-group" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div>
         <label class="form-label">Start date</label>
-        <input type="date" id="to-start" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+        <input type="date" id="to-start" onchange="if(toPartial) document.getElementById('to-end').value=this.value" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
       </div>
       <div>
         <label class="form-label">End date</label>
@@ -13438,8 +13611,19 @@ function renderTimeOff(){
       </div>
     </div>
     <div class="form-group">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="site-chip active" id="to-span-all" onclick="toSetSpan(false)" style="padding:5px 11px;font-size:13px">All day</button>
+        <button type="button" class="site-chip" id="to-span-part" onclick="toSetSpan(true)" style="padding:5px 11px;font-size:13px">Part of the day</button>
+      </div>
+      <div id="to-times" style="display:none;margin-top:8px;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px">
+        From <input type="time" id="to-tstart" value="12:00" step="900" style="padding:7px 9px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg)">
+        to <input type="time" id="to-tend" value="16:00" step="900" style="padding:7px 9px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg)">
+        <span style="font-size:11px;color:var(--text-3)">One day only. Uses the start date.</span>
+      </div>
+    </div>
+    <div class="form-group">
       <label class="form-label">Note (optional)</label>
-      <input type="text" id="to-note" placeholder="Vacation, personal, etc." style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
+      <input type="text" id="to-note" placeholder="Vacation, personal, appointment, etc." style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg);box-sizing:border-box">
     </div>
     <div style="display:flex;gap:8px;margin-top:4px">
       <button class="btn-save" onclick="saveTimeOff()">Submit Request</button>
@@ -13457,7 +13641,7 @@ function renderTimeOff(){
 
   function entryHtml(e, showActions){
     const isCurrent = today >= e.startDate && today <= e.endDate;
-    const dateRange = e.startDate === e.endDate ? fmtShort(e.startDate) : `${fmtShort(e.startDate)} – ${fmtShort(e.endDate)}`;
+    const dateRange = (e.startDate === e.endDate ? fmtShort(e.startDate) : `${fmtShort(e.startDate)} – ${fmtShort(e.endDate)}`) + (toIsPartial(e) ? ` · ${toTimeLabel(e)}` : '');
     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap">
       <div>
         <span style="font-weight:600">${e.person}</span>
@@ -13489,6 +13673,12 @@ function renderTimeOff(){
     const yStart = `${yr}-01-01`, yEnd = `${yr}-12-31`, ytdEnd = yr===thisYear ? todayIso : yEnd;
     const taken = {}, booked = {};
     approved.forEach(e=>{
+      if(toIsPartial(e)){   // part of a day: hours / 8, on a work day in this year
+        const dd = e.startDate; if(dd < yStart || dd > yEnd || !workDays(dd, dd)) return;
+        const frac = Math.round(toPartialHours(e)/8*100)/100;
+        if(dd <= ytdEnd) taken[e.person] = (taken[e.person]||0) + frac; else if(yr===thisYear) booked[e.person] = (booked[e.person]||0) + frac;
+        return;
+      }
       const a = e.startDate > yStart ? e.startDate : yStart, b = e.endDate < yEnd ? e.endDate : yEnd;
       if(a > b) return;
       const tEnd = b < ytdEnd ? b : ytdEnd;
@@ -13497,22 +13687,23 @@ function renderTimeOff(){
     });
     const people = [...new Set([...Object.keys(taken), ...Object.keys(booked)])].filter(p=>(taken[p]||0)+(booked[p]||0)>0)
       .sort((p,q)=>((taken[q]||0)-(taken[p]||0)) || ((booked[q]||0)-(booked[p]||0)) || p.localeCompare(q));
+    const dfmt = n=>String(Math.round(n*100)/100);   // 0.25, 0.5, 2.5 …
     const totalTaken = Object.values(taken).reduce((t,n)=>t+n,0), totalBooked = Object.values(booked).reduce((t,n)=>t+n,0);
     html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
         <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-2)">Time Off Summary: ${yr}${yr===thisYear?' (year to date)':''}</div>
         <select onchange="toSummaryYear=Number(this.value);renderTimeOff()" style="font-size:12px;padding:4px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit">
           ${years.map(y=>`<option value="${y}"${y===yr?' selected':''}>${y}${y===thisYear?' (this year)':''}</option>`).join('')}</select>
-        <span style="margin-left:auto;font-size:12px;color:var(--text-3)">${totalTaken} work day${totalTaken===1?'':'s'} ${yr===thisYear?'taken so far':'taken'}${totalBooked?` · ${totalBooked} more booked this year`:''}</span>
+        <span style="margin-left:auto;font-size:12px;color:var(--text-3)">${dfmt(totalTaken)} work day${totalTaken===1?'':'s'} ${yr===thisYear?'taken so far':'taken'}${totalBooked?` · ${dfmt(totalBooked)} more booked this year`:''}</span>
       </div>
       ${people.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">
         ${people.map(p=>`
           <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:6px">
             <span style="font-size:13px;color:var(--text)">${p}</span>
-            <span style="text-align:right;line-height:1.15"><span style="font-size:16px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${taken[p]||0}d</span>${booked[p]?`<div style="font-size:10.5px;color:var(--text-3)">+${booked[p]} booked</div>`:''}</span>
+            <span style="text-align:right;line-height:1.15"><span style="font-size:16px;font-weight:700;color:var(--green-dark);font-family:'DM Mono',monospace">${dfmt(taken[p]||0)}d</span>${booked[p]?`<div style="font-size:10.5px;color:var(--text-3)">+${dfmt(booked[p])} booked</div>`:''}</span>
           </div>`).join('')}
       </div>` : `<div style="font-size:13px;color:var(--text-3)">No approved time off ${yr===thisYear?'so far this year':'in '+yr}.</div>`}
-      <div style="font-size:11px;color:var(--text-3);margin-top:8px">Work days only: weekends and office closed days aren't counted.</div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:8px">Work days only: weekends and office closed days aren't counted. Part of a day counts as hours ÷ 8 (Noon–4 PM = 0.5 day).</div>
     </div>`;
   }
 
@@ -13559,6 +13750,18 @@ async function denyTimeOff(id){
   if(view==='timeoff') renderTimeOff();
 }
 
+let toPartial = false;
+function toSetSpan(part, startT, endT){
+  toPartial = !!part;
+  document.getElementById('to-span-all').classList.toggle('active', !toPartial);
+  document.getElementById('to-span-part').classList.toggle('active', toPartial);
+  document.getElementById('to-times').style.display = toPartial ? 'flex' : 'none';
+  if(startT) document.getElementById('to-tstart').value = startT;
+  if(endT) document.getElementById('to-tend').value = endT;
+  const s = document.getElementById('to-start'), e = document.getElementById('to-end');
+  if(toPartial && s.value){ e.value = s.value; }
+  e.disabled = toPartial; e.style.opacity = toPartial ? '.5' : '';
+}
 function toPickPerson(name){
   const inp = document.getElementById('to-person'); if(!inp) return;
   if(document.getElementById('to-person-chips')) inp.value = name || '';
@@ -13575,6 +13778,7 @@ function openTimeOffForm(id=null){
     if(!e) return;
     title.textContent = 'Edit Request';
     toPickPerson(e.person);
+    toSetSpan(toIsPartial(e), e.startTime, e.endTime);
     document.getElementById('to-start').value = e.startDate;
     document.getElementById('to-end').value = e.endDate;
     document.getElementById('to-note').value = e.note||'';
@@ -13582,6 +13786,7 @@ function openTimeOffForm(id=null){
   } else {
     title.textContent = 'Request Time Off';
     toPickPerson(document.getElementById('to-person-chips') ? '' : document.getElementById('to-person').value);
+    toSetSpan(false, '12:00', '16:00');
     document.getElementById('to-start').value = '';
     document.getElementById('to-end').value = '';
     document.getElementById('to-note').value = '';
@@ -13599,18 +13804,21 @@ function closeTimeOffForm(){
 async function saveTimeOff(){
   const person = document.getElementById('to-person').value;
   const startDate = document.getElementById('to-start').value;
-  const endDate = document.getElementById('to-end').value;
+  let endDate = document.getElementById('to-end').value;
   const note = document.getElementById('to-note').value.trim();
+  let startTime = '', endTime = '';
+  if(toPartial){ endDate = startDate; startTime = document.getElementById('to-tstart').value; endTime = document.getElementById('to-tend').value; }
   const errEl = document.getElementById('to-error');
   errEl.textContent = '';
   if(!person){ errEl.textContent = 'Pick who the time off is for.'; return; }
   if(!startDate || !endDate){ errEl.textContent = 'Please set both start and end dates.'; return; }
   if(endDate < startDate){ errEl.textContent = 'End date must be on or after start date.'; return; }
+  if(toPartial && (!startTime || !endTime || endTime <= startTime)){ errEl.textContent = 'Set the times off, with the end after the start.'; return; }
   try {
     const existing = editingTimeOffId ? timeOffEntries.find(x=>x.id===editingTimeOffId) : null;
     const status = existing ? existing.status : 'Pending';
     const requestedBy = existing ? existing.requestedBy : getDisplayName(currentUser&&currentUser.email);
-    await dbSaveTimeOff({person, startDate, endDate, note, status, requestedBy}, editingTimeOffId);
+    await dbSaveTimeOff({person, startDate, endDate, startTime, endTime, note, status, requestedBy}, editingTimeOffId);
     await loadTimeOff();
     updateTimeOffBadge();
     closeTimeOffForm();

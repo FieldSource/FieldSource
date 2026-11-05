@@ -13415,14 +13415,17 @@ function renderTimeOff(){
   </div>`;
 
   // Request form (hidden by default)
-  const crewOpts = canApprove ? TIME_OFF_CREW.map(c=>`<option value="${c}">${c}</option>`).join('') : `<option value="${myName}">${myName}</option>`;
+  // Name buttons instead of a drop-down (Chrome sometimes draws wide drop-down lists blank)
+  const toEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const crewOpts = canApprove
+    ? `<div id="to-person-chips" style="display:flex;flex-wrap:wrap;gap:6px">${TIME_OFF_CREW.map(c=>`<button type="button" class="site-chip" data-person="${toEsc(c)}" onclick="toPickPerson(this.dataset.person)" style="padding:5px 11px;font-size:13px">${toEsc(c)}</button>`).join('')}</div>`
+    : `<div style="font-size:14px;padding:6px 0"><b>${toEsc(myName)}</b></div>`;
   html += `<div id="timeoff-form" style="display:none;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px">
     <div style="font-weight:600;margin-bottom:12px" id="timeoff-form-title">Request Time Off</div>
     <div class="form-group">
       <label class="form-label">Person</label>
-      <select id="to-person" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--bg)">
-        ${crewOpts}
-      </select>
+      <input type="hidden" id="to-person" value="${canApprove?'':toEsc(myName)}">
+      ${crewOpts}
     </div>
     <div class="form-group" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div>
@@ -13556,6 +13559,11 @@ async function denyTimeOff(id){
   if(view==='timeoff') renderTimeOff();
 }
 
+function toPickPerson(name){
+  const inp = document.getElementById('to-person'); if(!inp) return;
+  if(document.getElementById('to-person-chips')) inp.value = name || '';
+  document.querySelectorAll('#to-person-chips .site-chip').forEach(b=>b.classList.toggle('active', b.dataset.person===inp.value && !!inp.value));
+}
 function openTimeOffForm(id=null){
   editingTimeOffId = id;
   const form = document.getElementById('timeoff-form');
@@ -13566,13 +13574,14 @@ function openTimeOffForm(id=null){
     const e = timeOffEntries.find(x=>x.id===id);
     if(!e) return;
     title.textContent = 'Edit Request';
-    document.getElementById('to-person').value = e.person;
+    toPickPerson(e.person);
     document.getElementById('to-start').value = e.startDate;
     document.getElementById('to-end').value = e.endDate;
     document.getElementById('to-note').value = e.note||'';
     delBtn.style.display = '';
   } else {
     title.textContent = 'Request Time Off';
+    toPickPerson(document.getElementById('to-person-chips') ? '' : document.getElementById('to-person').value);
     document.getElementById('to-start').value = '';
     document.getElementById('to-end').value = '';
     document.getElementById('to-note').value = '';
@@ -13594,6 +13603,7 @@ async function saveTimeOff(){
   const note = document.getElementById('to-note').value.trim();
   const errEl = document.getElementById('to-error');
   errEl.textContent = '';
+  if(!person){ errEl.textContent = 'Pick who the time off is for.'; return; }
   if(!startDate || !endDate){ errEl.textContent = 'Please set both start and end dates.'; return; }
   if(endDate < startDate){ errEl.textContent = 'End date must be on or after start date.'; return; }
   try {

@@ -133,6 +133,86 @@ exports.handler = async function (event) {
       return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
     } catch (e) { return json(500, { error: e.message }); }
   }
+  // ===== Approved PO (Ryan's approved-po skill, in the tracker) =====
+  // po_read: Claude reads an uploaded PO (PDF or photo) and pulls out the facts to check. Nothing changes yet.
+  if (b.action === 'po_read') {
+    if (!QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed.' });
+    try {
+      if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is missing in Netlify.');
+      const path = String(b.file_path || '').replace(/^\/+/, '');
+      if (!/^estimates\//.test(path)) throw new Error('That file is not an estimate document.');
+      const f = await fetch(`https://pldlvtlbgxizbppaliag.supabase.co/storage/v1/object/project-files/${path.split('/').map(encodeURIComponent).join('/')}`, { headers: { Authorization: `Bearer ${SB_KEY}`, apikey: SB_KEY } });
+      if (!f.ok) throw new Error(`Could not open the file (${f.status}).`);
+      const buf = Buffer.from(await f.arrayBuffer());
+      if (buf.length > 9 * 1024 * 1024) throw new Error('The PO file is too large to read (over 9 MB).');
+      const name = path.toLowerCase();
+      const media = name.endsWith('.pdf') ? 'application/pdf' : name.match(/\.jpe?g$/) ? 'image/jpeg' : name.endsWith('.png') ? 'image/png' : name.endsWith('.webp') ? 'image/webp' : name.endsWith('.gif') ? 'image/gif' : null;
+      if (!media) throw new Error('Upload the PO as a PDF or a JPG/PNG photo so it can be read.');
+      const block = media === 'application/pdf' ? { type: 'document', source: { type: 'base64', media_type: media, data: buf.toString('base64') } }
+                                                : { type: 'image', source: { type: 'base64', media_type: media, data: buf.toString('base64') } };
+      const prompt = `This is a client purchase order sent to Field Source (an Ohio sports field company). Read it and return ONLY a JSON object:
+{"po_number":"","po_date":"YYYY-MM-DD","client":"","total":0,"estimate_ref":"","description":"","signer_name":"","signer_title":"","signatures_ok":true,"signature_note":"","requisition":"","vendor_name":"","vendor_is_field_source":true,"instructions":[""],"unclear":[""]}
+Rules: copy numbers exactly as printed; never guess. If the PO number, date or total is hard to read, leave it "" (or 0) and name it in "unclear". estimate_ref is any Field Source quote or estimate number the PO references, else "". signatures_ok is false when a required signature (for school districts, the Treasurer's certificate) is missing; explain in signature_note. instructions lists anything the vendor must do, e.g. "PO number must appear on all invoices". vendor_is_field_source is false when the vendor or remit-to is not Field Source.`;
+      const headers = { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' };
+      const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers,
+        body: JSON.stringify({ model: process.env.QUOTE_MODEL || 'claude-sonnet-4-6', max_tokens: 900, messages: [{ role: 'user', content: [block, { type: 'text', text: prompt }] }] }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(`Claude error ${r.status}: ${(d.error && d.error.message) || ''}`);
+      const text = ((d.content || []).find(x => x.type === 'text') || {}).text || '';
+      const m = text.replace(/```json|```/g, '').match(/\{[\s\S]*\}/);
+      if (!m) throw new Error('Could not read the PO. Check the file and try again.');
+      return json(200, { ok: true, po: JSON.parse(m[0]) });
+    } catch (e) { return json(500, { error: e.message }); }
+  }
+
+  // po_approve: after staff confirm, mark the estimate Accepted with "PO # <number>" first in its customer note,
+  // accepted by the PO signer on the PO date; then email Ali, Matt and Jake the estimate PDF (no PO number in the email).
+  if (b.action === 'po_approve') {
+    if (!QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed.' });
+    try {
+      const poNum = String(b.po_number || '').trim().replace(/^p\.?\s*o\.?\s*#?\s*/i, '');
+      if (!poNum) throw new Error('Enter the PO number.');
+      const qb = await qbAuth();
+      const est = b.qb_estimate_id ? (await qb.call(`estimate/${b.qb_estimate_id}`)).Estimate : await findEstimate(qb, b.estimate_number);
+      const total = Number(est.TotalAmt || 0), poTotal = Number(b.po_total);
+      if (!b.override_total && isFinite(poTotal) && poTotal > 0 && Math.abs(poTotal - total) > 0.005)
+        return json(409, { error: `The PO total ($${poTotal.toFixed(2)}) doesn't match estimate #${est.DocNumber} ($${total.toFixed(2)}). Nothing was changed.` });
+      const memo = String((est.CustomerMemo && est.CustomerMemo.value) || '');
+      const existing = (memo.match(/PO\s*#\s*([\w-]+)/i) || [])[1];
+      if (est.TxnStatus === 'Accepted' && existing && existing !== poNum && !b.override_po)
+        return json(409, { error: `Estimate #${est.DocNumber} is already Accepted with PO # ${existing}. Nothing was changed.` });
+      const newMemo = existing === poNum ? memo : [`PO # ${poNum}`, memo.replace(/^PO\s*#\s*[\w-]+\s*\n?/i, '').trim()].filter(Boolean).join('\n');
+      const by = [String(b.signer_name || '').trim(), String(b.signer_title || '').trim()].filter(Boolean).join(', ').slice(0, 100);
+      const up = { Id: est.Id, SyncToken: est.SyncToken, sparse: true, CustomerMemo: { value: newMemo.slice(0, 1000) } };
+      if (est.TxnStatus !== 'Closed') Object.assign(up, { TxnStatus: 'Accepted', AcceptedDate: /^\d{4}-\d{2}-\d{2}$/.test(b.po_date || '') ? b.po_date : new Date().toISOString().slice(0, 10), ...(by ? { AcceptedBy: by } : {}) });
+      await qb.call('estimate', { method: 'POST', body: JSON.stringify(up) });
+      const after = (await qb.call(`estimate/${est.Id}`)).Estimate;   // read back
+      const ok = /PO\s*#\s*/.test((after.CustomerMemo && after.CustomerMemo.value) || '') && (after.TxnStatus === 'Accepted' || after.TxnStatus === 'Closed');
+      // tracker: PO #, Approved
+      const pre = ['Not Started', 'Needs Site Visit', 'Needs Shot', 'Estimate In Progress', 'Estimate Distributed Internally', 'Estimate Sent', 'On Hold', 'Declined'];
+      const rows = await sb('GET', `estimates?or=(qb_estimate_id.eq.${est.Id},qb_estimate_number.eq.${encodeURIComponent(est.DocNumber || '-')})&select=id,status`).catch(() => []);
+      for (const r of rows || []) await sb('PATCH', `estimates?id=eq.${r.id}`, { po_number: poNum, qb_status: after.TxnStatus, accepted_date: after.AcceptedDate || null, ...(pre.includes(r.status) ? { status: 'Approved' } : {}) }, 'return=minimal');
+      // email the team with the estimate PDF
+      let emailed = '', emailNote = '';
+      if (b.email_team !== false) {
+        const g = await gmailAccess(user.email);
+        if (!g) emailNote = 'The team email was not sent: connect your Gmail in the tracker first.';
+        else {
+          const pdfRes = await qb.call(`estimate/${est.Id}/pdf`, { raw: true, headers: { Accept: 'application/pdf' } });
+          const pdf = Buffer.from(await pdfRes.arrayBuffer());
+          const client = (est.CustomerRef && est.CustomerRef.name) || 'Client';
+          const title = String(b.quote_title || '').trim();
+          const to = ['gibson@fieldsourceohio.com', 'matt@fieldsourceohio.com', 'jake@fieldsourceohio.com'];
+          const body = `Ali, Matt and Jake,\n\n${client} approved Estimate #${est.DocNumber}${title ? ', ' + title + ',' : ''} for $${total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. The quote is attached. The PO number is in the notes on the estimate in QuickBooks.\n`;
+          const raw = mimeMessage({ from: g.from, to: to.join(', '), cc: '', subject: `PO Approved - ${client} - Estimate #${est.DocNumber}`, body, filename: `Field Source Estimate ${est.DocNumber}.pdf`, pdf });
+          const gr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: `Bearer ${g.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
+          if (gr.ok) emailed = to.join(', '); else emailNote = `The team email failed (${gr.status}).`;
+        }
+      }
+      await logActivity('po_approved', user, { estimate: est.DocNumber, qb_estimate_id: String(est.Id), po_number: poNum, accepted_by: by, total, emailed });
+      return json(200, { ok, doc_number: est.DocNumber, total, qb_status: after.TxnStatus, memo_first_line: ((after.CustomerMemo && after.CustomerMemo.value) || '').split('\n')[0], emailed, email_note: emailNote });
+    } catch (e) { return json(500, { error: e.message }); }
+  }
   if (b.action === 'estimate_status') {
     if (!QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed.' });
     try {

@@ -24,6 +24,8 @@ async function setSetting(key, value) { await sb('POST', 'app_settings?on_confli
 async function getAccessToken() {
   const refreshToken = await getSetting('QB_REFRESH_TOKEN');
   if (!refreshToken) throw new Error('QuickBooks is not connected.');
+  // Reuse the saved QuickBooks access token (good for an hour) instead of refreshing on every run
+  try { const _c = JSON.parse((await getSetting('QB_ACCESS_TOKEN')) || 'null'); if (_c && _c.t && _c.exp > Date.now() + 5 * 60 * 1000) return _c.t; } catch (e) {}
   const creds = Buffer.from(`${process.env.QB_CLIENT_ID}:${process.env.QB_CLIENT_SECRET}`).toString('base64');
   const r = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
     method: 'POST', headers: { Authorization: `Basic ${creds}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
@@ -32,6 +34,7 @@ async function getAccessToken() {
   const t = await r.json().catch(() => ({}));
   if (!t.access_token) throw new Error(`QuickBooks refused the saved token (${r.status} ${t.error || ''}).`);
   if (t.refresh_token && t.refresh_token !== refreshToken) await setSetting('QB_REFRESH_TOKEN', t.refresh_token);
+  await setSetting('QB_ACCESS_TOKEN', JSON.stringify({ t: t.access_token, exp: Date.now() + (Number(t.expires_in) || 3600) * 1000 })).catch(() => {});
   return t.access_token;
 }
 async function qbQuery(token, realm, sql) {

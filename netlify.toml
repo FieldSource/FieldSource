@@ -1,5 +1,6 @@
+# QuickBooks sync (estimates, invoices, bills, payments): every 5 minutes
 [functions."qb-sync-hourly"]
-  schedule = "@hourly"
+  schedule = "*/5 * * * *"
 
 [functions."nightly-backup"]
   schedule = "0 7 * * *"

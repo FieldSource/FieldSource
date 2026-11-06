@@ -83,9 +83,10 @@ async function qbItems() {
 const SYSTEM = `You draft customer-facing quotes for Field Source, an Ohio sports field construction, renovation, maintenance and consulting company.
 
 Return ONLY a JSON object, no other text, in exactly this shape:
-{"client":"","contact_name":"","contact_title":"","title":"","subtitle":"","service_period":"","intro":"","goal":"",
+{"client":"","contact_name":"","contact_title":"","taxable":null,"title":"","subtitle":"","service_period":"","intro":"","goal":"",
  "items":[{"title":"","qb_item_id":"","qb_item_name":"","qty":1,"unit_price":null,"price_source":"","bullets":[""]}],
- "notes":[""],"flags":[""]}
+ "notes":[""],"flags":[""],
+ "questions":[{"id":"q1","ask":"","about":"qty","line":0,"kind":"number","unit":""}]}
 
 PRICING RULES (most important):
 - If the staff member states a price for a line, use it exactly and set price_source to "staff".
@@ -104,6 +105,16 @@ WRITING RULES:
 - notes: exclusions and assumptions only if the staff member gave them or they follow directly from the scope. Add a flag naming every note you added yourself so staff can strike it.
 - Do not add payment terms or an expiration date unless given.
 - client: use the organization's proper name; prefer a name from the KNOWN CLIENTS list when it clearly matches.
+
+FOLLOW-UP QUESTIONS (one short round, like asking the staff member before writing):
+- After drafting, list in "questions" only what the quote needs that is missing from the request and cannot be looked up. Most requests need 0 to 4 questions; never more than 6.
+- Ask about: a line's quantity and unit when not given (unless the line is naturally 1: a lump sum, mobilization, a single visit); a line's unit price when the staff member gave none AND no QuickBooks item price fits; the dates or service period if none were given; the contact's title when a contact is named without one; whether the work is taxable, unless the request says.
+- Do NOT ask for: anything the request already answers; the client's address or email (looked up separately); prices that came from QuickBooks; wording, notes or extras.
+- Each question covers one thing, in plain words ("How many tons of topdressing sand?"). Fields: "about" is one of qty, unit_price, service_period, contact_title, taxable, other; "line" is the 0-based index into items for line questions, otherwise null; "kind" is number, text or yesno; "unit" is the unit for numbers (tons, acres, visits, SF), else "".
+- Still return a complete draft: use qty 1 and unit_price null where unknown, and keep the matching flag, so staff can skip the questions.
+
+ANSWERS: when the CHANGE REQUEST starts with "ANSWERS TO YOUR QUESTIONS", apply each answer to the draft (quantities, prices given by staff with price_source "staff", service_period, contact_title, taxable), clear the flags those answers resolve, keep everything else, and return "questions": [] (never ask again).
+Return "taxable": true or false at the top level when known, else null.
 
 When given a CURRENT DRAFT and a CHANGE REQUEST, apply only the requested change and return the full revised draft. Keep every price as it is unless the change request explicitly changes it. Clear flags that the change resolves.`;
 
@@ -150,6 +161,9 @@ exports.handler = async function (event) {
         (out.flags = out.flags || []).push(`"${it.title}": price reset to the QuickBooks price for ${qi.name} ($${qi.price}).`);
       }
     });
+    out.questions = (Array.isArray(out.questions) ? out.questions : []).filter(q => q && q.ask).slice(0, 6)
+      .map((q, i) => ({ id: q.id || 'q' + (i + 1), ask: String(q.ask).slice(0, 200), about: q.about || 'other', line: Number.isInteger(q.line) ? q.line : null, kind: ['number', 'text', 'yesno'].includes(q.kind) ? q.kind : 'text', unit: q.unit || '' }));
+    if (change && /^ANSWERS TO YOUR QUESTIONS/i.test(change)) out.questions = [];
     return json(200, { draft: out, items });
   } catch (e) {
     return json(500, { error: e.message });

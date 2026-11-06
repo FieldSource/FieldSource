@@ -202,6 +202,7 @@ async function syncEstimatesTab(estimates, now) {
   if (nums.length) ((await sb('GET', `estimates?qb_estimate_number=in.(${nums.join(',')})&select=id,qb_estimate_number,qb_estimate_id,status`)) || []).forEach(r => byNum.set(String(r.qb_estimate_number), r));
   ((await sb('GET', `estimates?qb_estimate_id=in.(${ids.join(',')})&select=id,qb_estimate_number,qb_estimate_id,status`)) || []).forEach(r => byId.set(String(r.qb_estimate_id), r));
   const cutoff = new Date(Date.now() - 180 * 864e5).toISOString().slice(0, 10);
+  const yearAgo = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10), monthAgo = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
   let updated = 0;
   const adds = [];
   await Promise.all(usable.map(async e => {
@@ -222,7 +223,10 @@ async function syncEstimatesTab(estimates, now) {
       if (qbStatus === 'Rejected' && PRE_APPROVAL.includes(ex.status)) fields.status = 'Declined';   // rejected in QuickBooks -> Declined in the tracker
       await sb('PATCH', `estimates?id=eq.${ex.id}`, fields, 'return=minimal');
       updated++;
-    } else if ((qbStatus === 'Pending' || qbStatus === 'Accepted') && (e.TxnDate || '') >= cutoff) {
+    } else if ((qbStatus === 'Pending' && (e.TxnDate || '') >= cutoff) ||
+               // accepted estimates come in however old the estimate date is: accepted in the last year, or just changed in QuickBooks
+               (qbStatus === 'Accepted' && ((e.TxnDate || '') >= cutoff || (e.AcceptedDate || '') >= yearAgo ||
+                 String((e.MetaData && e.MetaData.LastUpdatedTime) || '').slice(0, 10) >= monthAgo))) {
       const first = ((e.Line || []).find(l => l.DetailType === 'SalesItemLineDetail' && l.Description) || {}).Description || '';
       const firstLine = first.split('\n')[0].replace(/\s+/g, ' ').trim().slice(0, 90);
       adds.push({

@@ -6882,7 +6882,7 @@ async function renderEstimateBilling(e){
     ${b.inv.length?`<div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:10px"><table style="width:100%;border-collapse:collapse">
       <thead><tr><th style="${th}">Invoice</th><th style="${th}">Date</th><th style="${th}">Due</th><th style="${th};text-align:right">Amount</th><th style="${th};text-align:right">Balance</th><th style="${th}">Status</th><th style="${th}"></th></tr></thead>
       <tbody>${b.inv.sort((x,y)=>(x.txn_date||'').localeCompare(y.txn_date||'')).map(i=>`<tr>
-        <td style="${td}"><b>#${arEsc(i.doc_number)}</b>${i._unsynced?'':`<div style="font-size:11px"><a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${i.qb_invoice_id}','${arEsc(i.doc_number)}')">View</a>${canBillInvoices()&&Number(i.balance)>0.005?` · <a style="cursor:pointer;color:var(--green-dark)" onclick="openSendInvoice('${i.qb_invoice_id}',null,${invDaysPast(i)>0})">${i.email_status==='EmailSent'?'Send again':'Send'}</a>`:''}</div>`}</td><td style="${td}">${arFmt(i.txn_date)}</td><td style="${td}">${arFmt(i.due_date)}</td>
+        <td style="${td}"><b>#${arEsc(i.doc_number)}</b>${i._unsynced?'':`<div style="font-size:11px"><a style="cursor:pointer;color:var(--green-dark)" onclick="viewInvoicePdf('${i.qb_invoice_id}','${arEsc(i.doc_number)}')">View</a>${canBillInvoices()&&Number(i.balance)>0.005?` · <a style="cursor:pointer;color:var(--green-dark)" onclick="openSendInvoice('${i.qb_invoice_id}',null,${invDaysPast(i)>0})">${i.email_status==='EmailSent'?'Send again':'Send'}</a>`:''}${canBillInvoices()&&Number(i.total)>0&&Math.abs(Number(i.balance)-Number(i.total))<0.005?` · <a style="cursor:pointer;color:#b91c1c" onclick="openVoidInvoice('${i.qb_invoice_id}')">Void / delete</a>`:''}</div>`}</td><td style="${td}">${arFmt(i.txn_date)}</td><td style="${td}">${arFmt(i.due_date)}</td>
         <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right">${arMoney(i.balance)}</td><td style="${td}">${invChip(i)}</td>
         <td style="${td};font-size:11px;color:var(--text-3)">${manual.has(i.qb_invoice_id)?`linked by hand · <a style="cursor:pointer;color:#b91c1c" onclick="unlinkInvoice('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">unlink</a>`:i._via?`${i._via==='auto'?'matched automatically'+(i._how?' ('+arEsc(i._how)+')':''):'matched by Billing Tracker'}${i._unsynced?'':` · <a style="cursor:pointer;color:#b91c1c" onclick="notThisEstimate('${i.qb_invoice_id}','${arEsc(e.qbNumber)}')">not this estimate</a>`}`:'linked in QuickBooks'}</td></tr>`).join('')}
       </tbody></table></div>
@@ -7173,7 +7173,8 @@ function renderReceivablesInner(){
             <td style="${td};text-align:right">${arMoney(i.total)}</td><td style="${td};text-align:right;font-weight:600">${arMoney(i.balance)}</td>
             <td style="${td}">${invChip(i)}<div style="font-size:11px;margin-top:3px;color:${i.email_status==='EmailSent'?'var(--text-3)':'#b45309'}">${i.email_status==='EmailSent'?'✉ emailed':'not emailed'}</div></td>
             <td style="${td};white-space:nowrap"><button class="site-chip" style="padding:2px 8px;font-size:11px" onclick="viewInvoicePdf('${i.qb_invoice_id}','${arEsc(i.doc_number)}')">📄 View</button>
-              ${canBillInvoices()?`<button class="site-chip${i.email_status!=='EmailSent'?' active':''}" style="padding:2px 8px;font-size:11px" onclick="openSendInvoice('${i.qb_invoice_id}',null,${invDaysPast(i)>0})">✉ ${i.email_status!=='EmailSent'?'Send':invDaysPast(i)>0?'Reminder':'Send again'}</button>`:''}</td></tr>`; }).join('') || `<tr><td colspan="7" style="${td};color:var(--text-3)">Nothing here${arOverdueOnly?' that’s overdue':''}.</td></tr>`}
+              ${canBillInvoices()?`<button class="site-chip${i.email_status!=='EmailSent'?' active':''}" style="padding:2px 8px;font-size:11px" onclick="openSendInvoice('${i.qb_invoice_id}',null,${invDaysPast(i)>0})">✉ ${i.email_status!=='EmailSent'?'Send':invDaysPast(i)>0?'Reminder':'Send again'}</button>`:''}
+              ${canBillInvoices()&&Math.abs(Number(i.balance)-Number(i.total))<0.005?`<button class="site-chip" style="padding:2px 8px;font-size:11px;color:#b91c1c" title="Void or delete this invoice in QuickBooks" onclick="openVoidInvoice('${i.qb_invoice_id}')">Void / delete</button>`:''}</td></tr>`; }).join('') || `<tr><td colspan="7" style="${td};color:var(--text-3)">Nothing here${arOverdueOnly?' that’s overdue':''}.</td></tr>`}
         </tbody></table></div>
         <div style="padding:8px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border)">${list.length} invoice${list.length===1?'':'s'} · ${arMoney(sum(list))} owed${arCustomer?` · <a style="cursor:pointer;color:var(--green-dark)" onclick="arCustomer='';renderReceivables()">show all customers</a>`:''}</div>
       </div>
@@ -7182,6 +7183,47 @@ function renderReceivablesInner(){
 // =================== END QUICKBOOKS INVOICES ===================
 // ===================== BUILD & SEND INVOICES =====================
 const INVOICE_BILLERS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+// ---- Void or delete a customer invoice (QuickBooks) ----
+function openVoidInvoice(id){
+  const i = (qbInvoices||[]).find(x=>String(x.qb_invoice_id)===String(id)); if(!i) return;
+  const m = n=>'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2});
+  billOverlay('void-overlay', `
+    <div class="sheet-title" style="margin-bottom:2px">Void or delete invoice #${arEsc(i.doc_number)}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">${arEsc(i.customer_name)} · ${m(i.total)} · dated ${arFmt(i.txn_date)}${i.email_status==='EmailSent'?' · <b style="color:#b45309">already emailed to the customer</b>':''}</div>
+    <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:6px 0;cursor:pointer"><input type="radio" name="void-how" value="void" checked style="margin-top:3px">
+      <span><b>Void</b> (recommended): the invoice stays in QuickBooks as #${arEsc(i.doc_number)} at $0, so there's a record. Use it for anything the customer may have seen.</span></label>
+    <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:6px 0;cursor:pointer"><input type="radio" name="void-how" value="delete" style="margin-top:3px">
+      <span><b>Delete</b>: removes it from QuickBooks completely. For mistakes nobody saw (a duplicate, the wrong customer).</span></label>
+    <div style="${billLbl};margin-top:10px">Reason</div>
+    <input id="void-reason" style="${billInput}" placeholder="e.g. duplicate of #2296; billed to the wrong customer">
+    <div style="font-size:11px;color:var(--text-3);margin-top:6px">Invoices with a payment applied can't be voided or deleted here; remove the payment in QuickBooks first.</div>
+    <div id="void-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;margin-top:14px">
+      <button class="btn-cancel" onclick="document.getElementById('void-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="void-go" style="background:#b91c1c" onclick="voidInvoiceGo('${i.qb_invoice_id}')">Continue…</button>
+    </div>`, 560);
+}
+async function voidInvoiceGo(id){
+  const i = (qbInvoices||[]).find(x=>String(x.qb_invoice_id)===String(id)); if(!i) return;
+  const how = (document.querySelector('input[name="void-how"]:checked')||{}).value || 'void';
+  const reason = (document.getElementById('void-reason').value||'').trim(), btn = document.getElementById('void-go'), err = document.getElementById('void-err');
+  if(!reason){ err.textContent = 'Give a short reason. It goes in the log (and on the voided invoice in QuickBooks).'; return; }
+  if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent = `Yes, ${how==='void'?'void':'permanently delete'} invoice #${i.doc_number} (${arMoney(i.total)})`; return; }
+  btn.disabled = true; btn.textContent = how==='void' ? 'Voiding…' : 'Deleting…';
+  try{
+    const r = await invAction({ action: how==='void' ? 'invoice_void' : 'invoice_delete', qb_invoice_id: id, reason });
+    if(how==='delete') qbInvoices = qbInvoices.filter(x=>String(x.qb_invoice_id)!==String(id));
+    else { i.balance = 0; i.total = 0; }
+    document.getElementById('void-overlay').remove();
+    if(view==='receivables') renderReceivables();
+    // refresh an open estimate's Billing section
+    if(document.getElementById('est-billing-slot') && typeof renderEstimateBilling==='function'){
+      const nums = new Set([...(i.linked_estimate_numbers||[]), ...(typeof invLinks!=='undefined'?invLinks:[]).filter(l=>String(l.qb_invoice_id)===String(id)).map(l=>l.estimate_number)]);
+      const e = (estimates||[]).find(x=>nums.has(String(x.qbNumber))); if(e) renderEstimateBilling(e);
+    }
+    alert(`✓ Invoice #${r.doc_number} ${r.action} in QuickBooks.${r.already?' (It was already voided.)':''}`);
+  }catch(x){ err.textContent = 'Not done: '+x.message; btn.disabled = false; btn.dataset.armed=''; btn.textContent = 'Continue…'; }
+}
 function canBillInvoices(){ return INVOICE_BILLERS.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
 async function invAction(body){
   if(typeof ensureFreshToken==='function') await ensureFreshToken();

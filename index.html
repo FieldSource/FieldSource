@@ -6358,7 +6358,7 @@ async function loadEstimates(){
       type: r.type||'Construction',
       scope: r.scope||'',
       days: r.days||'',
-      status: r.status||'Not Started',
+      status: estNormStatus(r.status),
       notes: r.notes||'',
       proposalNeeded: r.proposal_needed||false,
       tips: r.tips||false,
@@ -6414,7 +6414,10 @@ async function seedEstimates(){
   await loadEstimates();
 }
 
-const ESTIMATE_STATUSES = ['Not Started','Needs Site Visit','Needs Shot','Estimate In Progress','Estimate Distributed Internally','Estimate Sent','Approved','Scheduled','In Progress','Completed','On Hold','Declined'];
+const ESTIMATE_STATUSES = ['Not Started','Estimate Sent','Approved','Declined'];
+// Older statuses fold into the four: in-between work -> Not Started, job stages -> Approved, On Hold -> Declined (reopen later)
+function estNormStatus(st){ st = st||'Not Started'; if(ESTIMATE_STATUSES.includes(st)) return st;
+  if(['Scheduled','In Progress','Completed'].includes(st)) return 'Approved'; if(st==='On Hold') return 'Declined'; return 'Not Started'; }
 const ESTIMATE_TYPES = ['Construction','Maintenance','Consulting'];
 const ESTIMATE_STATUS_COLORS = {
   'Not Started':          {bg:'#f1f5f9',text:'#475569'},
@@ -6865,9 +6868,10 @@ async function renderEstimateBilling(e){
   slot.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin:18px 0 6px">
       <div style="font-size:13px;font-weight:700;color:var(--text)">Billing</div>
-      <span style="display:flex;gap:6px">${canBillInvoices()?`<button onclick="openInvoiceBuilder('${arEsc(e.qbNumber)}')" class="site-chip active" style="padding:4px 10px;font-size:12px">🧾 Create invoice</button>`:''}
+      <span style="display:flex;gap:6px"><button onclick="openReadyToBill('${e.id}')" class="site-chip" style="padding:4px 10px;font-size:12px" title="Tell Ali this is ready to bill, with notes">💲 Ready to bill</button>${canBillInvoices()?`<button onclick="openInvoiceBuilder('${arEsc(e.qbNumber)}')" class="site-chip active" style="padding:4px 10px;font-size:12px">🧾 Create invoice</button>`:''}
       <button onclick="openLinkInvoices('${arEsc(e.qbNumber)}','${arEsc(e.client||'').replace(/'/g,"\\'")}')" class="site-chip" style="padding:4px 10px;font-size:12px">+ Link an invoice</button></span>
     </div>
+    <div id="est-rtb-slot">${(()=>{ setTimeout(()=>estRtbRender(e),0); return ''; })()}</div>
     ${b.contract?`<div style="height:8px;background:var(--border);border-radius:4px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>`:''}
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       ${card('Billed', arMoney(b.billed), b.contract?`${Math.round(b.pct)}% of ${arMoney0(b.contract)}`:'', over?'#dc2626':null)}
@@ -6987,7 +6991,7 @@ function arContractsHtml(){
       <th style="${th}">Estimate</th><th style="${th};text-align:right">Contract</th><th style="${th};width:150px">Billed</th><th style="${th};text-align:right">Collected</th><th style="${th};text-align:right">Owed</th><th style="${th};text-align:right">Left to bill</th></tr></thead><tbody>
       ${rows.map(({e,b})=>{ const over = b.contract && b.billed > b.contract + 0.5; return `<tr style="cursor:pointer" onclick="openEstimateDetail('${e.id}')">
         <td style="${td}"><b>#${arEsc(e.qbNumber)}</b> · ${arEsc(e.projectName)}<div style="font-size:11px;color:var(--text-3)">${arEsc(e.client||'')}${e.acceptedDate?' · accepted '+arFmt(e.acceptedDate):''}</div>
-          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`<a style="cursor:pointer;color:var(--text-2)" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 ${arEsc(e.pmName||e.pmEmail)}${e.apProject?' · '+arEsc(e.apProject):''}</a>${e.poNumber?` · <span style="color:var(--text-2)">PO ${arEsc(e.poNumber)}</span>`:''}`:`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Set up job</a>`}</div></td>
+          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`<a style="cursor:pointer;color:var(--text-2)" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 ${arEsc(e.pmName||e.pmEmail)}${e.apProject?' · '+arEsc(e.apProject):''}</a>${e.poNumber?` · <span style="color:var(--text-2)">PO ${arEsc(e.poNumber)}</span>`:''}` + (billReqFor(e.qbNumber).length ? ` · <span style="color:#166534;font-weight:600">💲 ready to bill</span>` : ` · <a style="cursor:pointer;color:var(--green-dark)" onclick="event.stopPropagation();openReadyToBill('${e.id}')">💲 Ready to bill</a>`):`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Set up job</a>`}</div></td>
         <td style="${td};text-align:right">${arMoney0(b.contract)}</td>
         <td style="${td}"><div style="font-size:12px;${over?'color:#dc2626;font-weight:600':''}">${arMoney0(b.billed)} <span style="color:var(--text-3)">${b.contract?Math.round(b.pct)+'%':''}</span></div>
           <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:3px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>
@@ -7068,14 +7072,15 @@ let arCustomer = '', arOverdueOnly = false, arSort = 'days', arNotSentOnly = fal
 // Page-wide filters: view, client (QuickBooks and tracker names matched to one client), PM, search, aging bucket
 let arView = (()=>{ try{ return localStorage.getItem('ar_view') || 'all'; }catch(e){ return 'all'; } })();
 let arClient = '', arPm = '', arQuery = '', arBucket = -1;
-const AR_VIEWS = [['all','Everything'],['contracts','Contracts to bill'],['invoices','Open invoices'],['collections','Collections']];
+const AR_VIEWS = [['ready','Ready to bill'],['all','Everything'],['contracts','Contracts to bill'],['invoices','Open invoices'],['collections','Collections']];
 function arSetView(v){ arView = v; try{ localStorage.setItem('ar_view', v); }catch(e){} if(v==='collections'){ arOverdueOnly = true; arSort = 'days'; } renderReceivables(); }
 function arClientKey(name){ name = String(name||'').trim(); if(!name) return ''; try{ return (typeof matchTrackerClient==='function' && matchTrackerClient({ client:name })) || name; }catch(e){ return name; } }
 function arTextHit(...parts){ const q = arQuery.trim().toLowerCase(); return !q || parts.some(p=>String(p||'').toLowerCase().includes(q)); }
 function arFilterBarHtml(clients, pms){
   const sel = 'font-size:13px;padding:6px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-family:inherit';
   const active = arClient || arPm || arQuery || arBucket>=0;
-  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${AR_VIEWS.map(([k,l])=>`<button class="site-chip${arView===k?' active':''}" style="padding:6px 14px;font-size:13px" onclick="arSetView('${k}')">${l}</button>`).join('')}</div>
+  const nReady = (typeof billRequests!=='undefined'?billRequests:[]).filter(r=>r.status==='ready').length;
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${AR_VIEWS.map(([k,l])=>`<button class="site-chip${arView===k?' active':''}" style="padding:6px 14px;font-size:13px" onclick="arSetView('${k}')">${l}${k==='ready'&&nReady?` <span style="background:#16a34a;color:#fff;border-radius:99px;padding:0 7px;font-size:11px;margin-left:2px">${nReady}</span>`:''}</button>`).join('')}</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">
       <span style="font-size:12px;font-weight:700;color:var(--text-2)">Filter</span>
       <select style="${sel}" onchange="arClient=this.value;renderReceivables()"><option value="">All clients</option>${clients.map(c=>`<option value="${arEsc(c)}"${arClient===c?' selected':''}>${arEsc(c)}</option>`).join('')}</select>
@@ -7136,12 +7141,14 @@ function renderReceivablesInner(){
     ${qbInvLoadError?`<div style="padding:10px 14px;background:#fee2e2;border:1px solid #fca5a5;border-radius:var(--radius);font-size:13px;margin-bottom:12px;color:#991b1b">Couldn't load invoices: ${arEsc(qbInvLoadError).slice(0,200)}</div>`:''}
     ${!qbInvoices.length?`<div style="padding:12px 14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius);font-size:13px;margin-bottom:12px">No QuickBooks invoices have come in yet, so billed amounts show $0. Once <b>qb-invoices-setup.sql</b> has been run in Supabase and the invoice sync has run (open <code>/.netlify/functions/qb-invoice-sync</code> until it says <code>"hasMore":false</code>), refresh this page.</div>${arContractsHtml()}`:`
     ${arFilterBarHtml(allClients, allPms)}
-    ${arView==='contracts' ? '' : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px">
+    ${arView==='ready' ? (()=>{ const list = billRequests.filter(r=>r.status==='ready' && arTextHit(r.estimate_number, r.client, r.project, r.notes) && (!arClient || arClientKey(r.client)===arClient));
+        return `<div style="max-width:760px">${list.length ? billReqCardsHtml(list) : `<div style="padding:24px;text-align:center;color:var(--text-3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">Nothing waiting. When a PM or Ryan clicks <b>💲 Ready to bill</b> on an accepted estimate, it shows up here.</div>`}</div>`; })() : ''}
+    ${arView==='ready' || arView==='contracts' ? '' : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px">
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid var(--green)"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">Total owed (open invoices)</div><div style="font-size:20px;font-weight:700">${arMoney0(sum(openC))}</div><div style="font-size:11px;color:var(--text-3)">${openC.length} open invoice${openC.length===1?'':'s'}${openC.length!==open.length?` (of ${open.length})`:''}</div></div>
       ${buckets.map(([l,f],k)=>{ const v = sum(openC.filter(f)); return `<div onclick="arBucket=arBucket===${k}?-1:${k};if(arBucket>=0&&arView==='contracts')arView='invoices';renderReceivables()" title="Show just these invoices" style="cursor:pointer;background:var(--surface);border:1px solid ${arBucket===k?'var(--green)':'var(--border)'};${arBucket===k?'box-shadow:0 0 0 1px var(--green);':''}border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${['#3b82f6','#f59e0b','#f97316','#ef4444','#991b1b'][k]}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${l}${k?' days late':''}</div><div style="font-size:18px;font-weight:700;color:${v&&k?'#b91c1c':'var(--text)'}">${arMoney0(v)}</div><div style="font-size:11px;color:var(--text-3)">${openC.filter(f).length} invoices</div></div>`; }).join('')}
     </div>`}
     ${arView==='all' || arView==='contracts' ? arContractsHtml() : ''}
-    ${arView==='contracts' ? '' : `<div style="display:grid;grid-template-columns:1fr;gap:14px;align-items:start" class="ar-grid">
+    ${arView==='contracts' || arView==='ready' ? '' : `<div style="display:grid;grid-template-columns:1fr;gap:14px;align-items:start" class="ar-grid">
       ${arView==='invoices' ? '' : `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
         <div style="padding:10px 12px;font-weight:700">By customer</div>
         <table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Customer</th><th style="${th};text-align:right">Owed</th></tr></thead><tbody>
@@ -7247,8 +7254,10 @@ function renderInvoiceBuilder(){
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:6px 8px;text-align:left;background:var(--accent)';
   const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border);vertical-align:top';
   const modeLbl = { pct:'% complete to date', qty:'Qty this invoice', amt:'$ this invoice' }[st.mode];
+  const rq = billPendingRequest && String(billPendingRequest.estimate_number)===String(p.estimate.number) ? billPendingRequest : null;
   const html = `
     <div class="sheet-title" style="margin-bottom:2px">Create invoice</div>
+    ${rq?`<div style="margin:6px 0 10px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px">💲 <b>Ready to bill</b> from ${arEsc(rq.requested_name||rq.requested_by)}: <b>${arEsc(billReqWhat(rq))}</b>${rq.notes?`<div style="margin-top:4px;white-space:pre-wrap">${arEsc(rq.notes)}</div>`:''}</div>`:''}
     <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Estimate #${arEsc(p.estimate.number)} · ${arEsc(p.estimate.customer)} · contract ${arMoney(contract)} · billed so far ${arMoney(billedSoFar)}${st.unsyncedBilled?` (incl. ${arMoney(st.unsyncedBilled)} not synced line by line)`:''}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px">
       <div><div style="${billLbl}">Invoice #</div><input style="${billInput}" value="${arEsc(st.doc)}" oninput="billState.doc=this.value" placeholder="Next number"></div>
@@ -7322,6 +7331,13 @@ async function billCreate(){
     if(view==='receivables') renderReceivables(); else if(view==='estimates') renderEstimates();
     const e = estimates.find(x=>String(x.qbNumber)===String(st.estNum)); if(e && document.getElementById('est-billing-slot')) renderEstimateBilling(e);
     if(st.e){ st.e.qbStatus = st.e.qbStatus==='Closed' ? 'Closed' : 'Accepted'; if(['Not Started','Needs Site Visit','Needs Shot','Estimate In Progress','Estimate Distributed Internally','Estimate Sent','On Hold','Declined'].includes(st.e.status)) st.e.status = 'Approved'; }
+    if(billPendingRequest && String(billPendingRequest.estimate_number)===String(st.estNum)){
+      const rq = billPendingRequest; rq._invoices = [rq._invoices, res.doc_number].filter(Boolean).join(', ');
+      if(confirm(`Invoice #${res.doc_number} created.\n\nMark the Ready to bill request done?\n\nChoose Cancel to keep it open if there's another invoice to make (for example, a split between the school and the boosters).`)){
+        try{ await sbFetch('PATCH', `/rest/v1/bill_requests?id=eq.${rq.id}`, { status:'done', done_by:(currentUser&&currentUser.email)||'', done_at:new Date().toISOString(), invoice_numbers: rq._invoices });
+             billRequests = billRequests.filter(x=>x.id!==rq.id); billPendingRequest = null; updateApprovalBell(); }catch(x){ alert('Could not close the request: '+x.message); }
+      }
+    }
     openSendInvoice(res.qb_invoice_id, `Invoice #${res.doc_number} for ${arMoney(res.total)} was created in QuickBooks${res.po_on?`, with PO ${arEsc(st.po.replace(/^p\.?\s*o\.?\s*#?\s*/i,''))} on its own line at the end of the description${res.po_on==='line+field'?' (and in the P.O. Number field)':''}`:''}.`);
   }catch(err){ const el = document.getElementById('bill-c-err'); if(el) el.textContent = 'Could not create: ' + err.message; btn.disabled = false; btn.textContent = 'Create invoice'; }
 }
@@ -7467,6 +7483,109 @@ async function viewInvoicePdf(qbInvoiceId, doc){
   }catch(err){ billOverlay('pdf-overlay', `<div class="sheet-title">Couldn't load the PDF</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('pdf-overlay').remove()">Close</button></div>`, 520); }
 }
 // =================== END BUILD & SEND INVOICES ===================
+// ===================== READY TO BILL (PM / Ryan -> Ali) =====================
+// On an accepted estimate: "Ready to bill" with what to bill (everything left, or part of it) and notes
+// (e.g. "infield mix bills to the school, the rest to the athletic boosters"). Ali, Jake and Ryan see it
+// in the bell and in Billing & Collections -> Ready to bill, open the invoice builder from it, and mark it done.
+let billRequests = [], billReqLoaded = false;
+async function loadBillRequests(){
+  try{ billRequests = (await sbFetch('GET','/rest/v1/bill_requests?status=eq.ready&select=*&order=created_at.asc'))||[]; }
+  catch(e){ billRequests = []; console.warn('bill requests:', e.message); }
+  billReqLoaded = true;
+}
+function bellBillRequests(){
+  if(typeof canBillInvoices!=='function' || !canBillInvoices()) return [];
+  const me = ((currentUser&&currentUser.email)||'').toLowerCase();
+  return billRequests.filter(r=>r.status==='ready' && (me==='gibson@fieldsourceohio.com' || String(r.requested_by||'').toLowerCase()!==me));
+}
+function billReqWhat(r){
+  const m = n=>'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  return r.scope==='all' ? 'Everything left on the contract' : r.amount!=null ? `Part: ${m(r.amount)}` : r.percent!=null ? `Part: ${Number(r.percent)}% of the contract` : 'Part (see notes)';
+}
+function billReqFor(estNum){ return billRequests.filter(r=>r.status==='ready' && String(r.estimate_number)===String(estNum)); }
+function openReadyToBill(estId){
+  const e = estimates.find(x=>x.id===estId); if(!e) return;
+  const b = (typeof estimateBilling==='function') ? estimateBilling(e) : { remaining: Number(e.amount)||0 };
+  const open = billReqFor(e.qbNumber);
+  billOverlay('rtb-overlay', `
+    <div class="sheet-title" style="margin-bottom:2px">💲 Ready to bill · Estimate #${escEst(e.qbNumber)}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">${escEst(e.client||'')} · ${escEst(e.projectName||'')} · ${fmtEstMoney2(b.remaining)} left to bill</div>
+    ${open.length?`<div style="font-size:12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 10px;margin-bottom:10px">Already waiting on Ali: ${open.map(r=>`${escEst(billReqWhat(r))} (${escEst(r.requested_name||r.requested_by)}, ${new Date(r.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})})`).join(' · ')}</div>`:''}
+    <div style="${billLbl}">What to bill</div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0"><input type="radio" name="rtb-scope" value="all" checked onchange="document.getElementById('rtb-part').style.display='none'"> Everything left (${fmtEstMoney2(b.remaining)})</label>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:4px 0"><input type="radio" name="rtb-scope" value="part" onchange="document.getElementById('rtb-part').style.display='flex'"> Part of it</label>
+    <div id="rtb-part" style="display:none;gap:10px;align-items:center;margin:4px 0 0 24px;font-size:13px;flex-wrap:wrap">
+      $ <input id="rtb-amt" type="number" step="0.01" placeholder="amount" style="${billInput};width:130px"> or <input id="rtb-pct" type="number" step="1" placeholder="%" style="${billInput};width:80px"> % of the contract</div>
+    <div style="${billLbl};margin-top:12px">Notes for Ali</div>
+    <textarea id="rtb-notes" rows="4" style="${billInput};line-height:1.4" placeholder="What's done, what to bill, anything special. e.g. Infield mix bills to the school; the rest of the work bills to the athletic boosters."></textarea>
+    <div id="rtb-err" style="color:#b91c1c;font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;justify-content:space-between;margin-top:14px">
+      <button class="btn-cancel" onclick="document.getElementById('rtb-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="rtb-go" onclick="sendReadyToBill('${e.id}')">Send to Ali</button>
+    </div>`, 560);
+}
+async function sendReadyToBill(estId){
+  const e = estimates.find(x=>x.id===estId); if(!e) return;
+  const scope = (document.querySelector('input[name="rtb-scope"]:checked')||{}).value || 'all';
+  const amt = document.getElementById('rtb-amt').value, pct = document.getElementById('rtb-pct').value, notes = document.getElementById('rtb-notes').value.trim();
+  const err = document.getElementById('rtb-err');
+  if(scope==='part' && !amt && !pct && !notes){ err.textContent = 'For part of it, give an amount, a %, or say in the notes what to bill.'; return; }
+  const btn = document.getElementById('rtb-go'); btn.disabled = true; btn.textContent = 'Sending…';
+  try{
+    const me = (currentUser&&currentUser.email)||'';
+    const row = { estimate_id:String(e.id), estimate_number:String(e.qbNumber||''), client:e.client||'', project:e.projectName||'', scope,
+      amount: scope==='part' && amt ? Number(amt) : null, percent: scope==='part' && !amt && pct ? Number(pct) : null, notes,
+      requested_by: me, requested_name: (typeof getDisplayName==='function'?getDisplayName(me):me), status:'ready' };
+    const r = await sbFetch('POST','/rest/v1/bill_requests', row);
+    billRequests.push(...(r && r.length ? r : [{ ...row, id:'tmp'+Date.now(), created_at:new Date().toISOString() }]));
+    document.getElementById('rtb-overlay').remove();
+    updateApprovalBell();
+    if(view==='receivables') renderReceivables();
+    if(document.getElementById('est-rtb-slot')) estRtbRender(e);
+    if(typeof pmToast==='function') pmToast('💲 Sent to Ali'); else alert('Sent to Ali.');
+  }catch(x){ err.textContent = 'Could not send: '+x.message+(/bill_requests/.test(x.message)?' (run ready-to-bill.sql in Supabase first)':''); btn.disabled = false; btn.textContent = 'Send to Ali'; }
+}
+async function billReqClose(id, how){
+  const r = billRequests.find(x=>x.id===id); if(!r) return;
+  let inv = '';
+  if(how==='done'){ inv = prompt('Invoice number(s) for this request (optional):', r._invoices||'') ; if(inv===null) return; }
+  else if(!confirm('Cancel this Ready to bill request?')) return;
+  try{
+    await sbFetch('PATCH', `/rest/v1/bill_requests?id=eq.${id}`, { status: how==='done'?'done':'cancelled', done_by:(currentUser&&currentUser.email)||'', done_at:new Date().toISOString(), invoice_numbers: inv||'' });
+    billRequests = billRequests.filter(x=>x.id!==id);
+    updateApprovalBell(); if(view==='receivables') renderReceivables();
+  }catch(x){ alert('Could not update: '+x.message); }
+}
+let billPendingRequest = null;
+function billReqStartInvoice(id){
+  const r = billRequests.find(x=>x.id===id); if(!r) return;
+  billPendingRequest = r;
+  document.getElementById('approval-panel')?.remove();
+  openInvoiceBuilder(r.estimate_number);
+}
+function billReqCardsHtml(list, compact){
+  const m = n=>'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2});
+  return list.map(r=>{ const e = (typeof estimates!=='undefined'?estimates:[]).find(x=>String(x.qbNumber)===String(r.estimate_number));
+    return `<div style="background:var(--bg);border:1px solid var(--border);border-left:4px solid #16a34a;border-radius:var(--radius);padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div style="font-size:13px;font-weight:600">💲 Est #${escEst(r.estimate_number)} · ${escEst(r.client||'')}</div>
+        <div style="font-size:11px;color:var(--text-3)">${escEst(r.requested_name||r.requested_by)} · ${new Date(r.created_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div></div>
+      <div style="font-size:12px;color:var(--text-2);margin-top:2px">${escEst(r.project||'')}${e&&e.poNumber?` · PO ${escEst(e.poNumber)}`:''}</div>
+      <div style="font-size:13px;margin-top:6px"><b>${escEst(billReqWhat(r))}</b></div>
+      ${r.notes?`<div style="font-size:13px;margin-top:6px;padding:8px 10px;background:#fffbeb;border-radius:6px;white-space:pre-wrap">${escEst(r.notes)}</div>`:''}
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn-save" style="flex:none;padding:6px 12px;font-size:12px" onclick="billReqStartInvoice('${r.id}')">🧾 Create invoice</button>
+        <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="billReqClose('${r.id}','done')">✓ Done</button>
+        ${compact?'':(e?`<button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="openEstimateDetail('${e.id}')">Open estimate</button>`:'')}
+        <button class="site-chip" style="padding:5px 10px;font-size:12px;color:#b91c1c" onclick="billReqClose('${r.id}','cancel')">Cancel</button>
+      </div></div>`; }).join('');
+}
+function estRtbRender(e){
+  const slot = document.getElementById('est-rtb-slot'); if(!slot) return;
+  const open = billReqFor(e.qbNumber);
+  slot.innerHTML = open.length ? `<div style="font-size:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px;margin:6px 0">💲 <b>Ready to bill</b>, waiting on Ali: ${open.map(r=>`${escEst(billReqWhat(r))}${r.notes?` (“${escEst(r.notes.slice(0,120))}${r.notes.length>120?'…':''}”)`:''} · ${escEst(r.requested_name||r.requested_by)}`).join('<br>')}</div>` : '';
+}
+// =================== END READY TO BILL ===================
+
 // ===================== APPROVE TO PAY (QuickBooks bills) =====================
 // Open QuickBooks bills, matched to the tracker invoice (and PM approval) they came from. Ryan (Jake as backup)
 // approves for payment; Jason gets a weekly "Ready to pay" email of everything approved and still unpaid.
@@ -8387,7 +8506,7 @@ async function qqCreateEstimate(customerId){
     if(qq.docNumber || qq.qbId){
       try{
         const made = await sbFetch('POST', '/rest/v1/estimates', { qb_estimate_id: qq.qbId ? String(qq.qbId) : null,
-          project_name: d.title || d.client, type: 'Construction', status: 'Estimate In Progress', notes: '',
+          project_name: d.title || d.client, type: 'Construction', status: 'Not Started', notes: '',
           qb_estimate_number: qq.docNumber ? String(qq.docNumber) : null, amount: Math.round(qqTotal()*100)/100, client: d.client,
           qb_status: 'Pending', est_created_date: new Date().toLocaleDateString('en-CA'), source: 'quickbooks',
           updated_at: new Date().toISOString(),
@@ -11579,7 +11698,9 @@ function openApprovalPanel(){
   const toList = bellTimeOff().sort((a,b)=>a.startDate.localeCompare(b.startDate));
   const toFmt = d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
   const toEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
-  const toHtml = toList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Time off</div>` + toList.map(e=>`
+  const rbList = bellBillRequests();
+  const rbHtml = rbList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Ready to bill</div>` + billReqCardsHtml(rbList, true) : '';
+  const toHtml0 = toList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Time off</div>` + toList.map(e=>`
     <div style="background:var(--bg);border:1px solid var(--border);border-left:4px solid #ef4444;border-radius:var(--radius);padding:12px 14px;margin-bottom:10px">
       <div style="font-size:13px;font-weight:600;color:var(--text)">🗓 ${toEsc(e.person)}</div>
       <div style="font-size:12px;color:var(--text-2);margin-top:2px">${toFmt(e.startDate)}${e.endDate!==e.startDate?' – '+toFmt(e.endDate):''}</div>
@@ -11590,6 +11711,7 @@ function openApprovalPanel(){
         <button onclick="denyTimeOff('${e.id}')" style="flex:1;padding:7px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;color:#dc2626">✕ Deny</button>
       </div>
     </div>`).join('') + (pending.length?`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>`:'') : '';
+  const toHtml = rbHtml + (rbHtml && (toHtml0 || pending.length) ? '<div style="height:6px"></div>' : '') + (toHtml0 || (rbHtml && pending.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>` : ''));
 
   const panel = document.createElement('div');
   panel.id = 'approval-panel';
@@ -11692,12 +11814,12 @@ function bellInvoices(){
 function bellTimeOff(){ return (typeof timeOffEntries!=='undefined' ? timeOffEntries : []).filter(e=>e.status==='Pending' && typeof timeOffForMe==='function' && timeOffForMe(e)); }
 function updateApprovalBell(pulse){
   if(!approvalRulesLoaded && currentUser){ approvalRulesLoaded = true; loadApprovalRules().then(()=>updateApprovalBell()); }
-  const inv = bellInvoices().length, to = bellTimeOff().length, total = inv + to;
+  const inv = bellInvoices().length, to = bellTimeOff().length, rb = bellBillRequests().length, total = inv + to + rb;
   const bell = document.getElementById('approval-bell');
   const badge = document.getElementById('approval-badge');
   if(bell){
     bell.style.display = total > 0 ? '' : 'none';
-    bell.title = [to?`${to} time-off request${to===1?'':'s'}`:'', inv?`${inv} invoice${inv===1?'':'s'}`:''].filter(Boolean).join(' · ') + ' to review';
+    bell.title = [rb?`${rb} ready to bill`:'', to?`${to} time-off request${to===1?'':'s'}`:'', inv?`${inv} invoice${inv===1?'':'s'}`:''].filter(Boolean).join(' · ') + ' to review';
     if(pulse && total){ bell.animate([{transform:'rotate(0)'},{transform:'rotate(-18deg)'},{transform:'rotate(16deg)'},{transform:'rotate(-10deg)'},{transform:'rotate(0)'}], {duration:700, iterations:2}); }
   }
   if(badge) badge.textContent = total;
@@ -13784,6 +13906,7 @@ function showTimeOffNotice(list){
   document.body.appendChild(n);
 }
 // Check for new requests every 2 minutes for the people who get notified
+setInterval(()=>{ if(currentUser && typeof canBillInvoices==='function' && canBillInvoices()) loadBillRequests().then(()=>{ updateApprovalBell(); if(view==='receivables' && arView==='ready' && !document.querySelector('.modal-overlay')) renderReceivables(); }); }, 120000);
 setInterval(()=>{ if(currentUser && TO_NOTIFY_RULES[(currentUser.email||'').toLowerCase()] && typeof loadTimeOff==='function') loadTimeOff().then(updateTimeOffBadge).catch(()=>{}); }, 120000);
 
 let toSummaryYear = null;   // null = the current year
@@ -14336,7 +14459,7 @@ async function doLogin(){
     currentUser = data.user;
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault();
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>updateApprovalBell(true));
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);
@@ -14456,7 +14579,7 @@ function checkSession(){
       currentToken = token;
       refreshToken = refresh;
       currentUser = JSON.parse(user);
-      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault();
+      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>updateApprovalBell(true));
       isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
       isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());

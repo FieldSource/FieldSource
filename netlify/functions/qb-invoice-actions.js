@@ -36,13 +36,19 @@ async function qbAuth() {
   const refreshToken = await getSetting('QB_REFRESH_TOKEN');
   if (!refreshToken) throw new Error('QuickBooks is not connected.');
   const creds = Buffer.from(`${process.env.QB_CLIENT_ID}:${process.env.QB_CLIENT_SECRET}`).toString('base64');
-  const r = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', { method: 'POST', headers: { Authorization: `Basic ${creds}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }).toString() });
-  const t = await r.json().catch(() => ({}));
-  if (!t.access_token) throw new Error(`QuickBooks refused the saved token (${r.status} ${t.error || ''}).`);
-  if (t.refresh_token && t.refresh_token !== refreshToken) await setSetting('QB_REFRESH_TOKEN', t.refresh_token);
+  let accessToken = null;
+  try { const _c = JSON.parse((await getSetting('QB_ACCESS_TOKEN')) || 'null'); if (_c && _c.t && _c.exp > Date.now() + 5 * 60 * 1000) accessToken = _c.t; } catch (e) {}
+  if (!accessToken) {
+    const r = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', { method: 'POST', headers: { Authorization: `Basic ${creds}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }).toString() });
+    const t = await r.json().catch(() => ({}));
+    if (!t.access_token) throw new Error(`QuickBooks refused the saved token (${r.status} ${t.error || ''}).`);
+    if (t.refresh_token && t.refresh_token !== refreshToken) await setSetting('QB_REFRESH_TOKEN', t.refresh_token);
+    accessToken = t.access_token;
+    await setSetting('QB_ACCESS_TOKEN', JSON.stringify({ t: t.access_token, exp: Date.now() + (Number(t.expires_in) || 3600) * 1000 })).catch(() => {});
+  }
   const realm = (await getSetting('QB_REALM_ID')) || process.env.QB_REALM_ID;
   const call = async (path, opts = {}) => {
-    const res = await fetch(`${QB_API}/v3/company/${realm}/${path}${path.includes('?') ? '&' : '?'}minorversion=73`, { ...opts, headers: { Authorization: `Bearer ${t.access_token}`, Accept: 'application/json', 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+    const res = await fetch(`${QB_API}/v3/company/${realm}/${path}${path.includes('?') ? '&' : '?'}minorversion=73`, { ...opts, headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json', 'Content-Type': 'application/json', ...(opts.headers || {}) } });
     if (opts.raw) { if (!res.ok) throw new Error(`QuickBooks ${res.status}`); return res; }
     const d = await res.json().catch(() => ({}));
     if (!res.ok || d.Fault) { const f = d.Fault && d.Fault.Error && d.Fault.Error[0]; throw new Error(f ? `${f.Message}${f.Detail ? ': ' + f.Detail : ''}` : `QuickBooks ${res.status}`); }

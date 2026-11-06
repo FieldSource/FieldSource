@@ -6485,7 +6485,7 @@ function renderEstimates(){
   const today = new Date().toISOString().split('T')[0];
 
   let html = `<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-    <div style="font-size:18px;font-weight:700;color:var(--text)">Estimate Tracker</div>
+    <div style="font-size:18px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:10px">Estimate Tracker ${qbSyncBtn()}</div>
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
       ${canEdit?`<button onclick="openQuoteBuilder()" class="btn-save" style="font-size:13px;padding:6px 14px;margin-left:8px">✍️ New quote</button><button onclick="openEstimateModal()" class="site-chip" style="font-size:13px;padding:6px 14px;margin-left:6px">+ Add Estimate</button>`:''}
     </div>
@@ -7135,8 +7135,8 @@ function renderReceivablesInner(){
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
       <div style="font-size:18px;font-weight:700">Accounts Receivable</div>
-      <div style="font-size:12px;color:var(--text-3);display:flex;gap:10px;align-items:center">${qbInvoices.length.toLocaleString()} QuickBooks invoices${lastSync?' · synced '+new Date(lastSync).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''} · refreshes hourly
-        <button class="site-chip" style="padding:3px 10px;font-size:12px" onclick="qbInvLoaded=false;renderReceivables()">↻ Refresh</button></div>
+      <div style="font-size:12px;color:var(--text-3);display:flex;gap:10px;align-items:center">${qbInvoices.length.toLocaleString()} QuickBooks invoices${lastSync?' · synced '+new Date(lastSync).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''} · updates every 5 minutes
+        ${qbSyncBtn()}</div>
     </div>
     ${qbInvLoadError?`<div style="padding:10px 14px;background:#fee2e2;border:1px solid #fca5a5;border-radius:var(--radius);font-size:13px;margin-bottom:12px;color:#991b1b">Couldn't load invoices: ${arEsc(qbInvLoadError).slice(0,200)}</div>`:''}
     ${!qbInvoices.length?`<div style="padding:12px 14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius);font-size:13px;margin-bottom:12px">No QuickBooks invoices have come in yet, so billed amounts show $0. Once <b>qb-invoices-setup.sql</b> has been run in Supabase and the invoice sync has run (open <code>/.netlify/functions/qb-invoice-sync</code> until it says <code>"hasMore":false</code>), refresh this page.</div>${arContractsHtml()}`:`
@@ -7183,6 +7183,38 @@ function renderReceivablesInner(){
 // =================== END QUICKBOOKS INVOICES ===================
 // ===================== BUILD & SEND INVOICES =====================
 const INVOICE_BILLERS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+// ---- ↻ Sync now: pull from QuickBooks immediately (estimates, invoices, bills and payments), then redraw ----
+let qbSyncBusy = false;
+function qbSyncBtn(){ return `<button class="site-chip qb-sync-btn" style="padding:3px 10px;font-size:12px" onclick="qbSyncNow()" ${qbSyncBusy?'disabled':''} title="Pull the latest from QuickBooks now">${qbSyncBusy?'Syncing…':'↻ Sync now'}</button>`; }
+async function qbSyncNow(){
+  if(qbSyncBusy) return;
+  qbSyncBusy = true;
+  document.querySelectorAll('.qb-sync-btn').forEach(b=>{ b.disabled = true; b.textContent = 'Syncing…'; });
+  const run = async (fn)=>{ let total = 0;
+    for(let i=0; i<5; i++){
+      const r = await fetch('/.netlify/functions/' + fn);
+      const d = await r.json().catch(()=>({ error: `error ${r.status}` }));
+      if(!r.ok || d.error) throw new Error(d.error || `error ${r.status}`);
+      total += Number(d.synced||0) + Number(d.payments||0);
+      if(!d.hasMore) break;
+    }
+    return total; };
+  const names = [['qb-sync','estimates'],['qb-invoice-sync','invoices'],['qb-bill-sync','bills']];
+  const res = await Promise.allSettled(names.map(([fn])=>run(fn)));
+  // reload what the tracker shows
+  try{ if(typeof loadEstimates==='function') await loadEstimates(); }catch(e){}
+  if(typeof qbInvLoaded!=='undefined') qbInvLoaded = false;
+  if(typeof payLoaded!=='undefined') payLoaded = false;
+  qbSyncBusy = false;
+  if(typeof render==='function' && ['estimates','receivables','paybills'].includes(view)){
+    if(view==='estimates') renderEstimates(); else if(view==='receivables') renderReceivables(); else renderPayBills();
+  }
+  document.querySelectorAll('.qb-sync-btn').forEach(b=>{ b.disabled = false; b.textContent = '↻ Sync now'; });
+  const ok = res.map((r,i)=>r.status==='fulfilled' ? `${r.value} ${names[i][1]}` : null).filter(Boolean);
+  const bad = res.map((r,i)=>r.status==='rejected' ? `${names[i][1]} (${String(r.reason&&r.reason.message||r.reason).slice(0,80)})` : null).filter(Boolean);
+  const msg = (ok.length ? `✓ Synced with QuickBooks: ${ok.join(', ')} updated.` : '') + (bad.length ? ` Couldn't sync ${bad.join(', ')}.` : '');
+  if(typeof pmToast==='function' && !bad.length) pmToast(msg); else alert(msg.trim());
+}
 // ---- Void or delete a customer invoice (QuickBooks) ----
 function openVoidInvoice(id){
   const i = (qbInvoices||[]).find(x=>String(x.qb_invoice_id)===String(id)); if(!i) return;
@@ -7713,7 +7745,7 @@ function renderPayBills(){
   el.innerHTML = `<div style="max-width:1180px;margin:0 auto">
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:12px">
       <div style="font-size:18px;font-weight:700">Approve to Pay</div>
-      <div style="font-size:12px;color:var(--text-3)">QuickBooks bills · refreshes hourly · <a style="cursor:pointer;color:var(--green-dark)" onclick="payLoaded=false;renderPayBills()">↻ Refresh</a></div>
+      <div style="font-size:12px;color:var(--text-3)">QuickBooks bills · updates every 5 minutes · ${qbSyncBtn()}</div>
     </div>
     ${payLoadError?`<div style="padding:10px 14px;background:#fee2e2;border-radius:8px;font-size:13px;color:#991b1b;margin-bottom:12px">Couldn't load bills: ${esc(payLoadError).slice(0,200)}${/qb_bills|bill_pay/.test(payLoadError)?' (run the payment approvals SQL first)':''}</div>`:''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px">

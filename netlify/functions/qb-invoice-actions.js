@@ -133,6 +133,37 @@ exports.handler = async function (event) {
       return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
     } catch (e) { return json(500, { error: e.message }); }
   }
+  // ===== Void or delete a customer invoice in QuickBooks (Jake, Ryan, Ali) =====
+  // Blocked when any payment has been applied. Void keeps the invoice number at $0; delete removes it.
+  if (b.action === 'invoice_void' || b.action === 'invoice_delete') {
+    if (!canBill) return json(403, { error: 'Only Jake, Ryan and Ali can void or delete invoices.' });
+    try {
+      const qb = await qbAuth();
+      const inv = (await qb.call(`invoice/${b.qb_invoice_id}`)).Invoice;
+      const paid = (inv.LinkedTxn || []).some(t => /Payment|Deposit|CreditMemo/i.test(t.TxnType)) || Number(inv.Balance) < Number(inv.TotalAmt) - 0.005;
+      if (paid) return json(409, { error: `Invoice #${inv.DocNumber} has a payment applied. Remove the payment in QuickBooks first, then try again.` });
+      if (b.action === 'invoice_void') {
+        if (/voided/i.test(inv.PrivateNote || '') && Number(inv.TotalAmt) === 0) return json(200, { ok: true, already: true, doc_number: inv.DocNumber });
+        await qb.call('invoice?operation=void', { method: 'POST', body: JSON.stringify({ Id: inv.Id, SyncToken: inv.SyncToken }) });
+        // keep a note of why, then refresh the tracker's copy ($0 balance, so it drops off what's owed)
+        try {
+          const cur = (await qb.call(`invoice/${inv.Id}`)).Invoice;
+          const why = String(b.reason || '').trim();
+          if (why) await qb.call('invoice', { method: 'POST', body: JSON.stringify({ Id: cur.Id, SyncToken: cur.SyncToken, sparse: true, PrivateNote: `${cur.PrivateNote || ''}\nVoided in Field Source Tracker by ${user.email}: ${why}`.trim().slice(0, 4000) }) });
+        } catch (e) { console.warn('void note', e.message); }
+        await refreshInvoice(qb, inv.Id);
+        await sb('PATCH', `qb_invoices?qb_invoice_id=eq.${inv.Id}`, { balance: 0, total: 0 }, 'return=minimal').catch(() => {});
+      } else {
+        await qb.call('invoice?operation=delete', { method: 'POST', body: JSON.stringify({ Id: inv.Id, SyncToken: inv.SyncToken }) });
+        // the hourly sync can't see deletions, so remove the tracker's copy now
+        await sb('DELETE', `qb_invoice_lines?qb_invoice_id=eq.${inv.Id}`, null, 'return=minimal').catch(() => {});
+        await sb('DELETE', `invoice_estimate_links?qb_invoice_id=eq.${inv.Id}`, null, 'return=minimal').catch(() => {});
+        await sb('DELETE', `qb_invoices?qb_invoice_id=eq.${inv.Id}`, null, 'return=minimal');
+      }
+      await logActivity(b.action === 'invoice_void' ? 'invoice_voided' : 'invoice_deleted', user, { qb_invoice_id: String(inv.Id), doc_number: inv.DocNumber, customer: inv.CustomerRef && inv.CustomerRef.name, total: Number(inv.TotalAmt || 0), reason: String(b.reason || '') });
+      return json(200, { ok: true, doc_number: inv.DocNumber, action: b.action === 'invoice_void' ? 'voided' : 'deleted' });
+    } catch (e) { return json(500, { error: e.message }); }
+  }
   // ===== Approved PO (Ryan's approved-po skill, in the tracker) =====
   // po_read: Claude reads an uploaded PO (PDF or photo) and pulls out the facts to check. Nothing changes yet.
   if (b.action === 'po_read') {

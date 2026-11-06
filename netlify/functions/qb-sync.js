@@ -49,6 +49,8 @@ async function setSetting(key, value) {
 async function getAccessToken() {
   const refreshToken = (await getSetting('QB_REFRESH_TOKEN')) || process.env.QB_REFRESH_TOKEN;
   if (!refreshToken) throw new Error('QuickBooks is not connected (no refresh token). Open /.netlify/functions/qb-connect as a QuickBooks admin.');
+  // Reuse the saved QuickBooks access token (good for an hour) instead of refreshing on every run
+  try { const _c = JSON.parse((await getSetting('QB_ACCESS_TOKEN')) || 'null'); if (_c && _c.t && _c.exp > Date.now() + 5 * 60 * 1000) return _c.t; } catch (e) {}
 
   const creds = Buffer.from(`${process.env.QB_CLIENT_ID}:${process.env.QB_CLIENT_SECRET}`).toString('base64');
   const r = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
@@ -64,6 +66,7 @@ async function getAccessToken() {
   if (tokens.refresh_token && tokens.refresh_token !== refreshToken) {
     await setSetting('QB_REFRESH_TOKEN', tokens.refresh_token);
   }
+  await setSetting('QB_ACCESS_TOKEN', JSON.stringify({ t: tokens.access_token, exp: Date.now() + (Number(tokens.expires_in) || 3600) * 1000 })).catch(() => {});
   return tokens.access_token;
 }
 

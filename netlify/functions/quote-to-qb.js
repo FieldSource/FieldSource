@@ -94,7 +94,8 @@ exports.handler = async function (event) {
         DetailType: 'SalesItemLineDetail',
         Amount: Math.round(qty * price * 100) / 100,
         Description: desc,
-        SalesItemLineDetail: { ItemRef: { value: String(it.qb_item_id) }, Qty: qty, UnitPrice: price },
+        // Not taxable unless the quote says so (schools and public clients are usually exempt), as in the quote skill
+        SalesItemLineDetail: { ItemRef: { value: String(it.qb_item_id) }, Qty: qty, UnitPrice: price, TaxCodeRef: { value: draft.taxable === true ? 'TAX' : 'NON' } },
       };
     });
 

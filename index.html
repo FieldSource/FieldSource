@@ -8066,6 +8066,79 @@ function qqSetItem(i,k,v){ qq.d.items[i][k]=v; qqSaveLocal(); qqRefreshTotal(); 
 function qqTotal(){ return (qq.d&&qq.d.items||[]).reduce((t,i)=>t+(Number(i.qty)||0)*(Number(i.unit_price)||0),0); }
 function qqRefreshTotal(){ const el=document.getElementById('qq-total'); if(el) el.textContent=fmtEstMoney2(qqTotal()); }
 
+// Run a quote draft as a background job (no 10-second limit), checking back every 2 seconds.
+// Falls back to the direct call if background functions aren't available.
+async function qqCallDraft(payload){
+  const jobId = (crypto.randomUUID && crypto.randomUUID()) || 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{ const r=Math.random()*16|0; return (c==='x'?r:(r&3|8)).toString(16); });
+  if(typeof ensureFreshToken==='function') await ensureFreshToken();
+  const headers = { 'Content-Type':'application/json', 'Authorization':'Bearer '+(currentToken||'') };
+  let bg = null;
+  try{ bg = await fetch('/.netlify/functions/quote-draft-background', { method:'POST', headers, body: JSON.stringify({ ...payload, job_id: jobId }) }); }catch(e){}
+  if(bg && bg.status===202){
+    const started = Date.now(), base = qq.status;
+    while(Date.now() - started < 180000){
+      await new Promise(r=>setTimeout(r, 2000));
+      qq.status = `${base.replace(/ \(\d+s\)$/,'')} (${Math.round((Date.now()-started)/1000)}s)`; renderQuoteBuilder();
+      let row = null;
+      try{ const rows = await sbFetch('GET', `/rest/v1/quote_jobs?id=eq.${jobId}&select=status,result,error`); row = rows && rows[0]; }
+      catch(e){ if(/quote_jobs/.test(e.message)) break; }   // table not set up yet: use the direct call
+      if(row && row.status==='done') return row.result;
+      if(row && row.status==='error') throw new Error((row.result && row.result.error) || row.error || 'The draft failed.');
+    }
+    if(Date.now() - started >= 180000) throw new Error('The draft is taking more than 3 minutes. Try a shorter description, or try again.');
+  }
+  const r = await fetch('/.netlify/functions/quote-draft', { method:'POST', headers, body: JSON.stringify(payload) });
+  const data = await r.json().catch(()=>({ error: r.status===504 ? 'Timed out (504). The background drafting isn\u2019t set up yet: see the setup notes.' : `Error ${r.status}` }));
+  if(!r.ok) throw new Error(data.error || `Error ${r.status}`);
+  return data;
+}
+// ---- Import a quote written outside the tracker ----
+let qqImportFile = null;   // kept in memory only (too big for local storage)
+async function qqImport(file){
+  if(!file || qq.busy) return;
+  if(file.size > 4.5*1024*1024){ alert('That file is over 4.5 MB. Save the quote as a smaller PDF and try again.'); return; }
+  if(qq.d && !confirm('Replace the current draft with the imported quote?')) return;
+  qq.busy = true; qq.status = `Reading ${file.name}…`; renderQuoteBuilder();
+  try{
+    const b64 = await new Promise((res,rej)=>{ const r = new FileReader(); r.onload = ()=>res(String(r.result).split(',')[1]||''); r.onerror = rej; r.readAsDataURL(file); });
+    const data = await qqCallDraft({ import_file:{ name:file.name, type:file.type, b64 }, client: qq.client ? qq.client.name : null, clients: (typeof CLIENTS!=='undefined'?CLIENTS:[]) });
+    const dr = data.draft || {};
+    qq.d = Object.assign({ contact_name:'', contact_title:'', street:'', city_line:'', contact_email:'' }, dr);
+    qq.d.items = (qq.d.items||[]).map(it=>({ ...it, bullets: Array.isArray(it.bullets)?it.bullets.filter(Boolean):[] }));
+    qq.d.notes = (qq.d.notes||[]).filter(Boolean); qq.d.flags = (qq.d.flags||[]).filter(Boolean);
+    qq.d.questions = Array.isArray(qq.d.questions) ? qq.d.questions : [];
+    if(typeof qq.d.taxable !== 'boolean') qq.d.taxable = false;
+    qq.qbItems = data.items || qq.qbItems;
+    qq.request = `Imported from ${file.name}`; qq.answers = {};
+    qq.importInfo = { name:file.name, doc_total: dr.doc_total==null||dr.doc_total==='' ? null : Number(dr.doc_total), doc_quote_number: dr.doc_quote_number||'', doc_date: dr.doc_date||'' };
+    qq.importAccepted = false;
+    if(qq.importInfo.doc_quote_number) qq.d.notes = qq.d.notes.filter(n=>!/quote ref/i.test(n));
+    qqImportFile = { name:file.name, type:file.type, b64 };
+    if(!qq.client && qq.d.client){ await qqPickClient(qq.d.client); }
+    qq.status = '';
+  }catch(err){ qq.status = '⚠️ ' + err.message; }
+  qq.busy = false; qqSaveLocal(); renderQuoteBuilder();
+}
+async function qqImportAccepted(){
+  if(!qq.qbId && !qq.docNumber) return;
+  if(!confirm(`Mark estimate #${qq.docNumber} accepted in QuickBooks?`)) return;
+  qq.busy = true; renderQuoteBuilder();
+  try{
+    let qbId = qq.qbId;
+    await invAction({ action:'estimate_status', qb_estimate_id: qbId, status:'Accepted' });
+    if(qq.estRowId){ try{ await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${qq.estRowId}`, { status:'Approved', qb_status:'Accepted', accepted_date: new Date().toLocaleDateString('en-CA') }); }catch(e){} }
+    qq.importAccepted = true; qqSaveLocal();
+    if(typeof loadEstimates==='function') loadEstimates();
+    alert(`✓ Estimate #${qq.docNumber} is marked accepted. It now shows in Billing & Collections → Accepted estimates, ready for Set up job.`);
+  }catch(e){ alert('Could not mark it accepted: '+e.message); }
+  qq.busy = false; renderQuoteBuilder();
+}
+async function qqImportOpenEstimate(){
+  document.getElementById('quote-overlay')?.remove();
+  if(typeof loadEstimates==='function') await loadEstimates();
+  const e = (estimates||[]).find(x=>x.id===qq.estRowId) || (estimates||[]).find(x=>String(x.qbNumber)===String(qq.docNumber));
+  if(e) openEstimateDetail(e.id); else alert(`Open estimate #${qq.docNumber} from the Estimates tab to upload the PO.`);
+}
 function qqAnswer(id, v, typing){ qq.answers = qq.answers || {}; qq.answers[id] = v; qqSaveLocal(); if(!typing) renderQuoteBuilder(); }
 async function qqSendAnswers(){
   const qs = (qq.d.questions||[]), a = qq.answers || {};
@@ -8080,16 +8153,10 @@ async function qqDraft(change){
   if(qq.busy) return;
   const req = change ? null : (document.getElementById('qq-request')||{}).value || qq.request;
   if(!change && !req.trim()){ alert('Describe the work first.'); return; }
-  if(!change) qq.request = req;
+  if(!change){ qq.request = req; qq.importInfo = null; qq.importAccepted = false; qqImportFile = null; }
   qq.busy = true; qq.status = change ? 'Applying your change…' : 'Drafting the quote and looking up QuickBooks prices…'; renderQuoteBuilder();
   try{
-    const r = await fetch('/.netlify/functions/quote-draft', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(currentToken||'') },
-      body: JSON.stringify({ request: qq.request, draft: change ? qq.d : null, change: change||null, client: qq.client ? qq.client.name : null, clients: (typeof CLIENTS!=='undefined'?CLIENTS:[]) }),
-    });
-    const data = await r.json().catch(()=>({error:`Error ${r.status}`}));
-    if(!r.ok) throw new Error(data.error || `Error ${r.status}`);
+    const data = await qqCallDraft({ request: qq.request, draft: change ? qq.d : null, change: change||null, client: qq.client ? qq.client.name : null, clients: (typeof CLIENTS!=='undefined'?CLIENTS:[]) });
     const keep = qq.d || {};
     qq.d = Object.assign({ contact_name:'', contact_title:'', street:'', city_line:'', contact_email:'' }, data.draft);
     ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ if(keep[k]) qq.d[k]=keep[k]; else if(!qq.d[k] && qq.prefill && qq.prefill[k]) qq.d[k]=qq.prefill[k]; });
@@ -8132,6 +8199,8 @@ function renderQuoteBuilder(){
       <textarea id="qq-request" rows="3" ${locked?'disabled':''} placeholder="e.g. Logan Elm stadium field: topdress 50 tons of sand and deep tine on tight spacing, 2 acres, week of Nov 10. Make it out to Steve McAfee, Treasurer." style="${box}">${escEst(qq.request)}</textarea>
       <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
         <button onclick="qqDraft()" class="btn-save" style="padding:7px 14px" ${qq.busy||locked?'disabled':''}>${d?'Redraft from scratch':'Draft quote'}</button>
+        ${locked?'':`<span style="font-size:12px;color:var(--text-3)">or</span>
+        <label class="site-chip" style="padding:7px 12px;cursor:pointer;${qq.busy?'opacity:.5;pointer-events:none':''}" title="A quote written outside the tracker (Word, email, another tool): read it and build the QuickBooks estimate from it">📄 Import a quote you already wrote<input type="file" accept=".pdf,.png,.jpg,.jpeg" style="display:none" onchange="qqImport(this.files[0]);this.value=''"></label>`}
         <span style="font-size:12px;color:var(--text-3)">${escEst(qq.status)}</span>
       </div>
     </div>`;
@@ -8139,7 +8208,13 @@ function renderQuoteBuilder(){
   if(d){
     const flags = (d.flags||[]);
     const qs = (d.questions||[]).filter(q=>q && q.ask);
+    const imp = qq.importInfo, impDiff = imp && imp.doc_total!=null ? Math.round((qqTotal() - Number(imp.doc_total))*100)/100 : null;
     body += `
+    ${imp ? `<div style="margin-top:14px;border:1px solid ${impDiff===null||Math.abs(impDiff)<0.005?'#bbf7d0':'#fecaca'};background:${impDiff===null||Math.abs(impDiff)<0.005?'#f0fdf4':'#fef2f2'};border-radius:var(--radius-sm);padding:10px 12px;font-size:13px">
+      📄 <b>Imported from ${escEst(imp.name)}</b>${imp.doc_quote_number?` (quote ${escEst(imp.doc_quote_number)})`:''}. Prices are copied from the quote.
+      <div style="margin-top:4px">${imp.doc_total==null ? '<span style="color:#92400e">No total found on the quote. Check the lines against it before creating.</span>'
+        : Math.abs(impDiff)<0.005 ? `✓ The lines add up to ${fmtEstMoney2(qqTotal())}, matching the quote's total.`
+        : `<b style="color:#b91c1c">The lines add up to ${fmtEstMoney2(qqTotal())}, but the quote's total is ${fmtEstMoney2(imp.doc_total)} (off by ${fmtEstMoney2(Math.abs(impDiff))}).</b> Fix the lines (a missed line, a discount) before creating the estimate.`}</div></div>` : ''}
     ${qs.length && !locked ? `<div style="margin-top:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--radius-sm);padding:12px 14px">
       <div style="font-size:13px;font-weight:700;color:#1e3a8a;margin-bottom:8px">Before this goes out, a few questions:</div>
       ${qs.map((q,i)=>{ const line = Number.isInteger(q.line) && d.items[q.line] ? d.items[q.line] : null;
@@ -8221,7 +8296,11 @@ function renderQuoteBuilder(){
 
     <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
       <button onclick="qqPdf(false)" class="site-chip" style="padding:8px 14px">📄 Preview PDF</button>
-      ${locked
+      ${locked && qq.importInfo
+        ? `<button onclick="qqImportAccepted()" class="btn-save" style="padding:8px 16px" ${qq.busy||qq.importAccepted?'disabled':''}>${qq.importAccepted?'✓ Marked accepted':'✓ Mark accepted'}</button>
+           <button onclick="qqImportOpenEstimate()" class="site-chip" style="padding:8px 14px" title="Open the estimate to upload the client's PO and run Read & approve">📎 Upload the PO instead</button>
+           <button onclick="if(confirm('Start a new quote?')){localStorage.removeItem(QQ_KEY);openQuoteBuilder()}" class="site-chip" style="padding:8px 14px">New quote</button>`
+        : locked
         ? `<button onclick="openSendQuote()" class="btn-save" style="padding:8px 16px">✉ Send quote</button>
            <button onclick="qqPdf(true)" class="site-chip" style="padding:8px 14px">⬇ Download final PDF</button>
            <button onclick="if(confirm('Start a new quote?')){localStorage.removeItem(QQ_KEY);openQuoteBuilder()}" class="site-chip" style="padding:8px 14px">New quote</button>`
@@ -8257,6 +8336,8 @@ async function qqUploadLogo(file){
 
 async function qqCreateEstimate(customerId){
   const d = qq.d;
+  if(qq.importInfo && qq.importInfo.doc_total!=null && Math.abs(qqTotal()-Number(qq.importInfo.doc_total)) >= 0.005){
+    alert(`The lines add up to ${fmtEstMoney2(qqTotal())} but the imported quote's total is ${fmtEstMoney2(qq.importInfo.doc_total)}.\n\nThe QuickBooks estimate has to match what the client accepted, so fix the lines first.`); return; }
   const bad = d.items.filter(i=>!i.qb_item_id || i.unit_price==null || i.unit_price==='');
   if(bad.length){ alert('Every line needs a QuickBooks item and a price before it can go to QuickBooks:\n- '+bad.map(i=>i.title||'(untitled line)').join('\n- ')); return; }
   if(!customerId && !confirm(`Create the QuickBooks estimate for ${d.client}, ${fmtEstMoney2(qqTotal())}?\n\nIt stays internal: nothing is sent to the client from QuickBooks.`)) return;
@@ -8274,18 +8355,30 @@ async function qqCreateEstimate(customerId){
     // Add it to the Estimates tab right away (the hourly syncs fill in the rest).
     if(qq.docNumber || qq.qbId){
       try{
-        await sbFetch('POST', '/rest/v1/estimates', { qb_estimate_id: qq.qbId ? String(qq.qbId) : null,
+        const made = await sbFetch('POST', '/rest/v1/estimates', { qb_estimate_id: qq.qbId ? String(qq.qbId) : null,
           project_name: d.title || d.client, type: 'Construction', status: 'Estimate In Progress', notes: '',
           qb_estimate_number: qq.docNumber ? String(qq.docNumber) : null, amount: Math.round(qqTotal()*100)/100, client: d.client,
           qb_status: 'Pending', est_created_date: new Date().toLocaleDateString('en-CA'), source: 'quickbooks',
           updated_at: new Date().toISOString(),
         });
+        qq.estRowId = made && made[0] && made[0].id;
+        // imported quote: keep the original file on the estimate as the "Quote" document
+        if(qq.importInfo && qqImportFile && qq.estRowId){
+          try{
+            if(typeof ensureFreshToken==='function') await ensureFreshToken();
+            const path = `estimates/${qq.estRowId}/${Date.now()}-${qqImportFile.name.replace(/[^\w.\- ]+/g,'_')}`;
+            const bytes = Uint8Array.from(atob(qqImportFile.b64), c=>c.charCodeAt(0));
+            const up = await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(path)}`, { method:'POST', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type': qqImportFile.type||'application/pdf', 'x-upsert':'true' }, body: bytes });
+            if(up.ok) await sbFetch('POST','/rest/v1/estimate_files', { estimate_id:String(qq.estRowId), kind:'other', file_name:'Quote (as sent): '+qqImportFile.name, file_path:path, size_bytes:bytes.length, uploaded_by:(currentUser&&currentUser.email)||'' });
+          }catch(e){ console.warn('saving the imported quote file', e); }
+        }
         if(typeof loadEstimates==='function') loadEstimates();
       }catch(e){ console.warn('estimates row', e); }
     }
     await qqSaveClientProfile();
     qqSaveLocal();
-    alert(`QuickBooks estimate ${qq.docNumber?'#'+qq.docNumber+' ':''}created (${fmtEstMoney2(data.total)}).\n\nNext: ✉ Send quote emails the PDF to the client from your Gmail (or download it).`);
+    if(qq.importInfo) alert(`QuickBooks estimate ${qq.docNumber?'#'+qq.docNumber+' ':''}created (${fmtEstMoney2(data.total)}) from the imported quote. The original file is saved on the estimate.\n\nNext: mark it accepted, or upload the client's PO.`);
+    else alert(`QuickBooks estimate ${qq.docNumber?'#'+qq.docNumber+' ':''}created (${fmtEstMoney2(data.total)}).\n\nNext: ✉ Send quote emails the PDF to the client from your Gmail (or download it).`);
   }catch(err){ qq.status = '⚠️ ' + err.message; }
   qq.busy = false; renderQuoteBuilder();
 }

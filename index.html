@@ -6967,7 +6967,7 @@ function arContractsHtml(){
   const accepted = (typeof estimates!=='undefined'?estimates:[]).filter(e=>e.qbNumber && (e.qbStatus==='Accepted' || e.qbStatus==='Closed' || e.status==='Approved' || e.status==='Scheduled' || e.status==='In Progress'));
   const clientOf = e=>e.apProject || e.client || '';
   const clientList = [...new Set(accepted.map(clientOf).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
-  const rows = accepted.filter(e=>!arContractClient || clientOf(e)===arContractClient).map(e=>({ e, b: estimateBilling(e) })).filter(x=>!arHideFullyBilled || x.b.remaining > 0.5 || x.b.open > 0.005 || !x.b.inv.length);
+  const rows = accepted.filter(arContractPass).map(e=>({ e, b: estimateBilling(e) })).filter(x=>!arHideFullyBilled || x.b.remaining > 0.5 || x.b.open > 0.005 || !x.b.inv.length);
   rows.sort(arContractSort==='pct' ? (a,b)=>a.b.pct-b.b.pct : arContractSort==='date' ? (a,b)=>(b.e.acceptedDate||b.e.createdDate||'').localeCompare(a.e.acceptedDate||a.e.createdDate||'') : (a,b)=>b.b.remaining-a.b.remaining);
   const tot = rows.reduce((t,x)=>({ c:t.c+x.b.contract, bl:t.bl+x.b.billed, col:t.col+x.b.collected, ow:t.ow+x.b.open, left:t.left+Math.max(0,x.b.remaining) }), { c:0, bl:0, col:0, ow:0, left:0 });
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)!important';
@@ -6976,8 +6976,7 @@ function arContractsHtml(){
   return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:14px">
     <div style="padding:10px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <b>Accepted estimates</b><span style="font-size:12px;color:var(--text-3)">contracts to bill · added automatically when an estimate is accepted</span>
-      <select style="${sel};margin-left:auto" onchange="arContractClient=this.value;renderReceivables()"><option value="">All clients</option>${clientList.map(c=>`<option value="${arEsc(c)}"${arContractClient===c?' selected':''}>${arEsc(c)}</option>`).join('')}</select>
-      <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arHideFullyBilled?'checked':''} onchange="arHideFullyBilled=this.checked;renderReceivables()"> Hide fully billed and paid</label>
+      <label style="font-size:12px;display:flex;gap:4px;align-items:center;margin-left:auto"><input type="checkbox" ${arHideFullyBilled?'checked':''} onchange="arHideFullyBilled=this.checked;renderReceivables()"> Hide fully billed and paid</label>
       <select style="${sel}" onchange="arContractSort=this.value;renderReceivables()">${[['left','Most left to bill'],['pct','Least billed %'],['date','Newest accepted']].map(([v,l])=>`<option value="${v}"${arContractSort===v?' selected':''}>${l}</option>`).join('')}</select>
     </div>
     ${(()=>{ const n = estimatesNeedingPm().length; return n ? `<div style="margin:0 12px 10px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px">👷 <b>${n} accepted estimate${n===1?'':'s'}</b> ${n===1?'needs':'need'} setting up. Click <b>Set up job</b> to pick the project manager (who approves vendor invoices) and the client.</div>` : ''; })()}
@@ -7066,6 +7065,30 @@ async function unlinkInvoiceFromEstimate(invId, estNum, how){
 
 // Receivables: open invoices, aging, by customer
 let arCustomer = '', arOverdueOnly = false, arSort = 'days', arNotSentOnly = false, arUnlinkedOnly = false;
+// Page-wide filters: view, client (QuickBooks and tracker names matched to one client), PM, search, aging bucket
+let arView = (()=>{ try{ return localStorage.getItem('ar_view') || 'all'; }catch(e){ return 'all'; } })();
+let arClient = '', arPm = '', arQuery = '', arBucket = -1;
+const AR_VIEWS = [['all','Everything'],['contracts','Contracts to bill'],['invoices','Open invoices'],['collections','Collections']];
+function arSetView(v){ arView = v; try{ localStorage.setItem('ar_view', v); }catch(e){} if(v==='collections'){ arOverdueOnly = true; arSort = 'days'; } renderReceivables(); }
+function arClientKey(name){ name = String(name||'').trim(); if(!name) return ''; try{ return (typeof matchTrackerClient==='function' && matchTrackerClient({ client:name })) || name; }catch(e){ return name; } }
+function arTextHit(...parts){ const q = arQuery.trim().toLowerCase(); return !q || parts.some(p=>String(p||'').toLowerCase().includes(q)); }
+function arFilterBarHtml(clients, pms){
+  const sel = 'font-size:13px;padding:6px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-family:inherit';
+  const active = arClient || arPm || arQuery || arBucket>=0;
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${AR_VIEWS.map(([k,l])=>`<button class="site-chip${arView===k?' active':''}" style="padding:6px 14px;font-size:13px" onclick="arSetView('${k}')">${l}</button>`).join('')}</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">
+      <span style="font-size:12px;font-weight:700;color:var(--text-2)">Filter</span>
+      <select style="${sel}" onchange="arClient=this.value;renderReceivables()"><option value="">All clients</option>${clients.map(c=>`<option value="${arEsc(c)}"${arClient===c?' selected':''}>${arEsc(c)}</option>`).join('')}</select>
+      <select style="${sel}" onchange="arPm=this.value;renderReceivables()"><option value="">All PMs</option>${pms.map(c=>`<option value="${arEsc(c)}"${arPm===c?' selected':''}>${arEsc(c)}</option>`).join('')}<option value="__none__"${arPm==='__none__'?' selected':''}>No PM yet</option></select>
+      <input id="ar-q" value="${arEsc(arQuery)}" placeholder="Search invoice #, estimate #, customer, project" style="${sel};flex:1;min-width:220px" oninput="arQuery=this.value;clearTimeout(window._arQT);window._arQT=setTimeout(()=>{renderReceivables();const q=document.getElementById('ar-q');if(q){q.focus();q.setSelectionRange(q.value.length,q.value.length);}},300)">
+      ${active?`<button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="arClient='';arPm='';arQuery='';arBucket=-1;renderReceivables()">✕ Clear</button>`:''}
+    </div>`;
+}
+function arContractPass(e){
+  if(arClient && arClientKey(e.apProject||e.client) !== arClient && arClientKey(e.client) !== arClient) return false;
+  if(arPm==='__none__' ? !!e.pmEmail : (arPm && (e.pmName||e.pmEmail||'') !== arPm)) return false;
+  return arTextHit(e.qbNumber, e.client, e.projectName, e.apProject, e.poNumber);
+}
 function renderReceivables(){
   const el = document.getElementById('main-content');
   if(!qbInvLoaded || (!estimates.length && !arEstTried)){
@@ -7089,9 +7112,17 @@ function renderReceivablesInner(){
   const total = sum(open);
   const customers = [...new Set(open.map(i=>i.customer_name).filter(Boolean))].sort();
   if(arCustomer && !customers.includes(arCustomer)) arCustomer = '';
-  let list = open.filter(i=>(!arCustomer || i.customer_name===arCustomer) && (!arOverdueOnly || invDaysPast(i)>0) && (!arNotSentOnly || i.email_status!=='EmailSent') && (!arUnlinkedOnly || !estFor(i).length));
+  const invPass = i=>{ const ests = estFor(i);
+    if(arClient && arClientKey(i.customer_name)!==arClient && !ests.some(x=>x.e && arClientKey(x.e.apProject||x.e.client)===arClient)) return false;
+    if(arPm==='__none__' ? ests.some(x=>x.e && x.e.pmEmail) : (arPm && !ests.some(x=>x.e && (x.e.pmName||x.e.pmEmail)===arPm))) return false;
+    return arTextHit(i.doc_number, i.customer_name, ...ests.map(x=>x.n), ...ests.map(x=>x.e && x.e.projectName)); };
+  const openC = open.filter(invPass);                                      // client / PM / search (the aging cards use this)
+  const openF = arBucket>=0 ? openC.filter(buckets[arBucket][1]) : openC;  // plus the clicked aging card
+  let list = openF.filter(i=>(!arCustomer || i.customer_name===arCustomer) && (!arOverdueOnly || invDaysPast(i)>0) && (!arNotSentOnly || i.email_status!=='EmailSent') && (!arUnlinkedOnly || !estFor(i).length));
   list.sort(arSort==='amount' ? (a,b)=>Number(b.balance)-Number(a.balance) : arSort==='customer' ? (a,b)=>(a.customer_name||'').localeCompare(b.customer_name||'')||invDaysPast(b)-invDaysPast(a) : (a,b)=>invDaysPast(b)-invDaysPast(a)||(a.due_date||'').localeCompare(b.due_date||''));
-  const byCust = customers.map(c=>{ const l = open.filter(i=>i.customer_name===c); return { c, owed:sum(l), n:l.length, overdue:sum(l.filter(i=>invDaysPast(i)>0)), oldest:Math.max(...l.map(invDaysPast)) }; }).sort((a,b)=>b.owed-a.owed);
+  const allClients = [...new Set([...open.map(i=>arClientKey(i.customer_name)), ...(typeof estimates!=='undefined'?estimates:[]).filter(e=>e.qbNumber && (e.qbStatus==='Accepted'||e.qbStatus==='Closed')).map(e=>arClientKey(e.apProject||e.client))].filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const allPms = [...new Set((typeof estimates!=='undefined'?estimates:[]).map(e=>e.pmName||'').filter(Boolean))].sort();
+  const byCust = [...new Set(openF.map(i=>i.customer_name).filter(Boolean))].map(c=>{ const l = openF.filter(i=>i.customer_name===c); return { c, owed:sum(l), n:l.length, overdue:sum(l.filter(i=>invDaysPast(i)>0)), oldest:Math.max(...l.map(invDaysPast)) }; }).sort((a,b)=>b.owed-a.owed);
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 10px;text-align:left;background:var(--accent)!important';
   const td = 'font-size:13px;color:var(--text);padding:8px 10px;border-top:1px solid var(--border)';
   const sel = 'font-size:13px;padding:6px 10px;border:1px solid var(--border-2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-family:inherit';
@@ -7104,23 +7135,23 @@ function renderReceivablesInner(){
     </div>
     ${qbInvLoadError?`<div style="padding:10px 14px;background:#fee2e2;border:1px solid #fca5a5;border-radius:var(--radius);font-size:13px;margin-bottom:12px;color:#991b1b">Couldn't load invoices: ${arEsc(qbInvLoadError).slice(0,200)}</div>`:''}
     ${!qbInvoices.length?`<div style="padding:12px 14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius);font-size:13px;margin-bottom:12px">No QuickBooks invoices have come in yet, so billed amounts show $0. Once <b>qb-invoices-setup.sql</b> has been run in Supabase and the invoice sync has run (open <code>/.netlify/functions/qb-invoice-sync</code> until it says <code>"hasMore":false</code>), refresh this page.</div>${arContractsHtml()}`:`
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px">
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid var(--green)"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">Total owed (open invoices)</div><div style="font-size:20px;font-weight:700">${arMoney0(total)}</div><div style="font-size:11px;color:var(--text-3)">${open.length} open invoice${open.length===1?'':'s'}</div></div>
-      ${buckets.map(([l,f],k)=>{ const v = sum(open.filter(f)); return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${['#3b82f6','#f59e0b','#f97316','#ef4444','#991b1b'][k]}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${l}${k?' days late':''}</div><div style="font-size:18px;font-weight:700;color:${v&&k?'#b91c1c':'var(--text)'}">${arMoney0(v)}</div><div style="font-size:11px;color:var(--text-3)">${open.filter(f).length} invoices</div></div>`; }).join('')}
-    </div>
-    ${arContractsHtml()}
-    <div style="display:grid;grid-template-columns:1fr;gap:14px;align-items:start" class="ar-grid">
-      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+    ${arFilterBarHtml(allClients, allPms)}
+    ${arView==='contracts' ? '' : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;border-top:3px solid var(--green)"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">Total owed (open invoices)</div><div style="font-size:20px;font-weight:700">${arMoney0(sum(openC))}</div><div style="font-size:11px;color:var(--text-3)">${openC.length} open invoice${openC.length===1?'':'s'}${openC.length!==open.length?` (of ${open.length})`:''}</div></div>
+      ${buckets.map(([l,f],k)=>{ const v = sum(openC.filter(f)); return `<div onclick="arBucket=arBucket===${k}?-1:${k};if(arBucket>=0&&arView==='contracts')arView='invoices';renderReceivables()" title="Show just these invoices" style="cursor:pointer;background:var(--surface);border:1px solid ${arBucket===k?'var(--green)':'var(--border)'};${arBucket===k?'box-shadow:0 0 0 1px var(--green);':''}border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${['#3b82f6','#f59e0b','#f97316','#ef4444','#991b1b'][k]}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${l}${k?' days late':''}</div><div style="font-size:18px;font-weight:700;color:${v&&k?'#b91c1c':'var(--text)'}">${arMoney0(v)}</div><div style="font-size:11px;color:var(--text-3)">${openC.filter(f).length} invoices</div></div>`; }).join('')}
+    </div>`}
+    ${arView==='all' || arView==='contracts' ? arContractsHtml() : ''}
+    ${arView==='contracts' ? '' : `<div style="display:grid;grid-template-columns:1fr;gap:14px;align-items:start" class="ar-grid">
+      ${arView==='invoices' ? '' : `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
         <div style="padding:10px 12px;font-weight:700">By customer</div>
         <table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Customer</th><th style="${th};text-align:right">Owed</th></tr></thead><tbody>
-        ${byCust.map(x=>`<tr style="cursor:pointer;${arCustomer===x.c?'background:var(--accent)':''}" onclick="arCustomer=arCustomer==='${arEsc(x.c).replace(/'/g,"\\'")}'?'':'${arEsc(x.c).replace(/'/g,"\\'")}';renderReceivables()">
+        ${byCust.map(x=>`<tr style="cursor:pointer;${arClient===arClientKey(x.c)?'background:var(--accent)':''}" onclick="arClient=arClient==='${arEsc(arClientKey(x.c)).replace(/'/g,"\\'")}'?'':'${arEsc(arClientKey(x.c)).replace(/'/g,"\\'")}';renderReceivables()">
           <td style="${td}">${arEsc(x.c)}<div style="font-size:11px;color:${x.overdue?'#b91c1c':'var(--text-3)'}">${x.n} invoice${x.n===1?'':'s'}${x.overdue?` · ${arMoney0(x.overdue)} overdue, oldest ${x.oldest}d`:''}</div></td>
           <td style="${td};text-align:right;font-weight:600">${arMoney0(x.owed)}</td></tr>`).join('')}
-        </tbody></table></div>
+        </tbody></table></div>`}
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
         <div style="padding:10px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <b>Open invoices</b>
-          <select style="${sel}" onchange="arCustomer=this.value;renderReceivables()"><option value="">All customers</option>${customers.map(c=>`<option${arCustomer===c?' selected':''}>${arEsc(c)}</option>`).join('')}</select>
+          <b>${arView==='collections'?'Overdue invoices':'Open invoices'}</b>${arBucket>=0?` <span class="site-chip active" style="padding:2px 8px;font-size:11px;cursor:pointer" onclick="arBucket=-1;renderReceivables()">${buckets[arBucket][0]}${arBucket?' days late':''} ✕</span>`:''}
           <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arOverdueOnly?'checked':''} onchange="arOverdueOnly=this.checked;renderReceivables()"> Overdue only</label>
           <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arUnlinkedOnly?'checked':''} onchange="arUnlinkedOnly=this.checked;renderReceivables()"> No estimate (${open.filter(i=>!estFor(i).length).length})</label>
           <label style="font-size:12px;display:flex;gap:4px;align-items:center"><input type="checkbox" ${arNotSentOnly?'checked':''} onchange="arNotSentOnly=this.checked;renderReceivables()"> Not emailed yet (${open.filter(i=>i.email_status!=='EmailSent').length})</label>
@@ -7139,7 +7170,7 @@ function renderReceivablesInner(){
         </tbody></table></div>
         <div style="padding:8px 12px;font-size:12px;color:var(--text-3);border-top:1px solid var(--border)">${list.length} invoice${list.length===1?'':'s'} · ${arMoney(sum(list))} owed${arCustomer?` · <a style="cursor:pointer;color:var(--green-dark)" onclick="arCustomer='';renderReceivables()">show all customers</a>`:''}</div>
       </div>
-    </div>`}`;
+    </div>`}`}`;
 }
 // =================== END QUICKBOOKS INVOICES ===================
 // ===================== BUILD & SEND INVOICES =====================

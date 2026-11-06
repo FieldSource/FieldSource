@@ -8066,6 +8066,16 @@ function qqSetItem(i,k,v){ qq.d.items[i][k]=v; qqSaveLocal(); qqRefreshTotal(); 
 function qqTotal(){ return (qq.d&&qq.d.items||[]).reduce((t,i)=>t+(Number(i.qty)||0)*(Number(i.unit_price)||0),0); }
 function qqRefreshTotal(){ const el=document.getElementById('qq-total'); if(el) el.textContent=fmtEstMoney2(qqTotal()); }
 
+function qqAnswer(id, v, typing){ qq.answers = qq.answers || {}; qq.answers[id] = v; qqSaveLocal(); if(!typing) renderQuoteBuilder(); }
+async function qqSendAnswers(){
+  const qs = (qq.d.questions||[]), a = qq.answers || {};
+  const lines = qs.filter(q=>String(a[q.id]??'').trim()!=='').map(q=>{
+    const line = Number.isInteger(q.line) && qq.d.items[q.line] ? ` (line ${q.line+1}: ${qq.d.items[q.line].title})` : '';
+    return `- ${q.ask}${line} -> ${String(a[q.id]).trim()}${q.unit && q.kind==='number' ? ' '+q.unit : ''}${q.about==='unit_price' ? ' (price given by staff)' : ''}`; });
+  if(!lines.length){ alert('Answer at least one question, or click Skip.'); return; }
+  qq.answers = {};
+  await qqDraft('ANSWERS TO YOUR QUESTIONS (apply these; ask nothing more):\n' + lines.join('\n'));
+}
 async function qqDraft(change){
   if(qq.busy) return;
   const req = change ? null : (document.getElementById('qq-request')||{}).value || qq.request;
@@ -8085,6 +8095,9 @@ async function qqDraft(change){
     ['contact_name','contact_title','street','city_line','contact_email'].forEach(k=>{ if(keep[k]) qq.d[k]=keep[k]; else if(!qq.d[k] && qq.prefill && qq.prefill[k]) qq.d[k]=qq.prefill[k]; });
     qq.d.items = (qq.d.items||[]).map(it=>({ ...it, bullets: Array.isArray(it.bullets)?it.bullets.filter(Boolean):[] }));
     qq.d.notes = (qq.d.notes||[]).filter(Boolean); qq.d.flags = (qq.d.flags||[]).filter(Boolean);
+    qq.d.questions = Array.isArray(qq.d.questions) ? qq.d.questions : [];
+    if(typeof qq.d.taxable !== 'boolean') qq.d.taxable = typeof keep.taxable === 'boolean' ? keep.taxable : false;
+    if(!change) qq.answers = {};
     qq.qbItems = data.items || qq.qbItems;
     if(!qq.client && qq.d.client){ await qqPickClient(qq.d.client); }
     qq.status = '';
@@ -8125,12 +8138,30 @@ function renderQuoteBuilder(){
 
   if(d){
     const flags = (d.flags||[]);
+    const qs = (d.questions||[]).filter(q=>q && q.ask);
     body += `
+    ${qs.length && !locked ? `<div style="margin-top:14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--radius-sm);padding:12px 14px">
+      <div style="font-size:13px;font-weight:700;color:#1e3a8a;margin-bottom:8px">Before this goes out, a few questions:</div>
+      ${qs.map((q,i)=>{ const line = Number.isInteger(q.line) && d.items[q.line] ? d.items[q.line] : null;
+        const inputStyle = 'font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+        const field = q.kind==='yesno'
+          ? `<span style="display:inline-flex;gap:6px">${['Yes','No'].map(v=>`<button type="button" class="site-chip${(qq.answers||{})[q.id]===v?' active':''}" style="padding:4px 12px;font-size:12px" onclick="qqAnswer('${q.id}','${v}')">${v}</button>`).join('')}</span>`
+          : `<input id="qqa-${q.id}" value="${escEst((qq.answers||{})[q.id]||'')}" oninput="qqAnswer('${q.id}',this.value,true)" type="${q.kind==='number'?'number':'text'}" step="any" style="${inputStyle};width:${q.kind==='number'?'120px':'260px'}" placeholder="${q.kind==='number'?'':'type the answer'}">${q.unit?` <span style="font-size:12px;color:var(--text-2)">${escEst(q.unit)}</span>`:''}`;
+        return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:5px 0;${i?'border-top:1px solid #dbeafe':''}">
+          <div style="flex:1;min-width:220px;font-size:13px;color:#1e293b">${escEst(q.ask)}${line?`<div style="font-size:11px;color:var(--text-3)">Line: ${escEst(line.title||'')}</div>`:''}</div>${field}</div>`; }).join('')}
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+        <button class="btn-save" style="flex:none;padding:7px 14px" onclick="qqSendAnswers()" ${qq.busy?'disabled':''}>Update the quote</button>
+        <button class="btn-cancel" style="flex:none;padding:7px 12px" onclick="qq.d.questions=[];qqSaveLocal();renderQuoteBuilder()">Skip, I'll fix it below</button>
+        <span style="font-size:11px;color:var(--text-3)">Leave any blank to skip it; it stays flagged.</span>
+      </div></div>` : ''}
     ${flags.length?`<div style="margin-top:14px;background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius-sm);padding:10px 12px;font-size:12px;color:#713f12">
       <b>Check these:</b><ul style="margin:4px 0 0 18px;padding:0">${flags.map(x=>`<li>${escEst(x)}</li>`).join('')}</ul></div>`:''}
 
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:16px 0 4px"><span style="font-size:13px;font-weight:700">PDF style</span>
       ${[['estimate','Field Source estimate (like Ryan\u2019s QuickBooks estimate)'],['quote','Client-branded quote (client logo and colors)']].map(([v,l])=>`<button onclick="qq.style='${v}';qqSaveLocal();renderQuoteBuilder()" class="site-chip${(qq.style||'estimate')===v?' active':''}" style="padding:5px 10px;font-size:12px">${l}</button>`).join('')}</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0 4px"><span style="font-size:13px;font-weight:700">Taxable?</span>
+      ${[[false,'No (tax-exempt)'],[true,'Yes']].map(([v,l])=>`<button onclick="qq.d.taxable=${v};qqSaveLocal();renderQuoteBuilder()" class="site-chip${(d.taxable===true)===v?' active':''}" style="padding:4px 10px;font-size:12px" ${locked?'disabled':''}>${l}</button>`).join('')}
+      <span style="font-size:11px;color:var(--text-3)">Sets the tax on the QuickBooks estimate lines.</span></div>
     <div style="font-size:13px;font-weight:700;margin:12px 0 8px">Client</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
       ${f('Contact name','contact_name')}${f('Contact title','contact_title','Treasurer')}
@@ -11051,12 +11082,78 @@ async function estDocsRender(e){
     <span>📎 <b>PO &amp; approval documents</b></span>
     ${docs.map(d=>`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--bg);border:1px solid var(--border);border-radius:99px;padding:2px 4px 2px 9px;font-size:12px">
         <a style="cursor:pointer;color:var(--green-dark)" onclick="estDocOpen('${d.id}')" title="Added by ${escEst(d.uploaded_by||'')} ${new Date(d.created_at).toLocaleDateString('en-US')}">${kindLbl[d.kind]||'Document'}: ${escEst(d.file_name)}</a>
+        ${d.kind==='po' && e.qbNumber ? `<button onclick="poReview('${d.id}','${e.id}')" style="border:1px solid var(--green);background:var(--green-light);color:var(--green-dark);border-radius:99px;cursor:pointer;font-size:11px;padding:1px 8px;font-family:inherit" title="Read this PO and mark the estimate approved">Read &amp; approve</button>` : ''}
         <button onclick="estDocDelete('${d.id}','${e.id}')" style="border:none;background:none;cursor:pointer;color:var(--text-3);font-size:11px" title="Remove">✕</button></span>`).join('') || '<span style="font-size:12px;color:var(--text-3)">none yet</span>'}
     <select id="est-doc-kind" style="font-size:12px;padding:3px 6px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit">
       <option value="po">PO</option><option value="approval">Approval (email / text)</option><option value="other">Other</option></select>
     <label style="font-size:12px;cursor:pointer;color:var(--green-dark);font-weight:600;border:1px dashed var(--border-2);border-radius:6px;padding:3px 9px">+ Upload<input type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.heic,.eml,.msg,.doc,.docx" style="display:none" onchange="estDocUpload('${e.id}',this)"></label>
   </div>`;
   window._estDocs = docs;
+}
+// ---- Approved PO: read the PO, check it against the estimate, confirm, then approve in QuickBooks and email the team ----
+let poState = null;
+async function poReview(docId, estId){
+  const e = estimates.find(x=>x.id===estId), d = (window._estDocs||[]).find(x=>x.id===docId); if(!e || !d) return;
+  billOverlay('po-overlay', `<div style="padding:30px;text-align:center;color:var(--text-3)">Reading ${escEst(d.file_name)}…</div>`, 640);
+  try{
+    const r = await invAction({ action:'po_read', file_path: d.file_path });
+    poState = { e, d, po: r.po || {} };
+    poRender();
+  }catch(err){ billOverlay('po-overlay', `<div class="sheet-title">Couldn't read the PO</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${escEst(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('po-overlay').remove()">Close</button></div>`, 520); }
+}
+function poRender(){
+  const { e, po } = poState, money = n=>'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const estTotal = Number(e.amount||0), poTotal = Number(po.total||0);
+  const totalOk = poTotal>0 && Math.abs(poTotal-estTotal) < 0.005;
+  const refOk = !po.estimate_ref || String(po.estimate_ref).replace(/\D/g,'')===String(e.qbNumber).replace(/\D/g,'');
+  const inp = (id,v,w)=>`<input id="${id}" value="${escEst(v||'')}" style="${billInput};${w?'width:'+w:''}">`;
+  const warn = [];
+  if(!totalOk) warn.push(poTotal ? `The PO total (${money(poTotal)}) doesn't match estimate #${escEst(e.qbNumber)} (${money(estTotal)}). Approving is blocked until they match: fix the estimate or check the PO.` : 'The PO total could not be read. Check it on the PO before approving.');
+  if(!refOk) warn.push(`The PO references estimate/quote #${escEst(po.estimate_ref)}, not #${escEst(e.qbNumber)}.`);
+  if(po.signatures_ok===false) warn.push(`Signatures: ${escEst(po.signature_note||'a required signature looks missing')}.`);
+  if(po.vendor_is_field_source===false) warn.push(`Vendor / remit-to on the PO is "${escEst(po.vendor_name||'not Field Source')}", not Field Source.`);
+  (po.unclear||[]).filter(Boolean).forEach(u=>warn.push(`Hard to read: ${escEst(u)}. Check it against the PO.`));
+  billOverlay('po-overlay', `
+    <div class="sheet-title" style="margin-bottom:2px">Approve PO for estimate #${escEst(e.qbNumber)}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">${escEst(e.client||'')} · ${escEst(e.projectName||'')} · estimate total ${money(estTotal)}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div><div style="${billLbl}">PO #</div>${inp('po-num', po.po_number)}</div>
+      <div><div style="${billLbl}">PO date</div><input id="po-date" type="date" value="${escEst(po.po_date||'')}" style="${billInput}"></div>
+      <div><div style="${billLbl}">PO total (read)</div><div style="font-size:15px;font-weight:700;padding:6px 0;color:${totalOk?'#166534':'#b91c1c'}">${poTotal?money(poTotal):'—'} ${totalOk?'✓ matches':''}</div></div>
+      <div><div style="${billLbl}">Signed by</div>${inp('po-signer', po.signer_name)}</div>
+      <div><div style="${billLbl}">Title</div>${inp('po-title', po.signer_title)}</div>
+      <div><div style="${billLbl}">Requisition #</div><div style="font-size:13px;padding:6px 0">${escEst(po.requisition||'—')}</div></div>
+    </div>
+    ${po.description?`<div style="font-size:12px;color:var(--text-2);margin-top:8px">PO description: ${escEst(po.description)}</div>`:''}
+    ${warn.length?`<div style="margin-top:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 12px;font-size:12px;color:#991b1b"><ul style="margin:0 0 0 16px;padding:0">${warn.map(w=>`<li>${w}</li>`).join('')}</ul></div>`:''}
+    ${(po.instructions||[]).filter(Boolean).length?`<div style="margin-top:10px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;font-size:12px;color:#92400e"><b>The PO says:</b> ${po.instructions.filter(Boolean).map(escEst).join(' · ')}</div>`:''}
+    <div style="font-size:12px;color:var(--text-2);margin-top:12px;line-height:1.5">Approving will: mark estimate #${escEst(e.qbNumber)} <b>Accepted</b> in QuickBooks (accepted by the signer, on the PO date), put <b>"PO # …"</b> first in its customer note, save the PO # on the job for invoices, and email Ali, Matt and Jake the estimate PDF.</div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-top:10px"><input type="checkbox" id="po-confirm"> This PO is approved</label>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12px;margin-top:4px;color:var(--text-2)"><input type="checkbox" id="po-email" checked> Email Ali, Matt and Jake</label>
+    <div id="po-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
+    <div style="display:flex;justify-content:space-between;margin-top:14px">
+      <button class="btn-cancel" onclick="document.getElementById('po-overlay').remove()">Cancel</button>
+      <button class="btn-save" id="po-go" onclick="poApprove()" ${totalOk?'':'disabled title="The PO total must match the estimate"'}>Mark approved</button>
+    </div>`, 680);
+}
+async function poApprove(){
+  const { e, po } = poState, err = document.getElementById('po-err'), btn = document.getElementById('po-go');
+  if(!document.getElementById('po-confirm').checked){ err.textContent = 'Tick "This PO is approved" to confirm.'; return; }
+  const poNum = document.getElementById('po-num').value.trim(); if(!poNum){ err.textContent = 'Enter the PO number.'; return; }
+  btn.disabled = true; btn.textContent = 'Approving…';
+  try{
+    const r = await invAction({ action:'po_approve', qb_estimate_id: e.qbId||'', estimate_number: e.qbNumber, po_number: poNum, po_date: document.getElementById('po-date').value,
+      po_total: po.total, signer_name: document.getElementById('po-signer').value, signer_title: document.getElementById('po-title').value,
+      quote_title: e.projectName||'', email_team: document.getElementById('po-email').checked });
+    e.poNumber = poNum.replace(/^p\.?\s*o\.?\s*#?\s*/i,''); e.qbStatus = r.qb_status || 'Accepted';
+    if(['Not Started','Needs Site Visit','Needs Shot','Estimate In Progress','Estimate Distributed Internally','Estimate Sent','On Hold','Declined'].includes(e.status)) e.status = 'Approved';
+    billOverlay('po-overlay', `<div class="sheet-title">✓ Estimate #${escEst(r.doc_number)} approved</div>
+      <div style="font-size:13px;line-height:1.7;margin:8px 0 14px">${r.ok?'Marked <b>Accepted</b> in QuickBooks':'Updated in QuickBooks (check the status there)'} with "<b>${escEst(r.memo_first_line||'PO # '+poNum)}</b>" in the notes. Total ${'$'+Number(r.total).toLocaleString('en-US',{minimumFractionDigits:2})}.<br>
+      ${r.emailed?`Email with the estimate PDF sent to ${escEst(r.emailed)}.`:escEst(r.email_note||'No team email sent.')}<br>
+      Every invoice for this job will now carry PO ${escEst(e.poNumber)}.</div>
+      ${(po.instructions||[]).filter(Boolean).length?`<div style="font-size:12px;background:#fffbeb;border-radius:8px;padding:8px 10px;margin-bottom:12px">Remember, the PO says: ${po.instructions.filter(Boolean).map(escEst).join(' · ')}</div>`:''}
+      <div style="text-align:right"><button class="btn-save" style="flex:none" onclick="document.getElementById('po-overlay').remove();renderEstimates();openEstimateDetail('${e.id}')">Done</button></div>`, 560);
+  }catch(x){ err.textContent = 'Not approved: '+x.message; btn.disabled = false; btn.textContent = 'Mark approved'; }
 }
 async function estDocUpload(estId, input){
   const kind = (document.getElementById('est-doc-kind')||{}).value || 'po';

@@ -123,8 +123,18 @@ exports.handler = async function (event) {
   if (!SB_KEY || !process.env.ANTHROPIC_API_KEY) return json(500, { error: 'Missing SUPABASE_SERVICE_KEY or ANTHROPIC_API_KEY in Netlify' });
   try {
     if (!(await requireUser(event))) return json(401, { error: 'Please log in to the tracker again.' });
-    const { request, draft, change, clients, client } = JSON.parse(event.body || '{}');
-    if (!request && !change) return json(400, { error: 'Describe the quote first.' });
+    const { request, draft, change, clients, client, import_file } = JSON.parse(event.body || '{}');
+    if (!request && !change && !import_file) return json(400, { error: 'Describe the quote first.' });
+    // Import: a quote already written outside the tracker (PDF or photo)
+    let docBlock = null;
+    if (import_file) {
+      const t = String(import_file.type || '').toLowerCase(), n = String(import_file.name || '').toLowerCase();
+      const media = t === 'application/pdf' || n.endsWith('.pdf') ? 'application/pdf' : /jpe?g/.test(t) || /\.jpe?g$/.test(n) ? 'image/jpeg' : /png/.test(t) || n.endsWith('.png') ? 'image/png' : null;
+      if (!media) return json(400, { error: 'Import a PDF, or a JPG/PNG photo of the quote.' });
+      if (!import_file.b64 || import_file.b64.length > 6.5e6) return json(400, { error: 'The quote file is missing or too large (over about 4.5 MB).' });
+      docBlock = media === 'application/pdf' ? { type: 'document', source: { type: 'base64', media_type: media, data: import_file.b64 } }
+                                             : { type: 'image', source: { type: 'base64', media_type: media, data: import_file.b64 } };
+    }
 
     const items = await qbItems();
     const itemList = items.map(i => `${i.id} | ${i.name} | ${i.price == null ? 'no price' : '$' + i.price} | ${i.desc}`).join('\n');
@@ -133,14 +143,21 @@ exports.handler = async function (event) {
       client ? `CLIENT (chosen by staff, use this exact name): ${client}` : `KNOWN CLIENTS: ${(clients || []).slice(0, 200).join(', ')}`,
       `TODAY: ${new Date().toISOString().slice(0, 10)}`,
       draft ? `CURRENT DRAFT:\n${JSON.stringify(draft)}` : '',
-      change ? `CHANGE REQUEST:\n${change}` : `STAFF REQUEST:\n${request}`,
+      docBlock ? `IMPORT: The attached document is a quote Field Source already wrote outside the tracker, and the client accepted it. Turn it into the JSON draft:
+- Copy the client, contact name and title, title, field or site, service period or dates, intro, goal and notes as written.
+- One item per priced line on the document, in the same order. qty and unit_price come EXACTLY from the document (if only a line amount is shown, qty 1 and unit_price = that amount). Set price_source to "quote document". Never use or substitute a QuickBooks price.
+- Scope text under each line becomes its bullets (2 to 5, kept close to the document's wording).
+- A discount on the document is its own line with a negative unit_price.
+- Still fill qb_item_id and qb_item_name with the best matching QuickBooks item; flag lines where nothing fits.
+- Also return at the top level: "doc_total" (the grand total printed on the document, a number, or null if none), "doc_quote_number" (any quote/proposal number printed, else ""), "doc_date" (YYYY-MM-DD or "").
+- questions: only for what the document doesn't say and the estimate needs (for example whether the work is taxable).` : (change ? `CHANGE REQUEST:\n${change}` : `STAFF REQUEST:\n${request}`),
     ].filter(Boolean).join('\n\n');
 
     const headers = { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' };
     if (process.env.ANTHROPIC_WORKSPACE_ID) headers['anthropic-workspace-id'] = process.env.ANTHROPIC_WORKSPACE_ID;
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', headers,
-      body: JSON.stringify({ model: MODEL, max_tokens: 3000, system: SYSTEM, messages: [{ role: 'user', content: user }] }),
+      body: JSON.stringify({ model: MODEL, max_tokens: 3000, system: SYSTEM, messages: [{ role: 'user', content: docBlock ? [docBlock, { type: 'text', text: user }] : user }] }),
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok) return json(502, { error: `Claude error ${r.status}: ${(data.error && data.error.message) || ''}` });

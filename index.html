@@ -7765,7 +7765,7 @@ function vendStatus(v){
   return 'ok';
 }
 function vendIssues(name){   // for Approve to Pay: what's missing before paying this vendor
-  const v = vendorFor(name); if(!v) return vendorsLoaded && vendors.length ? 'not on the Vendors list' : '';
+  const v = vendorFor(name); if(!v) return '';
   return Object.keys(VEND_KINDS).filter(k=>v['needs_'+k]).map(k=>{ const s = vendDocState(v,k); return s.state==='missing' ? `missing ${VEND_KINDS[k]}` : s.state==='expired' ? `${VEND_KINDS[k]} expired` : ''; }).filter(Boolean).join(', ');
 }
 function vendChip(v, kind){
@@ -7780,11 +7780,12 @@ function renderVendors(){
   const esc = escEst;
   const lastInv = name=>{ const l = (typeof invoiceFiles!=='undefined'?invoiceFiles:[]).filter(f=>vendorFor(f.vendorName)===vendorFor(name)); return l.sort((a,b)=>String(b.invoiceDate||b.createdAt).localeCompare(String(a.invoiceDate||a.createdAt)))[0]; };
   const openBills = v=>(typeof payBills!=='undefined'?payBills:[]).filter(b=>Number(b.balance)>0.005 && vendorFor(b.vendor_name)===v).reduce((t,b)=>t+Number(b.balance),0);
-  const rows = vendors.map(v=>({ v, st: vendStatus(v) }));
+  const archivedRows = vendors.filter(v=>v.archived).map(v=>({ v, st: vendStatus(v) }));
+  const rows = vendors.filter(v=>!v.archived).map(v=>({ v, st: vendStatus(v) }));
   const cnt = k=>rows.filter(r=>k==='attention' ? r.st!=='ok' : r.st===k).length;
-  let list = rows.filter(r=>vendFilter==='all' || (vendFilter==='attention' ? r.st!=='ok' : r.st===vendFilter)).filter(r=>!vendQuery || vendKey(r.v.name).includes(vendKey(vendQuery)) || String(r.v.category).toLowerCase().includes(vendQuery.toLowerCase()));
+  let list = (vendFilter==='archived' ? archivedRows : rows).filter(r=>vendFilter==='all' || vendFilter==='archived' || (vendFilter==='attention' ? r.st!=='ok' : r.st===vendFilter)).filter(r=>!vendQuery || vendKey(r.v.name).includes(vendKey(vendQuery)) || [r.v.category, r.v.contact_name, r.v.contact_email, r.v.billing_email, r.v.contact_phone].some(x=>String(x||'').toLowerCase().includes(vendQuery.toLowerCase())));
   const order = { review:0, missing:1, expiring:2, ok:3 }; list.sort((a,b)=>order[a.st]-order[b.st] || a.v.name.localeCompare(b.v.name));
-  const card = (k,label,color,sub)=>`<div onclick="vendFilter='${k}';renderVendors()" style="cursor:pointer;background:var(--surface);border:1px solid ${vendFilter===k?'var(--green)':'var(--border)'};border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${color}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${label}</div><div style="font-size:20px;font-weight:700">${k==='all'?rows.length:cnt(k)}</div><div style="font-size:11px;color:var(--text-3)">${sub}</div></div>`;
+  const card = (k,label,color,sub)=>`<div onclick="vendFilter='${k}';renderVendors()" style="cursor:pointer;background:var(--surface);border:1px solid ${vendFilter===k?'var(--green)':'var(--border)'};border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${color}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${label}</div><div style="font-size:20px;font-weight:700">${k==='all'?rows.length:k==='archived'?archivedRows.length:cnt(k)}</div><div style="font-size:11px;color:var(--text-3)">${sub}</div></div>`;
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px;text-align:left;background:var(--surface)';
   const td = 'font-size:13px;padding:8px;border-top:1px solid var(--border);vertical-align:middle';
   const stLbl = { review:['New: needs review','#1d4ed8'], missing:['Documents needed','#b91c1c'], expiring:['Expiring soon','#b45309'], ok:['✓ Complete','#166534'] };
@@ -7792,7 +7793,6 @@ function renderVendors(){
     <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:12px">
       <div style="font-size:18px;font-weight:700">Vendors <span style="font-size:12px;font-weight:400;color:var(--text-3)">W-9, certificates of insurance (COI), Ohio BWC certificates</span></div>
       <div style="display:flex;gap:6px">
-        <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="vendImport()" title="Add every vendor from QuickBooks bills and uploaded invoices that isn't on the list yet">+ Add vendors from QuickBooks and invoices</button>
         <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="vendNewPrompt()">+ Add vendor</button></div>
     </div>
     ${window._vendErr?`<div style="padding:10px 14px;background:#fee2e2;border-radius:8px;font-size:13px;color:#991b1b;margin-bottom:12px">Couldn't load vendors: ${esc(window._vendErr).slice(0,200)}${/vendors|vendor_docs/.test(window._vendErr)?' (run vendors-setup.sql first)':''}</div>`:''}
@@ -7802,7 +7802,8 @@ function renderVendors(){
       ${card('missing','Documents needed','#b91c1c','missing or expired')}
       ${card('expiring','Expiring in 30 days','#f59e0b','request updated copies')}
       ${card('ok','Complete','#16a34a','everything on file')}
-      ${card('all','All vendors','#64748b','')}
+      ${card('all','All vendors','#64748b','not counting archived')}
+      ${card('archived','Archived','#94a3b8','no longer doing business')}
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
       <div style="padding:10px 12px;display:flex;gap:8px;align-items:center"><input id="vend-q" value="${esc(vendQuery)}" placeholder="Search vendors" style="font-size:13px;padding:6px 10px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:260px" oninput="vendQuery=this.value;clearTimeout(window._vqT);window._vqT=setTimeout(()=>{renderVendors();const q=document.getElementById('vend-q');q.focus();q.setSelectionRange(q.value.length,q.value.length)},250)">
@@ -7810,12 +7811,12 @@ function renderVendors(){
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:860px"><thead><tr>
         <th style="${th}">Vendor</th><th style="${th}">Status</th><th style="${th}">W-9</th><th style="${th}">COI</th><th style="${th}">BWC</th><th style="${th}">1099</th><th style="${th}">Last invoice</th><th style="${th};text-align:right">Open bills</th></tr></thead><tbody>
         ${list.map(({v,st})=>{ const li = lastInv(v.name), ob = openBills(v);
-          return `<tr style="cursor:pointer" onclick="openVendor('${v.id}')"><td style="${td}"><b>${esc(v.name)}</b><div style="font-size:11px;color:var(--text-3)">${esc(v.category||'Not categorized')}</div></td>
-          <td style="${td};font-size:12px;color:${stLbl[st][1]};font-weight:600">${stLbl[st][0]}</td>
+          return `<tr style="cursor:pointer" onclick="openVendor('${v.id}')"><td style="${td}"><b>${esc(v.name)}</b><div style="font-size:11px;color:var(--text-3)">${esc(v.category||'Not categorized')}${v.contact_name||v.contact_phone?' · '+esc([v.contact_name,v.contact_phone].filter(Boolean).join(', ')):''}</div></td>
+          <td style="${td};font-size:12px;color:${v.archived?'var(--text-3)':stLbl[st][1]};font-weight:600">${v.archived?`Archived${v.archived_at?' '+new Date(v.archived_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):''}`:stLbl[st][0]}</td>
           <td style="${td}">${vendChip(v,'w9')}</td><td style="${td}">${vendChip(v,'coi')}</td><td style="${td}">${vendChip(v,'bwc')}</td>
           <td style="${td};font-size:12px">${v.is_1099===true?'Yes':v.is_1099===false?'No':'<span style="color:var(--text-3)">?</span>'}</td>
           <td style="${td};font-size:12px;color:var(--text-2)">${li?`${new Date(String(li.invoiceDate||li.createdAt).slice(0,10)+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})} · ${esc(li.projectName||'')}`:'—'}</td>
-          <td style="${td};text-align:right;font-weight:600">${ob?fmtEstMoney2(ob):'<span style="color:var(--text-3);font-weight:400">—</span>'}</td></tr>`; }).join('') || `<tr><td colspan="8" style="${td};color:var(--text-3)">${vendors.length?'Nothing in this view.':'No vendors yet. Click "Add vendors from QuickBooks and invoices" to start the list.'}</td></tr>`}
+          <td style="${td};text-align:right;font-weight:600">${ob?fmtEstMoney2(ob):'<span style="color:var(--text-3);font-weight:400">—</span>'}</td></tr>`; }).join('') || `<tr><td colspan="8" style="${td};color:var(--text-3)">${vendors.length?'Nothing in this view.':'No vendors yet. Vendors are added automatically when you file a vendor invoice, or with + Add vendor.'}</td></tr>`}
       </tbody></table></div>
     </div></div>`;
 }
@@ -7842,7 +7843,15 @@ async function vendCheckOnInvoice(name, text, project){
   try{
     if(!vendorsLoaded) await loadVendors();
     if(window._vendErr) return;
-    if(vendorFor(name)) return;
+    const known = vendorFor(name);
+    if(known && known.archived){
+      await sbFetch('PATCH', `/rest/v1/vendors?id=eq.${known.id}`, { archived:false, archived_at:null, archived_by:null });
+      Object.assign(known, { archived:false, archived_at:null, archived_by:null });
+      const iss = vendIssues(known.name) || (Object.keys(VEND_KINDS).filter(k=>known['needs_'+k]).map(k=>vendDocState(known,k)).some(x=>x.state==='expiring') ? 'a document expires within 30 days' : '');
+      vendNotice(`<b>${escEst(known.name)} was archived and is back</b><br>A new invoice came in, so they're active again in Business Ops → Vendors.${iss?`<br><b style="color:#b91c1c">Before paying: ${escEst(iss)}.</b>`:'<br>Their documents are still current.'}`, known.id);
+      updateApprovalBell(); return;
+    }
+    if(known) return;
     const v = await vendCreate(name, { source:'invoice' }); if(!v) return;
     const rec = await vendRecommend(v, text, project);
     const need = rec ? Object.keys(VEND_KINDS).filter(k=>rec.needs && rec.needs[k]).map(k=>VEND_KINDS[k]) : ['W-9'];
@@ -7891,7 +7900,10 @@ function openVendor(id){
       <span style="font-size:12px;color:var(--text-3)">${v.reviewed_at?`Reviewed by ${esc(getDisplayName(v.reviewed_by))} ${fmt(String(v.reviewed_at).slice(0,10))}`:'<b style="color:#1d4ed8">New: needs review</b>'}</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
       <div><div style="${billLbl}">Category</div><select style="${inp};width:100%" onchange="vendSave('${v.id}',{category:this.value},false)"><option value="">Not categorized</option>${VEND_CATS.map(c=>`<option${v.category===c?' selected':''}>${c}</option>`).join('')}</select></div>
-      <div><div style="${billLbl}">Contact email (for document requests)</div><input style="${inp};width:100%;box-sizing:border-box" value="${esc(v.contact_email||'')}" placeholder="ap@vendor.com" onchange="vendSave('${v.id}',{contact_email:this.value.trim()},false)"></div>
+      <div><div style="${billLbl}">Contact name</div><input style="${inp};width:100%;box-sizing:border-box" value="${esc(v.contact_name||'')}" placeholder="e.g. Sarah in the office" onchange="vendSave('${v.id}',{contact_name:this.value.trim()},false)"></div>
+      <div><div style="${billLbl}">Phone</div><input type="tel" style="${inp};width:100%;box-sizing:border-box" value="${esc(v.contact_phone||'')}" placeholder="(614) 555-0100" onchange="vendSave('${v.id}',{contact_phone:this.value.trim()},false)"></div>
+      <div><div style="${billLbl}">Contact email (for document requests)</div><input type="email" style="${inp};width:100%;box-sizing:border-box" value="${esc(v.contact_email||'')}" placeholder="name@vendor.com" onchange="vendSave('${v.id}',{contact_email:this.value.trim()},false)"></div>
+      <div><div style="${billLbl}">Billing email <span style="text-transform:none;font-weight:400">(optional, if different)</span></div><input type="email" style="${inp};width:100%;box-sizing:border-box" value="${esc(v.billing_email||'')}" placeholder="ap@vendor.com" onchange="vendSave('${v.id}',{billing_email:this.value.trim()},false)"></div>
     </div>
     ${rec?`<div style="margin-top:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;font-size:13px">
       <b>Claude's recommendation</b> <span style="font-size:11px;color:var(--text-3)">(${esc(rec.confidence||'')} confidence)</span>: ${esc(rec.summary||'')}
@@ -7916,7 +7928,10 @@ function openVendor(id){
         <span style="font-size:11px;color:var(--text-3)">Claude reads the dates and checks additional insured.</span></div></div>
     <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;flex-wrap:wrap">
       <button class="site-chip" style="padding:6px 12px" onclick="vendRequest('${v.id}')">✉ Request documents${v.last_requested_at?` <span style="font-size:11px;color:var(--text-3)">(last ${fmt(String(v.last_requested_at).slice(0,10))})</span>`:''}</button>
-      <button class="btn-cancel" style="flex:none" onclick="document.getElementById('vend-overlay').remove();renderVendors()">Done</button></div>`, 700);
+      <span style="display:flex;gap:6px;margin-left:auto">
+        <button class="site-chip" style="padding:6px 12px" onclick="vendArchive('${v.id}',${!v.archived})" title="${v.archived?'Make this vendor active again':'No longer doing business: hide from the lists and alerts. They come back automatically if a new invoice arrives.'}">${v.archived?'Unarchive':'Archive'}</button>
+        <button class="site-chip" style="padding:6px 12px;color:#b91c1c" onclick="vendDelete('${v.id}')" title="Remove this vendor and their documents completely">Delete</button>
+        <button class="btn-cancel" style="flex:none" onclick="document.getElementById('vend-overlay').remove();renderVendors()">Done</button></span></div>`, 700);
 }
 async function vendSave(id, fields, reopen=true){
   const v = vendors.find(x=>x.id===id); if(!v) return;
@@ -7988,14 +8003,32 @@ function vendRequest(id){
     : k==='coi' ? `- ${s.state==='missing'?'A':'An updated'} certificate of insurance (general liability, auto, and umbrella if applicable) naming Field Source LLC as additional insured${s.doc&&s.doc.expires_on?` (the one we have expires ${new Date(s.doc.expires_on+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})})`:''}`
     : `- ${s.state==='missing'?'Your':'An updated'} Ohio Bureau of Workers' Compensation certificate of coverage`);
   const me = getDisplayName(currentUser&&currentUser.email);
-  const body = `Hello,\n\nBefore we can process payment on your invoices, Field Source needs the following on file:\n\n${lines.join('\n')}\n\nYou can reply to this email with the documents attached. Please list Field Source LLC, Dublin, Ohio as the certificate holder.\n\nThank you,\n${me}\nField Source LLC`;
+  const first = String(v.contact_name||'').trim().split(/\s+/)[0];
+  const body = `${first?'Hi '+first:'Hello'},\n\nBefore we can process payment on your invoices, Field Source needs the following on file:\n\n${lines.join('\n')}\n\nYou can reply to this email with the documents attached. Please list Field Source LLC, Dublin, Ohio as the certificate holder.\n\nThank you,\n${me}\nField Source LLC`;
   const subject = `Field Source vendor documents needed: ${want.map(x=>VEND_KINDS[x.k]).join(', ')}`;
-  window.open(`mailto:${encodeURIComponent(v.contact_email||'')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank');
+  window.open(`mailto:${encodeURIComponent(v.contact_email||v.billing_email||'')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank');
   vendSave(id, { last_requested_at: new Date().toISOString() }, true);
+}
+async function vendArchive(id, on){
+  const v = vendors.find(x=>x.id===id); if(!v) return;
+  if(on && !confirm(`Archive ${v.name}?\n\nThey'll be hidden from the lists and alerts, with their documents kept on file. If a new invoice comes in from them, they come back automatically and you're told what's missing or expired.`)) return;
+  await vendSave(id, on ? { archived:true, archived_at:new Date().toISOString(), archived_by:(currentUser&&currentUser.email)||'' } : { archived:false, archived_at:null, archived_by:null }, false);
+  document.getElementById('vend-overlay')?.remove(); renderVendors(); updateApprovalBell();
+}
+async function vendDelete(id){
+  const v = vendors.find(x=>x.id===id); if(!v) return;
+  const docs = vendorDocs.filter(d=>d.vendor_id===id);
+  if(!confirm(`Delete ${v.name} completely?\n\nThis removes the vendor${docs.length?` and their ${docs.length} document${docs.length===1?'':'s'}`:''} from the tracker and can't be undone. To keep the records, use Archive instead.`)) return;
+  try{
+    for(const d of docs){ try{ await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(d.file_path)}`, { method:'DELETE', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY } }); }catch(e){} }
+    await sbFetch('DELETE', `/rest/v1/vendors?id=eq.${id}`);   // their document records go with them
+    vendors = vendors.filter(x=>x.id!==id); vendorDocs = vendorDocs.filter(d=>d.vendor_id!==id);
+    document.getElementById('vend-overlay')?.remove(); renderVendors(); updateApprovalBell();
+  }catch(e){ alert('Could not delete: '+e.message); }
 }
 function bellVendorItems(){
   if(typeof canBillInvoices!=='function' || !canBillInvoices() || !vendorsLoaded) return [];
-  return vendors.map(v=>({ v, st: vendStatus(v) })).filter(x=>x.st==='review' || x.st==='expiring' || (x.st==='missing' && vendIssues(x.v.name).includes('expired')));
+  return vendors.filter(v=>!v.archived).map(v=>({ v, st: vendStatus(v) })).filter(x=>x.st==='review' || x.st==='expiring' || (x.st==='missing' && vendIssues(x.v.name).includes('expired')));
 }
 // =================== END VENDORS ===================
 

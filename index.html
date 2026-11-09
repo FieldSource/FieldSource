@@ -308,6 +308,9 @@ main{padding:12px 16px 100px}
         <button type="button" onclick="togglePwVisible('login-password',this)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-3);font-size:16px;padding:4px">👁</button>
       </div>
     </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2);margin:2px 0 14px;cursor:pointer;font-family:'DM Sans',sans-serif">
+      <input type="checkbox" id="login-remember" style="width:16px;height:16px;accent-color:var(--green)"> Keep me signed in on this device for 30 days
+    </label>
     <button class="login-btn" id="login-btn" onclick="doLogin()">Sign in</button>
     <div class="login-error" id="login-error"></div>
     <div style="text-align:center;margin-top:14px">
@@ -14540,6 +14543,10 @@ async function doLogin(){
     localStorage.setItem('fs_refresh', refreshToken);
     localStorage.setItem('fs_user', JSON.stringify(currentUser));
     localStorage.setItem('fs_login_at', String(Date.now()));
+    const rem = document.getElementById('login-remember');
+    if(rem && rem.checked){ localStorage.setItem('fs_remember_until', String(Date.now() + REMEMBER_DAYS*864e5)); localStorage.setItem('fs_remember_pref','1'); }
+    else { localStorage.removeItem('fs_remember_until'); localStorage.setItem('fs_remember_pref','0'); }
+    try{ localStorage.setItem('fs_last_email', (document.getElementById('login-email').value||'').trim()); }catch(e){}
     showApp();
   } catch(e){
     errEl.textContent = 'Connection error. Please try again.';
@@ -14548,6 +14555,7 @@ async function doLogin(){
 }
 
 function doLogout(){
+  localStorage.removeItem('fs_remember_until');
   localStorage.removeItem('fs_token');
   localStorage.removeItem('fs_refresh');
   localStorage.removeItem('fs_login_at');
@@ -14637,15 +14645,21 @@ function showApp(){
 }
 
 
+function prefillLogin(){
+  try{
+    const em = document.getElementById('login-email'), rem = document.getElementById('login-remember');
+    if(em && !em.value) em.value = localStorage.getItem('fs_last_email') || '';
+    if(rem) rem.checked = localStorage.getItem('fs_remember_pref') === '1';
+  }catch(e){}
+}
 // Check for existing session on load
 function checkSession(){
+  prefillLogin();
   const token = localStorage.getItem('fs_token');
   const refresh = localStorage.getItem('fs_refresh');
   const user = localStorage.getItem('fs_user');
   if(token && user && loginExpiredForDay()){
-    doLogout();
-    const e = document.getElementById('login-error');
-    if(e) e.textContent = 'New day: please sign in again.';
+    endDailySession();
     return;
   }
   if(token && user){
@@ -14717,8 +14731,11 @@ function refreshSession(){
 
 // ── ONE LOGIN PER DAY ──
 // A login lasts until 3:00 AM the next morning, then everyone signs in again for the new day.
-const DAILY_LOGOUT_HOUR = 3;
+const DAILY_LOGOUT_HOUR = 3, REMEMBER_DAYS = 30;
+function rememberActive(){ const u = +localStorage.getItem('fs_remember_until') || 0; return u > Date.now(); }
 function loginExpiredForDay(){
+  if(rememberActive()) return false;                       // "Keep me signed in" on this device
+  if(+localStorage.getItem('fs_remember_until')) return true;   // the 30 days ran out
   let at = +localStorage.getItem('fs_login_at') || 0;
   if(!at){ at = Date.now(); localStorage.setItem('fs_login_at', String(at)); } // sessions from before this change start counting now
   const cutoff = new Date(at);
@@ -14727,9 +14744,10 @@ function loginExpiredForDay(){
   return Date.now() >= cutoff.getTime();
 }
 function endDailySession(){
+  const was30 = !!(+localStorage.getItem('fs_remember_until'));
   doLogout();
   const e = document.getElementById('login-error');
-  if(e) e.textContent = 'New day: please sign in again.';
+  if(e) e.textContent = was30 ? 'It\u2019s been 30 days: please sign in again.' : 'New day: please sign in again.';
 }
 
 // Make sure the token is good for at least 5 more minutes; renew it if not.

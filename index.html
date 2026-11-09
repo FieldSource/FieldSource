@@ -450,6 +450,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="invoices-tab" onclick="loadInvoices().then(()=>setView('invoices'))">Vendor Invoices</button>
     <button class="vtab" id="inv-approval-tab" onclick="Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="paybills-tab" onclick="payLoaded=false;setView('paybills')">Approve to Pay</button>
+    <button class="vtab" id="vendors-tab" onclick="vendorsLoaded=false;setView('vendors')">Vendors</button>
     <button class="vtab" id="costs-tab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts());syncBizGroup()">Direct Cost</button>
     <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting());syncBizGroup()">WIP</button>
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor());syncBizGroup()">Labor Costs</button>
@@ -6380,6 +6381,8 @@ async function loadEstimates(){
       lineItems: Array.isArray(r.line_items)?r.line_items:[],
       priorInvoices: Array.isArray(r.prior_invoices)?r.prior_invoices:[],
       pmEmail: r.pm_email||'', pmName: r.pm_name||'', apProject: r.ap_project||'', poNumber: r.po_number||'',
+      tipsFeePct: r.tips_fee_pct!=null ? Number(r.tips_fee_pct) : 2, tipsFeePaidOn: r.tips_fee_paid_on||'',
+      recurring: !!r.recurring, billFrequency: r.bill_frequency||'', billFirst: r.bill_first||'', billLast: r.bill_last||'', billAmount: r.bill_amount!=null ? Number(r.bill_amount) : null,
       qbSyncedAt: r.qb_synced_at||'',
     }));
   } catch(e){ estimates = []; }
@@ -6659,6 +6662,7 @@ function openEstimateDetail(id){
       ${canEstAdmin()?`<button class="site-chip active" style="margin-left:auto;padding:4px 12px;font-size:12px" onclick="estAssignNumber('${e.id}')">Assign next number</button>`:''}</div>` : ''}
     <div id="est-pm-slot"></div>
     <div id="est-docs-slot"></div>
+    <div id="est-billsetup-slot"></div>
     ${e.qbNumber?'<div id="est-billing-slot"><div style="font-size:12px;color:var(--text-3);margin-top:16px">Loading billing…</div></div>':''}
     <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:18px;margin-bottom:6px">Breakdown</div>`;
 
@@ -6727,6 +6731,7 @@ function openEstimateDetail(id){
   if(e.qbNumber) renderEstimateBilling(e);
   if(!approvalRulesLoaded) loadApprovalRules().then(()=>renderEstimatePm(e)); else renderEstimatePm(e);
   estDocsRender(e);
+  estBillSetupRender(e);
 }
 
 // QuickBooks line items, from the qb_estimates / qb_estimate_lines tables kept fresh by qb-sync.
@@ -6994,7 +6999,7 @@ function arContractsHtml(){
       <th style="${th}">Estimate</th><th style="${th};text-align:right">Contract</th><th style="${th};width:150px">Billed</th><th style="${th};text-align:right">Collected</th><th style="${th};text-align:right">Owed</th><th style="${th};text-align:right">Left to bill</th></tr></thead><tbody>
       ${rows.map(({e,b})=>{ const over = b.contract && b.billed > b.contract + 0.5; return `<tr style="cursor:pointer" onclick="openEstimateDetail('${e.id}')">
         <td style="${td}"><b>#${arEsc(e.qbNumber)}</b> · ${arEsc(e.projectName)}<div style="font-size:11px;color:var(--text-3)">${arEsc(e.client||'')}${e.acceptedDate?' · accepted '+arFmt(e.acceptedDate):''}</div>
-          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`<a style="cursor:pointer;color:var(--text-2)" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 ${arEsc(e.pmName||e.pmEmail)}${e.apProject?' · '+arEsc(e.apProject):''}</a>${e.poNumber?` · <span style="color:var(--text-2)">PO ${arEsc(e.poNumber)}</span>`:''}` + (billReqFor(e.qbNumber).length ? ` · <span style="color:#166534;font-weight:600">💲 ready to bill</span>` : ` · <a style="cursor:pointer;color:var(--green-dark)" onclick="event.stopPropagation();openReadyToBill('${e.id}')">💲 Ready to bill</a>`):`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Set up job</a>`}</div></td>
+          <div style="font-size:11px;margin-top:2px">${e.pmEmail?`<a style="cursor:pointer;color:var(--text-2)" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 ${arEsc(e.pmName||e.pmEmail)}${e.apProject?' · '+arEsc(e.apProject):''}</a>${e.poNumber?` · <span style="color:var(--text-2)">PO ${arEsc(e.poNumber)}</span>`:''}${e.tips?` · <span style="color:#7c3aed" title="TIPS fee held back: ${arMoney(tipsFee(e))}">TIPS ${arMoney(tipsFee(e))}${e.tipsFeePaidOn?' paid':''}</span>`:''}${e.recurring&&billSchedule(e).length?(()=>{ const t=new Date().toLocaleDateString('en-CA'), nx=billSchedule(e).find(x=>x.date>=t); return ` · <span style="color:#0369a1">🔁 ${(BILL_FREQ[e.billFrequency]||{}).label}${nx?', next '+new Date(nx.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}</span>`; })():''}` + (billReqFor(e.qbNumber).length ? ` · <span style="color:#166534;font-weight:600">💲 ready to bill</span>` : ` · <a style="cursor:pointer;color:var(--green-dark)" onclick="event.stopPropagation();openReadyToBill('${e.id}')">💲 Ready to bill</a>`):`<a style="cursor:pointer;color:#b45309;font-weight:600" onclick="event.stopPropagation();openPmAssign('${e.id}')">👷 Set up job</a>`}</div></td>
         <td style="${td};text-align:right">${arMoney0(b.contract)}</td>
         <td style="${td}"><div style="font-size:12px;${over?'color:#dc2626;font-weight:600':''}">${arMoney0(b.billed)} <span style="color:var(--text-3)">${b.contract?Math.round(b.pct)+'%':''}</span></div>
           <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-top:3px"><div style="height:100%;width:${Math.min(100,b.pct)}%;background:${over?'#dc2626':'var(--green)'}"></div></div>
@@ -7662,6 +7667,339 @@ function estRtbRender(e){
   slot.innerHTML = open.length ? `<div style="font-size:12px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 10px;margin:6px 0">💲 <b>Ready to bill</b>, waiting on Ali: ${open.map(r=>`${escEst(billReqWhat(r))}${r.notes?` (“${escEst(r.notes.slice(0,120))}${r.notes.length>120?'…':''}”)`:''} · ${escEst(r.requested_name||r.requested_by)}`).join('<br>')}</div>` : '';
 }
 // =================== END READY TO BILL ===================
+// ===================== TIPS FEE + RECURRING BILLING (per accepted estimate) =====================
+// TIPS: Field Source owes TIPS a fee (2% by default) at the end of a TIPS project; the cash forecast holds it back.
+// Recurring: maintenance-style contracts billed on a schedule; each bill date sends Ali a Ready to bill request.
+const BILL_FREQ = { monthly:{ label:'Monthly', months:1 }, quarterly:{ label:'Quarterly', months:3 }, three:{ label:'3 times a year', months:4 }, twice:{ label:'Twice a year', months:6 } };
+function tipsFee(e){ return Math.round((Number(e.amount)||0) * (Number(e.tipsFeePct ?? 2)||0)) / 100; }
+function billSchedule(e){
+  const f = BILL_FREQ[e.billFrequency]; if(!e.recurring || !f || !e.billFirst || !e.billLast || e.billLast < e.billFirst) return [];
+  const dates = []; const start = new Date(e.billFirst+'T12:00:00');
+  for(let k=0; k<120; k++){ const d = new Date(start); d.setMonth(start.getMonth() + k*f.months); const iso = d.toLocaleDateString('en-CA'); if(iso > e.billLast) break; dates.push(iso); }
+  const n = dates.length; if(!n) return [];
+  const per = e.billAmount != null && e.billAmount !== '' ? Number(e.billAmount) : Math.floor((Number(e.amount)||0) / n * 100) / 100;
+  const last = e.billAmount != null && e.billAmount !== '' ? per : Math.round(((Number(e.amount)||0) - per*(n-1)) * 100) / 100;   // last bill picks up the rounding
+  return dates.map((d,i)=>({ date:d, n:i+1, of:n, amount: i===n-1 ? last : per }));
+}
+async function estSaveFields(id, fields, rerender=true){
+  const e = estimates.find(x=>x.id===id); if(!e) return;
+  const map = { tips:'tips', tipsFeePct:'tips_fee_pct', tipsFeePaidOn:'tips_fee_paid_on', recurring:'recurring', billFrequency:'bill_frequency', billFirst:'bill_first', billLast:'bill_last', billAmount:'bill_amount' };
+  const row = {}; Object.entries(fields).forEach(([k,v])=>{ row[map[k]] = v===''?null:v; });
+  try{ await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, row); Object.assign(e, fields); if(rerender) estBillSetupRender(e); if(view==='receivables') renderReceivables(); }
+  catch(x){ alert('Could not save: '+x.message+(/tips_fee|recurring|bill_/.test(x.message)?' (run tips-recurring.sql in Supabase first)':'')); }
+}
+function estBillSetupRender(e){
+  const slot = document.getElementById('est-billsetup-slot'); if(!slot || !e) return;
+  const inp = 'font-size:13px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  const sched = billSchedule(e), today = new Date().toLocaleDateString('en-CA'), next = sched.find(s=>s.date>=today);
+  slot.innerHTML = `<div style="margin-top:12px;border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" ${e.tips?'checked':''} onchange="estSaveFields('${e.id}',{tips:this.checked})"> <b>TIPS quote</b></label>
+      ${e.tips?`<span>TIPS fee <input type="number" step="0.1" value="${escEst(e.tipsFeePct ?? 2)}" style="${inp};width:56px" onchange="estSaveFields('${e.id}',{tipsFeePct:Number(this.value)})">% = <b>${fmtEstMoney2(tipsFee(e))}</b>, held back and due to TIPS at the end of the project</span>
+        <span style="margin-left:auto">${e.tipsFeePaidOn?`✓ Paid ${new Date(e.tipsFeePaidOn+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} <a style="cursor:pointer;color:var(--text-3)" onclick="estSaveFields('${e.id}',{tipsFeePaidOn:''})">undo</a>`:`<button class="site-chip" style="padding:3px 9px;font-size:12px" onclick="const d=prompt('Date the TIPS fee was paid (YYYY-MM-DD):', new Date().toLocaleDateString('en-CA')); if(d) estSaveFields('${e.id}',{tipsFeePaidOn:d})">Mark TIPS fee paid</button>`}</span>`:''}
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" ${e.recurring?'checked':''} onchange="estSaveFields('${e.id}',{recurring:this.checked, billFrequency: this.checked ? (estimates.find(x=>x.id==='${e.id}').billFrequency||'quarterly') : estimates.find(x=>x.id==='${e.id}').billFrequency})"> <b>Recurring billing</b> <span style="color:var(--text-3);font-size:12px">(maintenance and other contracts billed on a schedule)</span></label>
+    </div>
+    ${e.recurring?`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <select style="${inp}" onchange="estSaveFields('${e.id}',{billFrequency:this.value})">${Object.entries(BILL_FREQ).map(([k,f])=>`<option value="${k}"${e.billFrequency===k?' selected':''}>${f.label}</option>`).join('')}</select>
+        first bill <input type="date" value="${escEst(e.billFirst||'')}" style="${inp}" onchange="estSaveFields('${e.id}',{billFirst:this.value})">
+        last bill <input type="date" value="${escEst(e.billLast||'')}" style="${inp}" onchange="estSaveFields('${e.id}',{billLast:this.value})">
+        each bill $<input type="number" step="0.01" value="${e.billAmount!=null?escEst(e.billAmount):''}" placeholder="${sched.length?sched[0].amount:''}" style="${inp};width:110px" onchange="estSaveFields('${e.id}',{billAmount:this.value===''?'':Number(this.value)})">
+        <span style="font-size:11px;color:var(--text-3)">blank = contract ÷ number of bills</span></div>
+      ${sched.length?`<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${sched.map(s=>`<span style="font-size:12px;padding:3px 8px;border-radius:99px;border:1px solid var(--border);background:${s.date<today?'var(--bg)':next&&s.date===next.date?'#ecfdf5':'transparent'};color:${s.date<today?'var(--text-3)':'var(--text)'}">${new Date(s.date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})} · ${fmtEstMoney2(s.amount)}</span>`).join('')}</div>
+        <div style="font-size:12px;color:var(--text-2);margin-top:6px">${sched.length} bills, ${fmtEstMoney2(sched.reduce((t,s)=>t+s.amount,0))} total${Math.abs(sched.reduce((t,s)=>t+s.amount,0)-(Number(e.amount)||0))>0.01?` <b style="color:#b45309">(contract is ${fmtEstMoney2(e.amount)})</b>`:''}. ${next?`Next bill <b>${new Date(next.date+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric'})}</b>: on that day Ali gets a Ready to bill request automatically.`:'All scheduled bills have passed.'}</div>`
+       :'<div style="font-size:12px;color:#b45309;margin-top:6px">Set the frequency and the first and last bill dates.</div>'}`:''}
+  </div>`;
+}
+// On each scheduled bill date, create the Ready to bill request (once; the database refuses duplicates)
+async function runRecurringBillRequests(){
+  if(typeof canBillInvoices!=='function' || !canBillInvoices()) return;
+  const today = new Date().toLocaleDateString('en-CA'), since = new Date(Date.now()-45*864e5).toLocaleDateString('en-CA');
+  const rows = [];
+  (estimates||[]).filter(e=>e.recurring && e.qbNumber && ['Accepted','Closed'].includes(e.qbStatus) || (e.recurring && e.status==='Approved')).forEach(e=>{
+    billSchedule(e).filter(s=>s.date<=today && s.date>=since).forEach(s=>{
+      if((billRequests||[]).some(r=>String(r.estimate_number)===String(e.qbNumber) && r.sched_key===s.date)) return;
+      rows.push({ estimate_id:String(e.id), estimate_number:String(e.qbNumber||''), client:e.client||'', project:e.projectName||'', scope:'part', amount:s.amount,
+        notes:`Recurring billing: bill ${s.n} of ${s.of} (${(BILL_FREQ[e.billFrequency]||{}).label||''}), scheduled ${new Date(s.date+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}.${e.poNumber?' PO '+e.poNumber+'.':''}`,
+        requested_by:'recurring-schedule', requested_name:'Recurring schedule', status:'ready', sched_key:s.date });
+    });
+  });
+  if(!rows.length) return;
+  try{
+    await sbFetch('POST', '/rest/v1/bill_requests?on_conflict=estimate_number,sched_key', rows);
+  }catch(x){ if(!/duplicate|conflict|23505/i.test(x.message)) console.warn('recurring bill requests', x.message); }
+  await loadBillRequests(); updateApprovalBell();
+}
+// =================== END TIPS FEE + RECURRING BILLING ===================
+// ===================== VENDORS: W-9 / COI / BWC TRACKING =====================
+let vendors = [], vendorDocs = [], vendorsLoaded = false, vendFilter = 'attention', vendQuery = '';
+const VEND_KINDS = { w9:'W-9', coi:'COI', bwc:'BWC' };
+const VEND_CATS = ['Material supplier','Subcontractor','Equipment rental','Professional services','Hauling/trucking','Retail/online','Utility/government','Other'];
+const vendKey = s=>String(s||'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(w=>w && !['the','inc','llc','co','company','corp','corporation','ltd','of','and'].includes(w)).join(' ');
+function vendorFor(name){
+  const k = vendKey(name); if(!k) return null;
+  return vendors.find(v=>vendKey(v.name)===k) || vendors.find(v=>{ const vk = vendKey(v.name); return vk && (vk.startsWith(k+' ') || k.startsWith(vk+' ')); }) || null;
+}
+async function loadVendors(){
+  try{
+    const [v, d] = await Promise.all([ sbFetch('GET','/rest/v1/vendors?select=*&order=name.asc&limit=2000'), sbFetch('GET','/rest/v1/vendor_docs?select=*&order=created_at.desc&limit=5000') ]);
+    vendors = v||[]; vendorDocs = d||[]; vendorsLoaded = true; window._vendErr = '';
+  }catch(e){ vendorsLoaded = true; window._vendErr = e.message; }
+}
+const todayIso = ()=>new Date().toLocaleDateString('en-CA');
+function vendDocState(v, kind){
+  const need = !!v['needs_'+kind];
+  const doc = vendorDocs.filter(d=>d.vendor_id===v.id && d.kind===kind).sort((a,b)=>String(b.expires_on||'9999').localeCompare(String(a.expires_on||'9999')) || String(b.created_at).localeCompare(String(a.created_at)))[0] || null;
+  if(!need && !doc) return { state:'na', doc:null };
+  if(!doc) return { state: need ? 'missing' : 'na', doc:null };
+  if(kind==='w9' || !doc.expires_on) return { state:'ok', doc };
+  const days = Math.round((new Date(doc.expires_on+'T12:00:00') - new Date(todayIso()+'T12:00:00'))/864e5);
+  return { state: days < 0 ? 'expired' : days <= 30 ? 'expiring' : 'ok', doc, days };
+}
+function vendStatus(v){
+  if(!v.reviewed_at) return 'review';
+  const st = Object.keys(VEND_KINDS).filter(k=>v['needs_'+k]).map(k=>vendDocState(v,k).state);
+  if(st.includes('missing') || st.includes('expired')) return 'missing';
+  if(st.includes('expiring')) return 'expiring';
+  return 'ok';
+}
+function vendIssues(name){   // for Approve to Pay: what's missing before paying this vendor
+  const v = vendorFor(name); if(!v) return vendorsLoaded && vendors.length ? 'not on the Vendors list' : '';
+  return Object.keys(VEND_KINDS).filter(k=>v['needs_'+k]).map(k=>{ const s = vendDocState(v,k); return s.state==='missing' ? `missing ${VEND_KINDS[k]}` : s.state==='expired' ? `${VEND_KINDS[k]} expired` : ''; }).filter(Boolean).join(', ');
+}
+function vendChip(v, kind){
+  const s = vendDocState(v, kind), fmt = d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'});
+  const c = { ok:['#dcfce7','#166534'], expiring:['#fef3c7','#92400e'], expired:['#fee2e2','#991b1b'], missing:['#fee2e2','#991b1b'], na:['transparent','var(--text-3)'] }[s.state];
+  const label = s.state==='na' ? '—' : s.state==='missing' ? 'Missing' : s.state==='expired' ? `Expired ${fmt(s.doc.expires_on)}` : s.doc && s.doc.expires_on ? `${s.state==='expiring'?'Expires':'✓ to'} ${fmt(s.doc.expires_on)}` : '✓ On file';
+  return `<span style="font-size:11px;padding:2px 8px;border-radius:99px;background:${c[0]};color:${c[1]};white-space:nowrap;font-weight:${s.state==='na'?400:600}">${label}</span>`;
+}
+function renderVendors(){
+  const el = document.getElementById('main-content');
+  if(!vendorsLoaded){ el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-3)">Loading vendors…</div>'; loadVendors().then(()=>{ if(view==='vendors') renderVendors(); }); return; }
+  const esc = escEst;
+  const lastInv = name=>{ const l = (typeof invoiceFiles!=='undefined'?invoiceFiles:[]).filter(f=>vendorFor(f.vendorName)===vendorFor(name)); return l.sort((a,b)=>String(b.invoiceDate||b.createdAt).localeCompare(String(a.invoiceDate||a.createdAt)))[0]; };
+  const openBills = v=>(typeof payBills!=='undefined'?payBills:[]).filter(b=>Number(b.balance)>0.005 && vendorFor(b.vendor_name)===v).reduce((t,b)=>t+Number(b.balance),0);
+  const rows = vendors.map(v=>({ v, st: vendStatus(v) }));
+  const cnt = k=>rows.filter(r=>k==='attention' ? r.st!=='ok' : r.st===k).length;
+  let list = rows.filter(r=>vendFilter==='all' || (vendFilter==='attention' ? r.st!=='ok' : r.st===vendFilter)).filter(r=>!vendQuery || vendKey(r.v.name).includes(vendKey(vendQuery)) || String(r.v.category).toLowerCase().includes(vendQuery.toLowerCase()));
+  const order = { review:0, missing:1, expiring:2, ok:3 }; list.sort((a,b)=>order[a.st]-order[b.st] || a.v.name.localeCompare(b.v.name));
+  const card = (k,label,color,sub)=>`<div onclick="vendFilter='${k}';renderVendors()" style="cursor:pointer;background:var(--surface);border:1px solid ${vendFilter===k?'var(--green)':'var(--border)'};border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${color}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${label}</div><div style="font-size:20px;font-weight:700">${k==='all'?rows.length:cnt(k)}</div><div style="font-size:11px;color:var(--text-3)">${sub}</div></div>`;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px;text-align:left;background:var(--surface)';
+  const td = 'font-size:13px;padding:8px;border-top:1px solid var(--border);vertical-align:middle';
+  const stLbl = { review:['New: needs review','#1d4ed8'], missing:['Documents needed','#b91c1c'], expiring:['Expiring soon','#b45309'], ok:['✓ Complete','#166534'] };
+  el.innerHTML = `<div style="max-width:1180px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="font-size:18px;font-weight:700">Vendors <span style="font-size:12px;font-weight:400;color:var(--text-3)">W-9, certificates of insurance (COI), Ohio BWC certificates</span></div>
+      <div style="display:flex;gap:6px">
+        <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="vendImport()" title="Add every vendor from QuickBooks bills and uploaded invoices that isn't on the list yet">+ Add vendors from QuickBooks and invoices</button>
+        <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="vendNewPrompt()">+ Add vendor</button></div>
+    </div>
+    ${window._vendErr?`<div style="padding:10px 14px;background:#fee2e2;border-radius:8px;font-size:13px;color:#991b1b;margin-bottom:12px">Couldn't load vendors: ${esc(window._vendErr).slice(0,200)}${/vendors|vendor_docs/.test(window._vendErr)?' (run vendors-setup.sql first)':''}</div>`:''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:14px">
+      ${card('attention','Needs attention','#dc2626','review, missing or expiring')}
+      ${card('review','New: needs review','#2563eb','confirm what they need')}
+      ${card('missing','Documents needed','#b91c1c','missing or expired')}
+      ${card('expiring','Expiring in 30 days','#f59e0b','request updated copies')}
+      ${card('ok','Complete','#16a34a','everything on file')}
+      ${card('all','All vendors','#64748b','')}
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+      <div style="padding:10px 12px;display:flex;gap:8px;align-items:center"><input id="vend-q" value="${esc(vendQuery)}" placeholder="Search vendors" style="font-size:13px;padding:6px 10px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:260px" oninput="vendQuery=this.value;clearTimeout(window._vqT);window._vqT=setTimeout(()=>{renderVendors();const q=document.getElementById('vend-q');q.focus();q.setSelectionRange(q.value.length,q.value.length)},250)">
+        <span style="font-size:12px;color:var(--text-3)">${list.length} vendor${list.length===1?'':'s'}</span></div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:860px"><thead><tr>
+        <th style="${th}">Vendor</th><th style="${th}">Status</th><th style="${th}">W-9</th><th style="${th}">COI</th><th style="${th}">BWC</th><th style="${th}">1099</th><th style="${th}">Last invoice</th><th style="${th};text-align:right">Open bills</th></tr></thead><tbody>
+        ${list.map(({v,st})=>{ const li = lastInv(v.name), ob = openBills(v);
+          return `<tr style="cursor:pointer" onclick="openVendor('${v.id}')"><td style="${td}"><b>${esc(v.name)}</b><div style="font-size:11px;color:var(--text-3)">${esc(v.category||'Not categorized')}</div></td>
+          <td style="${td};font-size:12px;color:${stLbl[st][1]};font-weight:600">${stLbl[st][0]}</td>
+          <td style="${td}">${vendChip(v,'w9')}</td><td style="${td}">${vendChip(v,'coi')}</td><td style="${td}">${vendChip(v,'bwc')}</td>
+          <td style="${td};font-size:12px">${v.is_1099===true?'Yes':v.is_1099===false?'No':'<span style="color:var(--text-3)">?</span>'}</td>
+          <td style="${td};font-size:12px;color:var(--text-2)">${li?`${new Date(String(li.invoiceDate||li.createdAt).slice(0,10)+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})} · ${esc(li.projectName||'')}`:'—'}</td>
+          <td style="${td};text-align:right;font-weight:600">${ob?fmtEstMoney2(ob):'<span style="color:var(--text-3);font-weight:400">—</span>'}</td></tr>`; }).join('') || `<tr><td colspan="8" style="${td};color:var(--text-3)">${vendors.length?'Nothing in this view.':'No vendors yet. Click "Add vendors from QuickBooks and invoices" to start the list.'}</td></tr>`}
+      </tbody></table></div>
+    </div></div>`;
+}
+async function vendCreate(name, extra){
+  const nm = String(name||'').trim(); if(!nm) return null;
+  const existing = vendorFor(nm); if(existing) return existing;
+  const r = await sbFetch('POST','/rest/v1/vendors', { name:nm, created_by:(currentUser&&currentUser.email)||'', ...(extra||{}) });
+  const v = r && r[0]; if(v) vendors.push(v); return v;
+}
+async function vendRecommend(v, text, project){
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    const r = await fetch('/.netlify/functions/vendor-ai', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+sbToken() }, body: JSON.stringify({ action:'recommend', vendor:v.name, text:text||'', project:project||'' }) });
+    const d = await r.json().catch(()=>({})); if(!r.ok || d.error) throw new Error(d.error || r.status);
+    const rec = d.recommendation || {}, n = rec.needs || {};
+    const upd = { recommendation: rec, category: rec.category || v.category || '' };
+    if(!v.reviewed_at){ upd.needs_w9 = n.w9!==false; upd.needs_coi = !!n.coi; upd.needs_bwc = !!n.bwc; }   // Ali's confirmed choices are never overwritten
+    await sbFetch('PATCH', `/rest/v1/vendors?id=eq.${v.id}`, upd); Object.assign(v, upd);
+    return rec;
+  }catch(e){ console.warn('vendor recommendation', e.message); return null; }
+}
+// Called after a vendor invoice is filed: new vendor -> add it, ask Claude what it needs, and tell the person filing it
+async function vendCheckOnInvoice(name, text, project){
+  try{
+    if(!vendorsLoaded) await loadVendors();
+    if(window._vendErr) return;
+    if(vendorFor(name)) return;
+    const v = await vendCreate(name, { source:'invoice' }); if(!v) return;
+    const rec = await vendRecommend(v, text, project);
+    const need = rec ? Object.keys(VEND_KINDS).filter(k=>rec.needs && rec.needs[k]).map(k=>VEND_KINDS[k]) : ['W-9'];
+    vendNotice(`<b>New vendor: ${escEst(v.name)}</b><br>Claude recommends collecting: <b>${need.join(', ') || 'nothing'}</b>${rec&&rec.summary?`<br><span style="color:var(--text-3)">${escEst(rec.summary)}</span>`:''}<br>Added to Business Ops → Vendors for Ali to confirm and request before payment.`, v.id);
+    updateApprovalBell();
+  }catch(e){ console.warn('vendor check', e.message); }
+}
+async function vendImport(){
+  const names = new Set();
+  (typeof invoiceFiles!=='undefined'?invoiceFiles:[]).forEach(f=>f.vendorName && names.add(f.vendorName.trim()));
+  try{ const bills = await sbFetch('GET','/rest/v1/qb_bills?select=vendor_name&limit=5000'); (bills||[]).forEach(b=>b.vendor_name && names.add(b.vendor_name.trim())); }catch(e){}
+  const add = [...names].filter(n=>n && !vendorFor(n));
+  const uniq = []; add.forEach(n=>{ if(!uniq.some(u=>vendKey(u)===vendKey(n))) uniq.push(n); });
+  if(!uniq.length){ alert('Every vendor from QuickBooks and the uploaded invoices is already on the list.'); return; }
+  if(!confirm(`Add ${uniq.length} vendor${uniq.length===1?'':'s'} to the list? Each starts as "New: needs review". You can then ask Claude for recommendations.`)) return;
+  try{ for(let i=0;i<uniq.length;i+=100){ const r = await sbFetch('POST','/rest/v1/vendors', uniq.slice(i,i+100).map(n=>({ name:n, source:'import', created_by:(currentUser&&currentUser.email)||'' }))); vendors.push(...(r||[])); }
+    vendFilter = 'review'; renderVendors();
+    if(confirm(`Added ${uniq.length}. Ask Claude now which documents each one needs? (about 3 seconds per vendor)`)) vendRecommendAll();
+  }catch(e){ alert('Could not add vendors: '+e.message); }
+}
+async function vendRecommendAll(){
+  const todo = vendors.filter(v=>!v.reviewed_at && !v.recommendation);
+  let n = 0;
+  for(const v of todo){
+    n++; if(typeof pmToast==='function') pmToast(`Claude: ${n} of ${todo.length} · ${v.name}`);
+    const f = (typeof invoiceFiles!=='undefined'?invoiceFiles:[]).find(x=>vendorFor(x.vendorName)===v);
+    await vendRecommend(v, f && f.extractedText, f && f.projectName);
+    if(view==='vendors' && n % 5 === 0) renderVendors();
+  }
+  if(view==='vendors') renderVendors();
+}
+function vendNotice(html, id){
+  const n = document.createElement('div');
+  n.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:10060;max-width:380px;background:var(--surface);border:1px solid #bfdbfe;border-left:4px solid #2563eb;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:12px 14px;font-size:13px;line-height:1.45';
+  n.innerHTML = html + `<div style="display:flex;gap:8px;margin-top:8px">${id?`<button class="site-chip" style="padding:3px 10px;font-size:12px" onclick="this.closest('div').parentElement.remove();setView('vendors');setTimeout(()=>openVendor('${id}'),300)">Open vendor</button>`:''}<button class="site-chip" style="padding:3px 10px;font-size:12px" onclick="this.closest('div').parentElement.remove()">Close</button></div>`;
+  document.body.appendChild(n); setTimeout(()=>n.remove(), 30000);
+}
+function vendNewPrompt(){ const n = prompt('Vendor name (as it appears on their invoices):'); if(n) vendCreate(n,{source:'manual'}).then(v=>{ if(v){ renderVendors(); openVendor(v.id); } }).catch(e=>alert(e.message)); }
+function openVendor(id){
+  const v = vendors.find(x=>x.id===id); if(!v) return;
+  const esc = escEst, rec = v.recommendation || null, inp = 'font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  const docs = vendorDocs.filter(d=>d.vendor_id===v.id);
+  const fmt = d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—';
+  billOverlay('vend-overlay', `
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><div class="sheet-title" style="margin-bottom:2px">${esc(v.name)}</div>
+      <span style="font-size:12px;color:var(--text-3)">${v.reviewed_at?`Reviewed by ${esc(getDisplayName(v.reviewed_by))} ${fmt(String(v.reviewed_at).slice(0,10))}`:'<b style="color:#1d4ed8">New: needs review</b>'}</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+      <div><div style="${billLbl}">Category</div><select style="${inp};width:100%" onchange="vendSave('${v.id}',{category:this.value},false)"><option value="">Not categorized</option>${VEND_CATS.map(c=>`<option${v.category===c?' selected':''}>${c}</option>`).join('')}</select></div>
+      <div><div style="${billLbl}">Contact email (for document requests)</div><input style="${inp};width:100%;box-sizing:border-box" value="${esc(v.contact_email||'')}" placeholder="ap@vendor.com" onchange="vendSave('${v.id}',{contact_email:this.value.trim()},false)"></div>
+    </div>
+    ${rec?`<div style="margin-top:12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;font-size:13px">
+      <b>Claude's recommendation</b> <span style="font-size:11px;color:var(--text-3)">(${esc(rec.confidence||'')} confidence)</span>: ${esc(rec.summary||'')}
+      <ul style="margin:6px 0 0 18px;padding:0;font-size:12px;color:var(--text-2)">${Object.keys(VEND_KINDS).map(k=>`<li><b>${VEND_KINDS[k]}: ${rec.needs&&rec.needs[k]?'needed':'not needed'}.</b> ${esc((rec.reasons||{})[k]||'')}</li>`).join('')}</ul></div>`
+      :`<div style="margin-top:12px;font-size:13px;color:var(--text-3)">No recommendation yet.</div>`}
+    <div style="margin-top:12px"><div style="${billLbl}">Required before payment</div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;margin-top:4px">${Object.keys(VEND_KINDS).map(k=>`<label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="vn-${k}" ${v['needs_'+k]?'checked':''}> ${VEND_KINDS[k]}</label>`).join('')}
+        <label style="display:flex;gap:6px;align-items:center">1099 vendor: <select id="vn-1099" style="${inp};padding:3px 6px"><option value=""${v.is_1099==null?' selected':''}>Unknown</option><option value="yes"${v.is_1099===true?' selected':''}>Yes</option><option value="no"${v.is_1099===false?' selected':''}>No</option></select></label></div>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn-save" style="flex:none;padding:6px 12px;font-size:12px" onclick="vendConfirm('${v.id}')">${v.reviewed_at?'Save requirements':'✓ Confirm requirements'}</button>
+        <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="vendAskClaude('${v.id}')">Ask Claude${rec?' again':''}</button></div></div>
+    <div style="margin-top:14px"><div style="${billLbl}">Documents</div>
+      ${Object.keys(VEND_KINDS).map(k=>{ const s = vendDocState(v,k); return `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--border);font-size:13px"><b style="width:44px">${VEND_KINDS[k]}</b>${vendChip(v,k)}${s.doc?`<span style="font-size:12px;color:var(--text-2)">${esc(s.doc.file_name||'')}</span>`:''}</div>`; }).join('')}
+      ${docs.length?`<div style="margin-top:8px">${docs.map(d=>`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:4px">
+          <b>${VEND_KINDS[d.kind]||'Other'}</b> <a style="cursor:pointer;color:var(--green-dark)" onclick="vendOpenDoc('${d.id}')">${esc(d.file_name||'file')}</a>
+          ${d.kind!=='w9'?`<span>expires <input type="date" value="${esc(d.expires_on||'')}" style="${inp};padding:2px 4px;font-size:12px" onchange="vendDocSave('${d.id}','${v.id}',{expires_on:this.value||null})"></span>`:''}
+          ${d.details&&d.details.additional_insured_field_source===false?'<span style="color:#b91c1c;font-weight:600">Field Source not named as additional insured</span>':d.details&&d.details.additional_insured_field_source===true?'<span style="color:#166534">✓ additional insured</span>':''}
+          ${d.details&&d.details.notes?`<span style="color:var(--text-3)">${esc(String(d.details.notes).slice(0,140))}</span>`:''}
+          <button onclick="vendDocDelete('${d.id}','${v.id}')" style="margin-left:auto;border:none;background:none;cursor:pointer;color:var(--text-3)">✕</button></div>`).join('')}</div>`:''}
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <select id="vend-kind" style="${inp}"><option value="w9">W-9</option><option value="coi">COI</option><option value="bwc">Ohio BWC certificate</option><option value="other">Other</option></select>
+        <label class="site-chip" style="padding:5px 10px;font-size:12px;cursor:pointer">📎 Upload<input type="file" accept=".pdf,.png,.jpg,.jpeg" style="display:none" onchange="vendUpload('${v.id}',this.files[0]);this.value=''"></label>
+        <span style="font-size:11px;color:var(--text-3)">Claude reads the dates and checks additional insured.</span></div></div>
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;flex-wrap:wrap">
+      <button class="site-chip" style="padding:6px 12px" onclick="vendRequest('${v.id}')">✉ Request documents${v.last_requested_at?` <span style="font-size:11px;color:var(--text-3)">(last ${fmt(String(v.last_requested_at).slice(0,10))})</span>`:''}</button>
+      <button class="btn-cancel" style="flex:none" onclick="document.getElementById('vend-overlay').remove();renderVendors()">Done</button></div>`, 700);
+}
+async function vendSave(id, fields, reopen=true){
+  const v = vendors.find(x=>x.id===id); if(!v) return;
+  try{ await sbFetch('PATCH', `/rest/v1/vendors?id=eq.${id}`, fields); Object.assign(v, fields); if(reopen) openVendor(id); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+function vendConfirm(id){
+  const g = k=>document.getElementById('vn-'+k), t = g('1099').value;
+  vendSave(id, { needs_w9:g('w9').checked, needs_coi:g('coi').checked, needs_bwc:g('bwc').checked, is_1099: t===''?null:t==='yes', reviewed_by:(currentUser&&currentUser.email)||'', reviewed_at:new Date().toISOString() });
+  updateApprovalBell();
+}
+async function vendAskClaude(id){
+  const v = vendors.find(x=>x.id===id); if(!v) return;
+  const f = (typeof invoiceFiles!=='undefined'?invoiceFiles:[]).find(x=>vendorFor(x.vendorName)===v);
+  if(typeof pmToast==='function') pmToast('Asking Claude…');
+  const rec = await vendRecommend(v, f && f.extractedText, f && f.projectName);
+  if(!rec) alert('Claude could not make a recommendation right now.');
+  openVendor(id);
+}
+async function vendUpload(id, file){
+  const v = vendors.find(x=>x.id===id); if(!v || !file) return;
+  if(file.size > 9*1024*1024){ alert('That file is over 9 MB.'); return; }
+  const kind = document.getElementById('vend-kind').value;
+  try{
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    if(typeof pmToast==='function') pmToast('Uploading…');
+    const path = `vendors/${id}/${Date.now()}-${file.name.replace(/[^\w.\- ]+/g,'_')}`;
+    const up = await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(path)}`, { method:'POST', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type': file.type||'application/octet-stream', 'x-upsert':'true' }, body: await file.arrayBuffer() });
+    if(!up.ok) throw new Error(`${up.status} ${(await up.text()).slice(0,150)}`);
+    const r = await sbFetch('POST','/rest/v1/vendor_docs', { vendor_id:id, kind, file_name:file.name, file_path:path, uploaded_by:(currentUser&&currentUser.email)||'' });
+    const d = r && r[0]; if(d) vendorDocs.unshift(d);
+    openVendor(id);
+    // Claude reads it: dates, additional insured, W-9 entity type (never the tax ID)
+    if(d && /\.(pdf|png|jpe?g)$/i.test(file.name)){
+      if(typeof pmToast==='function') pmToast('Claude is reading the document…');
+      const rr = await fetch('/.netlify/functions/vendor-ai', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+sbToken() }, body: JSON.stringify({ action:'read_doc', file_path:path, kind }) });
+      const dd = await rr.json().catch(()=>({}));
+      if(rr.ok && dd.doc){
+        const doc = dd.doc, upd = { details: doc };
+        if(/^\d{4}-\d{2}-\d{2}$/.test(doc.expires_on||'')) upd.expires_on = doc.expires_on;
+        if(/^\d{4}-\d{2}-\d{2}$/.test(doc.effective_date||'')) upd.effective_date = doc.effective_date;
+        if(['coi','bwc','w9'].includes(doc.doc_type) && doc.doc_type!==kind){ if(confirm(`This looks like a ${VEND_KINDS[doc.doc_type]}, not a ${VEND_KINDS[kind]||kind}. File it as ${VEND_KINDS[doc.doc_type]}?`)) upd.kind = doc.doc_type; }
+        await sbFetch('PATCH', `/rest/v1/vendor_docs?id=eq.${d.id}`, upd); Object.assign(d, upd);
+        if((upd.kind||kind)==='w9' && doc.w9_entity_type && v.is_1099==null){ const t = String(doc.w9_entity_type).toLowerCase(); await vendSave(id, { is_1099: !/corporation|corp\b|c corp|s corp|\bc\b|\bs\b/.test(t) || /attorney|legal/.test(String(v.category||'')+' '+v.name.toLowerCase()) }, false); }
+        openVendor(id);
+        if(doc.additional_insured_field_source===false) alert(`Heads up: this COI doesn't name Field Source as additional insured. Ask ${v.name} for an updated certificate.`);
+      }
+    }
+  }catch(e){ alert('Upload failed: '+e.message); }
+}
+async function vendDocSave(docId, id, fields){ try{ await sbFetch('PATCH', `/rest/v1/vendor_docs?id=eq.${docId}`, fields); Object.assign(vendorDocs.find(d=>d.id===docId)||{}, fields); openVendor(id); updateApprovalBell(); }catch(e){ alert('Could not save: '+e.message); } }
+async function vendDocDelete(docId, id){
+  const d = vendorDocs.find(x=>x.id===docId); if(!d || !confirm(`Remove ${d.file_name}?`)) return;
+  try{ await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(d.file_path)}`, { method:'DELETE', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY } });
+       await sbFetch('DELETE', `/rest/v1/vendor_docs?id=eq.${docId}`); vendorDocs = vendorDocs.filter(x=>x.id!==docId); openVendor(id); }
+  catch(e){ alert('Could not remove: '+e.message); }
+}
+async function vendOpenDoc(docId){
+  const d = vendorDocs.find(x=>x.id===docId); if(!d) return;
+  try{ const r = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${PM_BUCKET}/${encodeURI(d.file_path)}`, { method:'POST', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type':'application/json' }, body: JSON.stringify({ expiresIn: 600 }) });
+       const j = await r.json(); if(!j.signedURL) throw new Error(j.message||'no link'); window.open(`${SUPABASE_URL}/storage/v1${j.signedURL}`, '_blank'); }
+  catch(e){ alert('Could not open it: '+e.message); }
+}
+function vendRequest(id){
+  const v = vendors.find(x=>x.id===id); if(!v) return;
+  const want = Object.keys(VEND_KINDS).filter(k=>v['needs_'+k]).map(k=>({ k, s: vendDocState(v,k) })).filter(x=>x.s.state!=='ok');
+  if(!want.length){ alert(`${v.name} has everything on file.`); return; }
+  const lines = want.map(({k,s})=>k==='w9' ? '- A completed and signed IRS Form W-9'
+    : k==='coi' ? `- ${s.state==='missing'?'A':'An updated'} certificate of insurance (general liability, auto, and umbrella if applicable) naming Field Source LLC as additional insured${s.doc&&s.doc.expires_on?` (the one we have expires ${new Date(s.doc.expires_on+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})})`:''}`
+    : `- ${s.state==='missing'?'Your':'An updated'} Ohio Bureau of Workers' Compensation certificate of coverage`);
+  const me = getDisplayName(currentUser&&currentUser.email);
+  const body = `Hello,\n\nBefore we can process payment on your invoices, Field Source needs the following on file:\n\n${lines.join('\n')}\n\nYou can reply to this email with the documents attached. Please list Field Source LLC, Dublin, Ohio as the certificate holder.\n\nThank you,\n${me}\nField Source LLC`;
+  const subject = `Field Source vendor documents needed: ${want.map(x=>VEND_KINDS[x.k]).join(', ')}`;
+  window.open(`mailto:${encodeURIComponent(v.contact_email||'')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank');
+  vendSave(id, { last_requested_at: new Date().toISOString() }, true);
+}
+function bellVendorItems(){
+  if(typeof canBillInvoices!=='function' || !canBillInvoices() || !vendorsLoaded) return [];
+  return vendors.map(v=>({ v, st: vendStatus(v) })).filter(x=>x.st==='review' || x.st==='expiring' || (x.st==='missing' && vendIssues(x.v.name).includes('expired')));
+}
+// =================== END VENDORS ===================
+
+
 
 // ===================== APPROVE TO PAY (QuickBooks bills) =====================
 // Open QuickBooks bills, matched to the tracker invoice (and PM approval) they came from. Ryan (Jake as backup)
@@ -7672,6 +8010,7 @@ function canApprovePay(){ return PAY_APPROVERS_UI.includes(((currentUser&&curren
 async function loadPayBills(){
   try{
     const since = new Date(Date.now()-payPaidDays*864e5).toLocaleDateString('en-CA');
+    if(typeof loadVendors==='function' && !vendorsLoaded) loadVendors();
     const [open, paid, ap, st] = await Promise.all([
       sbFetch('GET','/rest/v1/qb_bills?balance=gt.0&select=*&order=due_date.asc&limit=1000'),
       sbFetch('GET',`/rest/v1/qb_bills?balance=lte.0&paid_on=gte.${since}&select=*&order=paid_on.desc&limit=2000`),
@@ -7736,10 +8075,12 @@ function renderPayBills(){
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px 8px;text-align:left;background:var(--surface)';
   const td = 'font-size:13px;color:var(--text);padding:8px 8px;border-top:1px solid var(--border);vertical-align:top';
   const card = (label,v,sub,c,key)=>`<div onclick="payFilter='${key}';paySel.clear();renderPayBills()" style="cursor:pointer;background:var(--surface);border:1px solid ${payFilter===key?'var(--green)':'var(--border)'};border-radius:var(--radius);padding:10px 12px;border-top:3px solid ${c}"><div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text-3)">${label}</div><div style="font-size:18px;font-weight:700">${money(v)}</div><div style="font-size:11px;color:var(--text-3)">${sub}</div></div>`;
-  const pmCell = r=>!r.f ? `<span style="color:#b45309">⚠ No tracker invoice</span><div style="font-size:11px;color:var(--text-3)">skipped Ali and PM review</div>`
+  const vendWarn = r=>{ if(typeof vendIssues!=='function') return ''; const iss = vendIssues(r.b.vendor_name); return iss && !r.paid ? `<div style="font-size:11px;color:#b91c1c;font-weight:600;margin-top:3px" title="See Business Ops → Vendors">⚠ ${escEst(iss)}</div>` : ''; };
+  const pmCell0 = r=>!r.f ? `<span style="color:#b45309">⚠ No tracker invoice</span><div style="font-size:11px;color:var(--text-3)">skipped Ali and PM review</div>`
     : r.f.approvalStatus==='pending' ? `<span style="color:#b45309">Waiting on PM</span>`
     : r.f.approvalStatus==='rejected' ? `<span style="color:#b91c1c">PM rejected</span>`
     : `<span style="color:#166534">✓ ${esc(r.f.approvedBy ? (typeof getDisplayName==='function'?getDisplayName(r.f.approvedBy):r.f.approvedBy) : 'Filed')}</span>${r.f.approvedAt?`<div style="font-size:11px;color:var(--text-3)">${fmt(r.f.approvedAt)}</div>`:''}`;
+  const pmCell = r=>pmCell0(r) + vendWarn(r);
   const paidCell = r=>{ const via = [r.b.paid_via, r.b.pay_ref?'#'+r.b.pay_ref:''].filter(Boolean).join(' ');
     if(r.paid) return `<span style="color:#166534;font-weight:600">✓ ${r.b.paid_on?fmt(r.b.paid_on):'Paid'}</span>${via?`<div style="font-size:11px;color:var(--text-3)">${esc(via)}</div>`:''}${r.ap&&r.b.paid_on?`<div style="font-size:11px;color:var(--text-3)">${Math.max(0,Math.round((new Date(r.b.paid_on+'T12:00:00')-new Date(String(r.ap.approved_at).slice(0,10)+'T12:00:00'))/864e5))} days after approval</div>`:''}`;
     if(r.b.paid_on && Number(r.b.balance) < Number(r.b.total)-0.005) return `<span style="color:#92400e">Partly paid ${fmt(r.b.paid_on)}</span>${via?`<div style="font-size:11px;color:var(--text-3)">${esc(via)}</div>`:''}`;
@@ -8335,6 +8676,7 @@ async function qqImport(file){
     qq.d.notes = (qq.d.notes||[]).filter(Boolean); qq.d.flags = (qq.d.flags||[]).filter(Boolean);
     qq.d.questions = Array.isArray(qq.d.questions) ? qq.d.questions : [];
     if(typeof qq.d.taxable !== 'boolean') qq.d.taxable = false;
+    if(typeof qq.d.tips !== 'boolean') qq.d.tips = (qq.d.items||[]).some(it=>/^TIPS/i.test(it.qb_item_name||'')) || (qq.d.notes||[]).some(n=>/\bTIPS\b/.test(n));
     qq.qbItems = data.items || qq.qbItems;
     qq.request = `Imported from ${file.name}`; qq.answers = {};
     qq.importInfo = { name:file.name, doc_total: dr.doc_total==null||dr.doc_total==='' ? null : Number(dr.doc_total), doc_quote_number: dr.doc_quote_number||'', doc_date: dr.doc_date||'' };
@@ -8391,6 +8733,7 @@ async function qqDraft(change){
     qq.d.notes = (qq.d.notes||[]).filter(Boolean); qq.d.flags = (qq.d.flags||[]).filter(Boolean);
     qq.d.questions = Array.isArray(qq.d.questions) ? qq.d.questions : [];
     if(typeof qq.d.taxable !== 'boolean') qq.d.taxable = typeof keep.taxable === 'boolean' ? keep.taxable : false;
+    if(typeof qq.d.tips !== 'boolean') qq.d.tips = typeof keep.tips === 'boolean' ? keep.tips : ((qq.d.items||[]).some(it=>/^TIPS/i.test(it.qb_item_name||'')) || /\bTIPS\b/.test(qq.request||''));
     if(!change) qq.answers = {};
     qq.qbItems = data.items || qq.qbItems;
     if(!qq.client && qq.d.client){ await qqPickClient(qq.d.client); }
@@ -8463,7 +8806,9 @@ function renderQuoteBuilder(){
       ${[['estimate','Field Source estimate (like Ryan\u2019s QuickBooks estimate)'],['quote','Client-branded quote (client logo and colors)']].map(([v,l])=>`<button onclick="qq.style='${v}';qqSaveLocal();renderQuoteBuilder()" class="site-chip${(qq.style||'estimate')===v?' active':''}" style="padding:5px 10px;font-size:12px">${l}</button>`).join('')}</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0 4px"><span style="font-size:13px;font-weight:700">Taxable?</span>
       ${[[false,'No (tax-exempt)'],[true,'Yes']].map(([v,l])=>`<button onclick="qq.d.taxable=${v};qqSaveLocal();renderQuoteBuilder()" class="site-chip${(d.taxable===true)===v?' active':''}" style="padding:4px 10px;font-size:12px" ${locked?'disabled':''}>${l}</button>`).join('')}
-      <span style="font-size:11px;color:var(--text-3)">Sets the tax on the QuickBooks estimate lines.</span></div>
+      <span style="font-size:11px;color:var(--text-3)">Sets the tax on the QuickBooks estimate lines.</span>
+      <span style="font-size:13px;font-weight:700;margin-left:12px">TIPS quote?</span>
+      ${[[false,'No'],[true,'Yes (2% TIPS fee held back)']].map(([v,l])=>`<button onclick="qq.d.tips=${v};qqSaveLocal();renderQuoteBuilder()" class="site-chip${(d.tips===true)===v?' active':''}" style="padding:4px 10px;font-size:12px" ${locked?'disabled':''}>${l}</button>`).join('')}</div>
     <div style="font-size:13px;font-weight:700;margin:12px 0 8px">Client</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">
       ${f('Contact name','contact_name')}${f('Contact title','contact_title','Treasurer')}
@@ -8584,7 +8929,7 @@ async function qqCreateEstimate(customerId){
       try{
         const made = await sbFetch('POST', '/rest/v1/estimates', { qb_estimate_id: qq.qbId ? String(qq.qbId) : null,
           project_name: d.title || d.client, type: 'Construction', status: 'Not Started', notes: '',
-          qb_estimate_number: qq.docNumber ? String(qq.docNumber) : null, amount: Math.round(qqTotal()*100)/100, client: d.client,
+          qb_estimate_number: qq.docNumber ? String(qq.docNumber) : null, amount: Math.round(qqTotal()*100)/100, client: d.client, tips: !!d.tips,
           qb_status: 'Pending', est_created_date: new Date().toLocaleDateString('en-CA'), source: 'quickbooks',
           updated_at: new Date().toISOString(),
         });
@@ -9423,7 +9768,7 @@ function fmtDate(s){ if(!s) return ''; const d=new Date(s+'T12:00:00'); return d
 
 function renderFuel(){
   const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
-  const canImport = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes(userEmail);
+  const canImport = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes(userEmail);
 
   if(!fuelLoaded){
     loadFuelTransactions().then(()=>renderFuel());
@@ -9689,15 +10034,15 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials','receivables','paybills'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials','receivables','paybills','vendors'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   // Business Ops tabs are highlighted by id (button order no longer matches index)
-  const BIZOPS_TAB_IDS={po:'po-tab',costs:'costs-tab',pipeline:'pipeline-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab',receivables:'receivables-tab',paybills:'paybills-tab'};
+  const BIZOPS_TAB_IDS={po:'po-tab',costs:'costs-tab',pipeline:'pipeline-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab',receivables:'receivables-tab',paybills:'paybills-tab',vendors:'vendors-tab'};
   const byId = BIZOPS_TAB_IDS[v] && document.getElementById(BIZOPS_TAB_IDS[v]);
   if(byId) byId.classList.add('active');
   else { const localIdx = allIdx[v]; if(barTabs[localIdx]) barTabs[localIdx].classList.add('active'); }
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials'||v==='receivables'||v==='paybills';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials'||v==='receivables'||v==='paybills'||v==='vendors';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -9787,9 +10132,9 @@ async function removeOfficeClosure(ids){
 // =================== END OFFICE CLOSED DAYS ===================
 
 // ===================== BUSINESS OPS: grouped tabs =====================
-const BIZ_GROUP_OF = { invoices:'ap', 'inv-approval':'ap', paybills:'ap', estimates:'ar', receivables:'ar',
+const BIZ_GROUP_OF = { invoices:'ap', 'inv-approval':'ap', paybills:'ap', vendors:'ap', estimates:'ar', receivables:'ar',
   costs:'jc', costing:'jc', labor:'jc', materials:'jc', pipeline:'jc', po:'jc', clients:'jc' };
-const BIZ_TAB_OF = { invoices:'invoices-tab', 'inv-approval':'inv-approval-tab', paybills:'paybills-tab', estimates:'estimates-tab', receivables:'receivables-tab',
+const BIZ_TAB_OF = { invoices:'invoices-tab', 'inv-approval':'inv-approval-tab', paybills:'paybills-tab', vendors:'vendors-tab', estimates:'estimates-tab', receivables:'receivables-tab',
   costs:'costs-tab', costing:'costing-tab', labor:'labor-tab', materials:'materials-tab', pipeline:'pipeline-tab', po:'po-tab', clients:'clients-tab' };
 const BIZ_DEFAULT = { ap:'inv-approval', ar:'receivables', jc:'costs' };
 let bizGroup = 'ap', bizLast = {};
@@ -9837,6 +10182,7 @@ function render(){
   else if(view==='estimates') renderEstimates();
   else if(view==='receivables') renderReceivables();
   else if(view==='paybills') renderPayBills();
+  else if(view==='vendors') renderVendors();
   else if(view==='invoices'){ if(invoiceView==='reports') renderInvoiceReports(); else renderInvoices(); }
   else if(view==='inv-approval') renderInvApproval();
   else if(view==='materials') renderMaterials();
@@ -10865,7 +11211,7 @@ function renderMaterials(){
 let invApprovalList = [];
 let invApprovalLoaded = false;
 const APPROVER_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','wes@fieldsourceohio.com','brian@fieldsourceohio.com'];
-const UPLOADER_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com','luanne@fieldsourceohio.com'];
+const UPLOADER_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com','haller@fieldsourceohio.com','luanne@fieldsourceohio.com'];
 
 async function loadInvApproval(){
   if(invApprovalLoaded) return;
@@ -11117,7 +11463,7 @@ function openRejectModal(id){
     <div class="form-group">
       <label class="form-label">Assign to</label>
       <select id="ia-assign-to" style="width:100%;padding:10px 12px;border:1px solid var(--border-2);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:var(--bg)">
-        <option value="ali@fieldsourceohio.com">Ali Gibson</option>
+        <option value="gibson@fieldsourceohio.com">Ali Gibson</option>
         <option value="jake@fieldsourceohio.com">Jake Diefenthaler</option>
         <option value="ryan@fieldsourceohio.com">Ryan DeMay</option>
         <option value="matt@fieldsourceohio.com">Matt</option>
@@ -11775,6 +12121,8 @@ function openApprovalPanel(){
   const toList = bellTimeOff().sort((a,b)=>a.startDate.localeCompare(b.startDate));
   const toFmt = d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
   const toEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const vdList = (typeof bellVendorItems==='function') ? bellVendorItems() : [];
+  const vdHtml = vdList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Vendor documents</div>` + vdList.slice(0,8).map(x=>`<div onclick="document.getElementById('approval-panel')?.remove();setView('vendors');setTimeout(()=>openVendor('${x.v.id}'),300)" style="cursor:pointer;background:var(--bg);border:1px solid var(--border);border-left:4px solid ${x.st==='review'?'#2563eb':'#f59e0b'};border-radius:var(--radius);padding:8px 12px;margin-bottom:6px;font-size:13px"><b>${escEst(x.v.name)}</b> <span style="color:var(--text-3)">· ${x.st==='review'?'new vendor: confirm what they need':x.st==='expiring'?'a document expires within 30 days':'a required document has expired'}</span></div>`).join('') + (vdList.length>8?`<div style="font-size:12px;color:var(--text-3);margin-bottom:8px">and ${vdList.length-8} more in Business Ops → Vendors</div>`:'') : '';
   const rbList = bellBillRequests();
   const rbHtml = rbList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Ready to bill</div>` + billReqCardsHtml(rbList, true) : '';
   const toHtml0 = toList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Time off</div>` + toList.map(e=>`
@@ -11788,7 +12136,7 @@ function openApprovalPanel(){
         <button onclick="denyTimeOff('${e.id}')" style="flex:1;padding:7px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;color:#dc2626">✕ Deny</button>
       </div>
     </div>`).join('') + (pending.length?`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>`:'') : '';
-  const toHtml = rbHtml + (rbHtml && (toHtml0 || pending.length) ? '<div style="height:6px"></div>' : '') + (toHtml0 || (rbHtml && pending.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>` : ''));
+  const toHtml = vdHtml + rbHtml + ((vdHtml||rbHtml) && (toHtml0 || pending.length) ? '<div style="height:6px"></div>' : '') + (toHtml0 || ((rbHtml||vdHtml) && pending.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>` : ''));
 
   const panel = document.createElement('div');
   panel.id = 'approval-panel';
@@ -11891,12 +12239,13 @@ function bellInvoices(){
 function bellTimeOff(){ return (typeof timeOffEntries!=='undefined' ? timeOffEntries : []).filter(e=>e.status==='Pending' && typeof timeOffForMe==='function' && timeOffForMe(e)); }
 function updateApprovalBell(pulse){
   if(!approvalRulesLoaded && currentUser){ approvalRulesLoaded = true; loadApprovalRules().then(()=>updateApprovalBell()); }
-  const inv = bellInvoices().length, to = bellTimeOff().length, rb = bellBillRequests().length, total = inv + to + rb;
+  const vd = (typeof bellVendorItems==='function') ? bellVendorItems().length : 0;
+  const inv = bellInvoices().length, to = bellTimeOff().length, rb = bellBillRequests().length, total = inv + to + rb + vd;
   const bell = document.getElementById('approval-bell');
   const badge = document.getElementById('approval-badge');
   if(bell){
     bell.style.display = total > 0 ? '' : 'none';
-    bell.title = [rb?`${rb} ready to bill`:'', to?`${to} time-off request${to===1?'':'s'}`:'', inv?`${inv} invoice${inv===1?'':'s'}`:''].filter(Boolean).join(' · ') + ' to review';
+    bell.title = [vd?`${vd} vendor${vd===1?'':'s'} need documents reviewed`:'', rb?`${rb} ready to bill`:'', to?`${to} time-off request${to===1?'':'s'}`:'', inv?`${inv} invoice${inv===1?'':'s'}`:''].filter(Boolean).join(' · ') + ' to review';
     if(pulse && total){ bell.animate([{transform:'rotate(0)'},{transform:'rotate(-18deg)'},{transform:'rotate(16deg)'},{transform:'rotate(-10deg)'},{transform:'rotate(0)'}], {duration:700, iterations:2}); }
   }
   if(badge) badge.textContent = total;
@@ -12139,6 +12488,7 @@ async function uploadInvoiceFile(jobId, projectName, file, notes='', skipExtract
       approval_status: requiresApproval ? 'pending' : 'approved',
     };
     await sbFetch('POST', '/rest/v1/invoice_files', meta);
+    vendCheckOnInvoice(vendor, meta.extracted_text, projectName);   // new vendor? add it and ask Claude what it needs (doesn't hold up filing)
 
     // Auto-create direct cost entry if we have enough info
     if(projectName && vendor && window._pendingAmount){
@@ -12927,7 +13277,7 @@ function renderInvoiceReports(){
 
 function renderInvoices(){
   const userEmail = (currentUser&&currentUser.email||'').toLowerCase();
-  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes(userEmail);
+  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes(userEmail);
 
   // Unique projects from files + from jobs table
   const projectsFromFiles = [...new Set(invoiceFiles.map(f=>f.projectName).filter(Boolean))].sort();
@@ -13052,7 +13402,7 @@ function renderInvoiceList(){
     );
   }
 
-  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
+  const canUpload = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
   const canApprove = ['haller@fieldsourceohio.com','jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'].includes((currentUser&&currentUser.email||'').toLowerCase());
 
   let html = '';
@@ -14536,7 +14886,7 @@ async function doLogin(){
     currentUser = data.user;
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>updateApprovalBell(true));
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); });
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);
@@ -14601,12 +14951,12 @@ function showApp(){
   const HOURS_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const hoursTab = document.getElementById('hours-tab');
   if(hoursTab) hoursTab.style.display = HOURS_EMAILS.includes((currentUser.email||'').toLowerCase()) ? '' : 'none';
-  const FLEET_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','ali@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'];
+  const FLEET_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'];
   const fleetPortalTab = document.getElementById('ptab-fleet');
   if(fleetPortalTab) fleetPortalTab.style.display = FLEET_EMAILS.includes(userEmail) ? '' : 'none';
 
 
-  const ESTIMATES_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com'];
+  const ESTIMATES_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com'];
   const estimatesTab = document.getElementById('estimates-tab');
   if(estimatesTab) estimatesTab.style.display = ESTIMATES_EMAILS.includes(userEmail) ? '' : 'none';
   const poTab2 = document.getElementById('po-tab');
@@ -14667,7 +15017,7 @@ function checkSession(){
       currentToken = token;
       refreshToken = refresh;
       currentUser = JSON.parse(user);
-      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>updateApprovalBell(true));
+      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); });
       isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
       isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());

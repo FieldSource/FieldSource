@@ -7366,6 +7366,11 @@ function billRowAmount(r){
   if(billState.mode==='qty') return Math.round(v * r.rate * 100)/100;                       // quantity done this invoice
   return Math.round(v*100)/100;                                                               // dollar amount
 }
+function billSummaryHtml(contract, billed, thisInv){
+  const pct = contract ? Math.round(billed/contract*1000)/10 : 0, after = contract ? Math.round((billed+thisInv)/contract*1000)/10 : 0;
+  const box = (label, val, sub, color)=>`<div style="flex:1;min-width:120px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3)">${label}</div><div style="font-size:16px;font-weight:700;${color?'color:'+color:''}">${val}</div>${sub?`<div style="font-size:11px;color:var(--text-3)">${sub}</div>`:''}</div>`;
+  return box('Contract', arMoney(contract)) + box('Billed so far', arMoney(billed)) + box('% complete', pct+'%', thisInv ? `${after}% after this invoice` : '', after>100.05 ? '#b91c1c' : '');
+}
 function renderInvoiceBuilder(){
   const st = billState, p = st.prep;
   const total = st.rows.reduce((t,r)=>t+billRowAmount(r),0);
@@ -7378,7 +7383,9 @@ function renderInvoiceBuilder(){
   const html = `
     <div class="sheet-title" style="margin-bottom:2px">Create invoice</div>
     ${rq?`<div style="margin:6px 0 10px;padding:8px 12px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px">💲 <b>Ready to bill</b> from ${arEsc(rq.requested_name||rq.requested_by)}: <b>${arEsc(billReqWhat(rq))}</b>${rq.notes?`<div style="margin-top:4px;white-space:pre-wrap">${arEsc(rq.notes)}</div>`:''}</div>`:''}
-    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Estimate #${arEsc(p.estimate.number)} · ${arEsc(p.estimate.customer)} · contract ${arMoney(contract)} · billed so far ${arMoney(billedSoFar)}${st.unsyncedBilled?` (incl. ${arMoney(st.unsyncedBilled)} not synced line by line)`:''}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:6px">Estimate #${arEsc(p.estimate.number)} · ${arEsc(p.estimate.customer)}</div>
+    <div id="bill-summary" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">${billSummaryHtml(contract, billedSoFar, total)}</div>
+    ${st.unsyncedBilled?`<div style="font-size:11px;color:var(--text-3);margin:-6px 0 10px">Billed so far includes ${arMoney(st.unsyncedBilled)} not yet synced line by line.</div>`:''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px">
       <div><div style="${billLbl}">Invoice #</div><input style="${billInput}" value="${arEsc(st.doc)}" oninput="billState.doc=this.value" placeholder="Next number"></div>
       <div><div style="${billLbl}">Invoice date</div><input type="date" style="${billInput}" value="${st.date}" onchange="billState.date=this.value;renderInvoiceBuilder()"></div>
@@ -7389,7 +7396,7 @@ function renderInvoiceBuilder(){
     </div>
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
       <span style="font-size:12px;color:var(--text-2)">Bill each line by:</span>
-      ${[['pctnow','% to bill now'],['pct','% complete to date'],['qty','Quantity done'],['amt','Dollar amount']].map(([m,l])=>`<button onclick="billState.mode='${m}';billState.rows.forEach(r=>r.input='');renderInvoiceBuilder()" class="site-chip${st.mode===m?' active':''}" style="padding:4px 10px;font-size:12px">${l}</button>`).join('')}
+      ${[['pctnow','% to bill now'],['qty','Quantity done'],['amt','Dollar amount']].map(([m,l])=>`<button onclick="billState.mode='${m}';billState.rows.forEach(r=>r.input='');renderInvoiceBuilder()" class="site-chip${st.mode===m?' active':''}" style="padding:4px 10px;font-size:12px">${l}</button>`).join('')}
       <button onclick="billFillRemaining()" class="site-chip" style="padding:4px 10px;font-size:12px;margin-left:auto" title="Bill everything that's left on every line">Bill all remaining</button>
     </div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="width:100%;border-collapse:collapse;min-width:640px"><thead><tr>
@@ -7415,6 +7422,9 @@ function billUpdateRow(k){
   const cell = document.getElementById('bill-amt-'+k);
   if(cell) cell.innerHTML = `<b style="${over||neg?'color:#dc2626':''}">${arMoney(amt)}</b>${over?'<div style="font-size:10px;color:#dc2626">over the contract line</div>':neg?'<div style="font-size:10px;color:#dc2626">less than already billed</div>':amt?`<div style="font-size:10px;color:var(--text-3)">${r.amount?Math.round(after/r.amount*100):0}% after</div>`:''}`;
   const t = document.getElementById('bill-total'); if(t) t.textContent = arMoney(billState.rows.reduce((s,x)=>s+billRowAmount(x),0));
+  const sm = document.getElementById('bill-summary');
+  if(sm){ const st = billState, contract = Number(st.e.amount)||st.prep.estimate.total, billed = st.rows.reduce((s,x)=>s+x.billedAmt,0) + st.unsyncedBilled;
+    sm.innerHTML = billSummaryHtml(contract, billed, st.rows.reduce((s,x)=>s+billRowAmount(x),0)); }
 }
 // A Ready to bill request fills the lines in: "Part: 50%" -> 50% on each line; "$X" -> spread over what's left; "everything left" -> all remaining
 function billPrefillFromRequest(){
@@ -8048,19 +8058,106 @@ async function vendOpenDoc(docId){
        const j = await r.json(); if(!j.signedURL) throw new Error(j.message||'no link'); window.open(`${SUPABASE_URL}/storage/v1${j.signedURL}`, '_blank'); }
   catch(e){ alert('Could not open it: '+e.message); }
 }
-function vendRequest(id){
+// ---- Request vendor documents from your Gmail, with a standard email ----
+const VEND_REQ_DEFAULT = {
+  subject: 'Field Source vendor documents needed: [Documents]',
+  body: `[Greeting],
+
+Before we can process payment on your invoices, Field Source needs the following on file:
+
+[Document list]
+
+You can reply to this email with the documents attached. Please list Field Source LLC, Dublin, Ohio as the certificate holder on any certificate of insurance.
+
+Thank you,
+[Your name]
+Field Source LLC` };
+let vendReqTemplate = null, vendReqState = null;
+async function vendReqLoadTemplate(){
+  if(vendReqTemplate) return vendReqTemplate;
+  try{ const r = await sbFetch('GET', "/rest/v1/tracker_settings?key=eq.vendor_request_template&select=value"); if(r && r[0] && r[0].value) vendReqTemplate = JSON.parse(r[0].value); }catch(e){}
+  return vendReqTemplate || VEND_REQ_DEFAULT;
+}
+function vendReqFill(t, v, want){
+  const first = String(v.contact_name||'').trim().split(/\s+/)[0];
+  const lines = want.map(({k,s})=>k==='w9' ? '- A completed and signed IRS Form W-9 (blank form: https://www.irs.gov/pub/irs-pdf/fw9.pdf)'
+    : k==='coi' ? `- ${s.state==='missing'?'A':'An updated'} certificate of insurance (general liability, auto, and umbrella if applicable) naming Field Source LLC as additional insured${s.doc&&s.doc.expires_on?` (the one we have ${s.state==='expired'?'expired':'expires'} ${new Date(s.doc.expires_on+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})})`:''}`
+    : `- ${s.state==='missing'?'Your':'An updated'} Ohio Bureau of Workers' Compensation certificate of coverage`);
+  const rep = x=>String(x).replace(/\[Greeting\]/g, first?`Hi ${first}`:'Hello').replace(/\[Contact first name\]/g, first||'there')
+    .replace(/\[Vendor\]/g, v.name).replace(/\[Documents\]/g, want.map(x=>VEND_KINDS[x.k]).join(', ')).replace(/\[Document list\]/g, lines.join('\n'))
+    .replace(/\[Your name\]/g, getDisplayName(currentUser&&currentUser.email));
+  return { subject: rep(t.subject), body: rep(t.body) };
+}
+async function vendRequest(id){
   const v = vendors.find(x=>x.id===id); if(!v) return;
   const want = Object.keys(VEND_KINDS).filter(k=>v['needs_'+k]).map(k=>({ k, s: vendDocState(v,k) })).filter(x=>x.s.state!=='ok');
   if(!want.length){ alert(`${v.name} has everything on file.`); return; }
-  const lines = want.map(({k,s})=>k==='w9' ? '- A completed and signed IRS Form W-9'
-    : k==='coi' ? `- ${s.state==='missing'?'A':'An updated'} certificate of insurance (general liability, auto, and umbrella if applicable) naming Field Source LLC as additional insured${s.doc&&s.doc.expires_on?` (the one we have expires ${new Date(s.doc.expires_on+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})})`:''}`
-    : `- ${s.state==='missing'?'Your':'An updated'} Ohio Bureau of Workers' Compensation certificate of coverage`);
-  const me = getDisplayName(currentUser&&currentUser.email);
-  const first = String(v.contact_name||'').trim().split(/\s+/)[0];
-  const body = `${first?'Hi '+first:'Hello'},\n\nBefore we can process payment on your invoices, Field Source needs the following on file:\n\n${lines.join('\n')}\n\nYou can reply to this email with the documents attached. Please list Field Source LLC, Dublin, Ohio as the certificate holder.\n\nThank you,\n${me}\nField Source LLC`;
-  const subject = `Field Source vendor documents needed: ${want.map(x=>VEND_KINDS[x.k]).join(', ')}`;
-  window.open(`mailto:${encodeURIComponent(v.contact_email||v.billing_email||'')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank');
-  vendSave(id, { last_requested_at: new Date().toISOString() }, true);
+  billOverlay('vreq-overlay', '<div style="padding:30px;text-align:center;color:var(--text-3)">Getting the email ready…</div>', 640);
+  const [tpl, st] = await Promise.all([ vendReqLoadTemplate(), invAction({ action:'gmail_status' }).catch(()=>({ gmail_ready:false })) ]);
+  const filled = vendReqFill(tpl, v, want);
+  vendReqState = { id, want, st, to: v.contact_email || v.billing_email || '', cc: v.contact_email && v.billing_email && v.billing_email!==v.contact_email ? v.billing_email : '', subject: filled.subject, body: filled.body };
+  vendReqRender();
+}
+function vendReqSaveInputs(){ ['to','cc','subject','body'].forEach(k=>{ const el = document.getElementById('vrq-'+k); if(el) vendReqState[k] = el.value; }); }
+function vendReqRender(){
+  const s = vendReqState, v = vendors.find(x=>x.id===s.id), ready = s.st.gmail_ready && s.st.gmail_from;
+  billOverlay('vreq-overlay', `
+    <div class="sheet-title" style="margin-bottom:2px">Request documents from ${escEst(v.name)}</div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Needed: ${s.want.map(x=>`<b>${VEND_KINDS[x.k]}</b>${x.s.state==='expired'?' (expired)':x.s.state==='expiring'?' (expiring)':''}`).join(', ')}</div>
+    ${!s.st.gmail_ready ? `<div style="padding:12px;background:#fef9c3;border-radius:8px;font-size:13px">Gmail sending isn't set up for the tracker yet.</div>`
+      : !s.st.gmail_from ? `<div style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px">Connect your Gmail once so requests come from your own address. The tracker can only <b>send</b> as you; it can't read your inbox.
+          <div style="margin-top:10px;display:flex;gap:8px"><button class="btn-save" style="flex:none" onclick="vendReqSaveInputs();connectGmail()">Connect Gmail</button><button class="btn-cancel" style="flex:none" onclick="invAction({action:'gmail_status'}).then(x=>{vendReqState.st=x;vendReqRender()})">I've connected, refresh</button></div></div>`
+      : `<div style="font-size:12px;color:var(--text-3);margin-bottom:8px">From: <b style="color:var(--text)">${escEst(s.st.gmail_from)}</b> (your Gmail)</div>`}
+    ${ready ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><div style="${billLbl}">To</div><input id="vrq-to" style="${billInput}" value="${escEst(s.to)}" placeholder="contact@vendor.com"></div>
+      <div><div style="${billLbl}">CC (optional)</div><input id="vrq-cc" style="${billInput}" value="${escEst(s.cc)}"></div>
+    </div>
+    ${!s.to?'<div style="font-size:12px;color:#b45309;margin-top:4px">No email on file for this vendor. Type one above (it\u2019s saved to the vendor).</div>':''}
+    <div style="margin-top:10px"><div style="${billLbl}">Subject</div><input id="vrq-subject" style="${billInput}" value="${escEst(s.subject)}"></div>
+    <div style="margin-top:8px"><div style="${billLbl}">Message</div><textarea id="vrq-body" rows="13" style="${billInput};line-height:1.45">${escEst(s.body)}</textarea></div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:6px;flex-wrap:wrap;font-size:12px">
+      <a style="cursor:pointer;color:var(--green-dark)" onclick="vendReqSaveStandard()">Save this wording as our standard</a>
+      <span style="color:var(--text-3)">· blanks you can use: [Greeting] [Vendor] [Documents] [Document list] [Your name]</span>
+      <a style="cursor:pointer;color:var(--text-3)" onclick="vendReqReset()">· reset to the original</a></div>
+    <div id="vrq-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>` : ''}
+    <div style="display:flex;justify-content:space-between;margin-top:14px;gap:8px">
+      <button class="btn-cancel" onclick="document.getElementById('vreq-overlay').remove()">Cancel</button>
+      ${ready?`<button class="btn-save" id="vrq-go" onclick="vendReqSend()">Send…</button>`:''}
+    </div>`, 660);
+}
+async function vendReqSaveStandard(){
+  vendReqSaveInputs();
+  const s = vendReqState, v = vendors.find(x=>x.id===s.id);
+  // turn this vendor's details back into blanks so the wording works for everyone
+  const first = String(v.contact_name||'').trim().split(/\s+/)[0], filledDefault = vendReqFill({ subject:'[Documents]', body:'[Document list]' }, v, s.want);
+  let subject = s.subject.split(filledDefault.subject).join('[Documents]').split(v.name).join('[Vendor]');
+  let body = s.body.split(filledDefault.body).join('[Document list]').split(v.name).join('[Vendor]').split(getDisplayName(currentUser&&currentUser.email)).join('[Your name]');
+  body = body.replace(new RegExp('^(Hi ' + (first||'\\u0000') + '|Hello)(?=[,!\\n])'), '[Greeting]');
+  if(!/\[Document list\]/.test(body) && !confirm("This wording doesn't include the list of missing documents ([Document list]). Save it anyway?")) return;
+  try{ await sbFetch('POST','/rest/v1/tracker_settings?on_conflict=key', { key:'vendor_request_template', value: JSON.stringify({ subject, body }), updated_by:(currentUser&&currentUser.email)||'', updated_at:new Date().toISOString() });
+    vendReqTemplate = { subject, body }; if(typeof pmToast==='function') pmToast('Saved as the standard wording'); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+async function vendReqReset(){
+  if(!confirm('Put the message back to the original standard wording?')) return;
+  try{ await sbFetch('DELETE', "/rest/v1/tracker_settings?key=eq.vendor_request_template"); }catch(e){}
+  vendReqTemplate = null; vendRequest(vendReqState.id);
+}
+async function vendReqSend(){
+  vendReqSaveInputs();
+  const s = vendReqState, v = vendors.find(x=>x.id===s.id), btn = document.getElementById('vrq-go'), err = document.getElementById('vrq-err');
+  if(!s.to.trim()){ err.textContent = 'Enter who it goes to.'; return; }
+  if(btn.dataset.armed!=='1'){ btn.dataset.armed='1'; btn.textContent = `Yes, email it from ${s.st.gmail_from} to ${s.to.trim()}`; btn.style.background='#b45309'; return; }
+  btn.disabled = true; btn.textContent = 'Sending…';
+  try{
+    const r = await invAction({ action:'send_plain_gmail', to:s.to, cc:s.cc, subject:s.subject, body:s.body, vendor_id:v.id, log_as:'vendor_docs_requested' });
+    const upd = { last_requested_at: new Date().toISOString() };
+    if(!v.contact_email && !v.billing_email) upd.contact_email = s.to.split(/[,;]/)[0].trim();
+    await vendSave(v.id, upd, false);
+    document.getElementById('vreq-overlay').remove(); openVendor(v.id);
+    if(typeof pmToast==='function') pmToast(`✓ Request sent to ${r.sent_to}`); else alert(`✓ Request sent to ${r.sent_to}`);
+  }catch(x){ err.textContent = 'Not sent: '+x.message; btn.disabled = false; btn.dataset.armed=''; btn.style.background=''; btn.textContent = 'Send…'; }
 }
 async function vendArchive(id, on){
   const v = vendors.find(x=>x.id===id); if(!v) return;

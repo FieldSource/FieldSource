@@ -114,6 +114,27 @@ exports.handler = async function (event) {
   let b; try { b = JSON.parse(event.body || '{}'); } catch (e) { return json(400, { error: 'Bad request' }); }
   const canBill = BILLERS.includes(String(user.email).toLowerCase());
   if (['gmail_status', 'send_quote_gmail'].includes(b.action) && !QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed to send quotes.' });
+  // Plain email from the person's own Gmail (vendor document requests). No attachment.
+  if (b.action === 'send_plain_gmail') {
+    if (!QUOTE_SENDERS.includes(String(user.email).toLowerCase())) return json(403, { error: 'Not allowed to send from the tracker.' });
+    try {
+      const ok = e => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e);
+      const toList = String(b.to || '').split(/[,;]\s*/).map(x => x.trim()).filter(Boolean), ccList = String(b.cc || '').split(/[,;]\s*/).map(x => x.trim()).filter(Boolean);
+      if (!toList.length || !toList.every(ok)) throw new Error('Check the To email address.');
+      if (ccList.length && !ccList.every(ok)) throw new Error('Check the CC email address.');
+      if (!String(b.subject || '').trim() || !String(b.body || '').trim()) throw new Error('The subject and message can\'t be empty.');
+      const g = await gmailAccess(user.email); if (!g) throw new Error('Connect your Gmail first.');
+      const enc = s => /[^\x20-\x7E]/.test(s) ? '=?UTF-8?B?' + Buffer.from(s).toString('base64') + '?=' : s;
+      const raw = Buffer.from([`From: ${g.from}`, `To: ${toList.join(', ')}`, ...(ccList.length ? [`Cc: ${ccList.join(', ')}`] : []), `Subject: ${enc(String(b.subject).trim())}`,
+        'MIME-Version: 1.0', 'Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '',
+        Buffer.from(String(b.body)).toString('base64').replace(/(.{76})/g, '$1\r\n')].join('\r\n')).toString('base64url');
+      const gr = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { Authorization: `Bearer ${g.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw }) });
+      const gd = await gr.json().catch(() => ({}));
+      if (!gr.ok) throw new Error(`Gmail didn't send it: ${(gd.error && gd.error.message) || gr.status}`);
+      await logActivity(String(b.log_as || 'email_sent_gmail').slice(0, 40), user, { to: toList.join(', '), cc: ccList.join(', '), subject: String(b.subject).trim(), vendor_id: b.vendor_id || '', gmail_id: gd.id });
+      return json(200, { ok: true, sent_to: toList.join(', '), from: g.from });
+    } catch (e) { return json(500, { error: e.message }); }
+  }
   if (b.action === 'gmail_status') {
     const g = await sb('GET', `gmail_tokens?user_email=eq.${encodeURIComponent(user.email.toLowerCase())}&select=google_email`).catch(() => []);
     return json(200, { gmail_ready: !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET), gmail_from: g && g[0] ? g[0].google_email : '' });

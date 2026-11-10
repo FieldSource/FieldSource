@@ -7921,7 +7921,7 @@ async function vendRecommend(v, text, project){
     if(!v.reviewed_at){ upd.needs_w9 = n.w9!==false; upd.needs_coi = !!n.coi; upd.needs_bwc = !!n.bwc; }   // Ali's confirmed choices are never overwritten
     await sbFetch('PATCH', `/rest/v1/vendors?id=eq.${v.id}`, upd); Object.assign(v, upd);
     return rec;
-  }catch(e){ console.warn('vendor recommendation', e.message); return null; }
+  }catch(e){ console.warn('vendor recommendation', e.message); window._vendRecErr = e.message; return null; }
 }
 // Called after a vendor invoice is filed: new vendor -> add it, ask Claude what it needs, and tell the person filing it
 async function vendCheckOnInvoice(name, text, project){
@@ -8036,7 +8036,7 @@ async function vendAskClaude(id){
   const f = (typeof invoiceFiles!=='undefined'?invoiceFiles:[]).find(x=>vendorFor(x.vendorName)===v);
   if(typeof pmToast==='function') pmToast('Asking Claude…');
   const rec = await vendRecommend(v, f && f.extractedText, f && f.projectName);
-  if(!rec) alert('Claude could not make a recommendation right now.');
+  if(!rec) alert('Claude could not make a recommendation right now.' + (window._vendRecErr ? '\n\nReason: ' + String(window._vendRecErr).slice(0,300) : ''));
   openVendor(id);
 }
 function vendMarkReviewed(v){

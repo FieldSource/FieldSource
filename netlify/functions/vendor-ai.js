@@ -10,7 +10,8 @@ const json = (code, obj) => ({ statusCode: code, headers: { 'Content-Type': 'app
 
 async function claude(content, maxTokens = 900) {
   const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01',
+               ...(process.env.ANTHROPIC_WORKSPACE_ID ? { 'anthropic-workspace-id': process.env.ANTHROPIC_WORKSPACE_ID } : {}) },   // same as extract-invoice / quote-draft
     body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content }] }) });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`Claude error ${r.status}: ${(d.error && d.error.message) || ''}`);
@@ -68,5 +69,5 @@ exports.handler = async function (event) {
       return json(200, { ok: true, doc: out });
     }
     return json(400, { error: 'Unknown action' });
-  } catch (e) { return json(500, { error: e.message }); }
+  } catch (e) { console.error('vendor-ai', b && b.action, e.message); return json(500, { error: e.message }); }
 };

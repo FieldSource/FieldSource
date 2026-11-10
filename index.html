@@ -11854,8 +11854,9 @@ async function poApprove(){
       <div style="text-align:right"><button class="btn-save" style="flex:none" onclick="document.getElementById('po-overlay').remove();renderEstimates();openEstimateDetail('${e.id}')">Done</button></div>`, 560);
   }catch(x){ err.textContent = 'Not approved: '+x.message; btn.disabled = false; btn.textContent = 'Mark approved'; }
 }
-async function estDocUpload(estId, input){
-  const kind = (document.getElementById('est-doc-kind')||{}).value || 'po';
+async function estDocUpload(estId, input, kindOverride){
+  const kind = kindOverride || (document.getElementById('est-doc-kind')||{}).value || 'po';
+  let lastPoPath = null;
   const files = [...input.files]; if(!files.length) return;
   try{
     if(typeof ensureFreshToken==='function') await ensureFreshToken();
@@ -11866,8 +11867,19 @@ async function estDocUpload(estId, input){
         headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type': file.type||'application/octet-stream', 'x-upsert':'true' }, body: await file.arrayBuffer() });
       if(!up.ok) throw new Error(`${file.name}: ${up.status} ${(await up.text()).slice(0,150)}`);
       await sbFetch('POST','/rest/v1/estimate_files', { estimate_id:String(estId), kind, file_name:file.name, file_path:path, size_bytes:file.size, uploaded_by:(currentUser&&currentUser.email)||'' });
+      if(kind==='po' && /\.(pdf|png|jpe?g)$/i.test(file.name)) lastPoPath = path;
     }
     estDocsRender(estimates.find(x=>x.id===estId));
+    const est = estimates.find(x=>x.id===estId);
+    if(lastPoPath && est && !est.poNumber){
+      try{
+        if(typeof pmToast==='function') pmToast('Reading the PO number…');
+        const r = await invAction({ action:'po_read', file_path: lastPoPath });
+        const num = r && r.po && String(r.po.po_number||'').trim();
+        if(num && confirm(`The PO says PO # ${num}.\n\nUse it as this job's PO #? (It goes on every invoice for the job.)`)) await saveEstimatePo(estId, num);
+        else if(!num) alert('Uploaded. Claude couldn\u2019t read a PO number off it; type it in the PO # field.');
+      }catch(x){ console.warn('reading PO number', x.message); }
+    }
   }catch(err){ alert('Upload failed: '+err.message); }
 }
 async function estDocOpen(id){
@@ -11888,7 +11900,12 @@ async function estDocDelete(id, estId){
   }catch(err){ alert('Could not remove it: '+err.message); }
 }
 function estPoView(e){
-  return `<span style="cursor:pointer" onclick="estPoEdit('${e.id}')" title="Click to ${e.poNumber?'change':'add'} the customer PO # (it goes on every invoice for this job)">${e.poNumber?escEst(e.poNumber):'—'} <span style="font-size:12px;opacity:.6">✏️</span></span>`;
+  return `<span style="cursor:pointer" onclick="estPoEdit('${e.id}')" title="Click to ${e.poNumber?'change':'add'} the customer PO # (it goes on every invoice for this job)">${e.poNumber?escEst(e.poNumber):'—'} <span style="font-size:12px;opacity:.6">✏️</span></span>
+    <label onclick="event.stopPropagation()" style="display:inline-block;margin-left:8px;font-size:12px;color:var(--green-dark);cursor:pointer;font-weight:600" title="Upload the PO document (PDF or photo). If the PO # is empty, Claude reads it off the PO.">📎 Upload PO<input type="file" accept=".pdf,.png,.jpg,.jpeg" style="display:none" onchange="estUploadPo('${e.id}',this)"></label>`;
+}
+function estUploadPo(estId, input){
+  const k = document.getElementById('est-doc-kind'); if(k) k.value = 'po';
+  estDocUpload(estId, input, 'po');
 }
 function estPoEdit(id){
   const e = estimates.find(x=>x.id===id), el = document.getElementById('est-po-view'); if(!e || !el) return;

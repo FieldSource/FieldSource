@@ -8067,7 +8067,7 @@ Before we can process payment on your invoices, Field Source needs the following
 
 [Document list]
 
-You can reply to this email with the documents attached. Please list Field Source LLC, Dublin, Ohio as the certificate holder on any certificate of insurance.
+You can reply to this email with the documents attached.[COI note]
 
 Thank you,
 [Your name]
@@ -8083,7 +8083,13 @@ function vendReqFill(t, v, want){
   const lines = want.map(({k,s})=>k==='w9' ? '- A completed and signed IRS Form W-9 (blank form: https://www.irs.gov/pub/irs-pdf/fw9.pdf)'
     : k==='coi' ? `- ${s.state==='missing'?'A':'An updated'} certificate of insurance (general liability, auto, and umbrella if applicable) naming Field Source LLC as additional insured${s.doc&&s.doc.expires_on?` (the one we have ${s.state==='expired'?'expired':'expires'} ${new Date(s.doc.expires_on+'T12:00:00').toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})})`:''}`
     : `- ${s.state==='missing'?'Your':'An updated'} Ohio Bureau of Workers' Compensation certificate of coverage`);
-  const rep = x=>String(x).replace(/\[Greeting\]/g, first?`Hi ${first}`:'Hello').replace(/\[Contact first name\]/g, first||'there')
+  const coi = want.some(x=>x.k==='coi'), oneDoc = want.length===1;
+  const coiNote = coi ? ' Please list Field Source LLC, Dublin, Ohio as the certificate holder on the certificate of insurance.' : '';
+  const rep = x=>String(x)
+    .replace(/\s*Please list Field Source LLC, Dublin, Ohio as the certificate holder on (any|the) certificate of insurance\./g, '[COI note]')   // older saved wording
+    .replace(/\[COI note\]/g, coiNote)
+    .replace(/the documents attached/g, oneDoc ? (want[0].k==='w9' ? 'the W-9 attached' : 'it attached') : 'the documents attached')
+    .replace(/\[Greeting\]/g, first?`Hi ${first}`:'Hello').replace(/\[Contact first name\]/g, first||'there')
     .replace(/\[Vendor\]/g, v.name).replace(/\[Documents\]/g, want.map(x=>VEND_KINDS[x.k]).join(', ')).replace(/\[Document list\]/g, lines.join('\n'))
     .replace(/\[Your name\]/g, getDisplayName(currentUser&&currentUser.email));
   return { subject: rep(t.subject), body: rep(t.body) };
@@ -8118,7 +8124,7 @@ function vendReqRender(){
     <div style="margin-top:8px"><div style="${billLbl}">Message</div><textarea id="vrq-body" rows="13" style="${billInput};line-height:1.45">${escEst(s.body)}</textarea></div>
     <div style="display:flex;gap:10px;align-items:center;margin-top:6px;flex-wrap:wrap;font-size:12px">
       <a style="cursor:pointer;color:var(--green-dark)" onclick="vendReqSaveStandard()">Save this wording as our standard</a>
-      <span style="color:var(--text-3)">· blanks you can use: [Greeting] [Vendor] [Documents] [Document list] [Your name]</span>
+      <span style="color:var(--text-3)">· blanks you can use: [Greeting] [Vendor] [Documents] [Document list] [COI note] [Your name]</span>
       <a style="cursor:pointer;color:var(--text-3)" onclick="vendReqReset()">· reset to the original</a></div>
     <div id="vrq-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>` : ''}
     <div style="display:flex;justify-content:space-between;margin-top:14px;gap:8px">
@@ -8132,7 +8138,8 @@ async function vendReqSaveStandard(){
   // turn this vendor's details back into blanks so the wording works for everyone
   const first = String(v.contact_name||'').trim().split(/\s+/)[0], filledDefault = vendReqFill({ subject:'[Documents]', body:'[Document list]' }, v, s.want);
   let subject = s.subject.split(filledDefault.subject).join('[Documents]').split(v.name).join('[Vendor]');
-  let body = s.body.split(filledDefault.body).join('[Document list]').split(v.name).join('[Vendor]').split(getDisplayName(currentUser&&currentUser.email)).join('[Your name]');
+  let body = s.body.replace(/\s*Please list Field Source LLC, Dublin, Ohio as the certificate holder on (any|the) certificate of insurance\./g, '[COI note]')
+    .split(filledDefault.body).join('[Document list]').split(v.name).join('[Vendor]').split(getDisplayName(currentUser&&currentUser.email)).join('[Your name]');
   body = body.replace(new RegExp('^(Hi ' + (first||'\\u0000') + '|Hello)(?=[,!\\n])'), '[Greeting]');
   if(!/\[Document list\]/.test(body) && !confirm("This wording doesn't include the list of missing documents ([Document list]). Save it anyway?")) return;
   try{ await sbFetch('POST','/rest/v1/tracker_settings?on_conflict=key', { key:'vendor_request_template', value: JSON.stringify({ subject, body }), updated_by:(currentUser&&currentUser.email)||'', updated_at:new Date().toISOString() });

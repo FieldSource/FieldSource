@@ -6550,6 +6550,7 @@ function renderEstimates(){
           ${(e.qbNumber||e.client)?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">${e.qbNumber?`Est #${e.qbNumber}`:(e.qbId?'<span style="color:#b45309;font-weight:600">No estimate # yet</span>':'')}${(e.qbNumber||e.qbId)&&e.client?' · ':''}${e.client}${e.qbStatus?` · QB ${e.qbStatus}`:''}</div>`:''}
           ${e.scope?`<div style="font-size:11px;color:var(--text-2);margin-top:2px">${e.scope}</div>`:''}
           ${e.notes?`<div style="font-size:11px;color:var(--text-3);margin-top:2px;font-style:italic">${e.notes}</div>`:''}
+          ${estQuickButtons(e, true)}
         </div>
         <div style="font-size:12px;color:var(--text-2)">${e.type}</div>
         <div style="font-size:12px;color:var(--text)">
@@ -6580,6 +6581,38 @@ function sortEstimatesBy(key){
   renderEstimates();
 }
 
+// ---- One-click Accept / Decline on estimates (also updates QuickBooks) ----
+function estQuickButtons(e, small){
+  if(typeof canEstAdmin!=='function' || !canEstAdmin()) return '';
+  const b = (label, color, fn, title)=>`<button onclick="event.stopPropagation();${fn}" title="${title}" style="font-size:${small?11:12}px;padding:${small?'2px 9px':'4px 12px'};border-radius:99px;border:1px solid ${color};background:#fff;color:${color};cursor:pointer;font-family:inherit;font-weight:600">${label}</button>`;
+  if(e.status==='Approved' || e.status==='Declined')
+    return small ? '' : `<span style="display:flex;gap:6px">${b('↺ Reopen','#64748b',`estQuickStatus('${e.id}','Estimate Sent')`,'Set back to Estimate sent')}</span>`;
+  return `<div style="display:flex;gap:6px;margin-top:${small?6:0}px">${b('✓ Accept','#16a34a',`estQuickStatus('${e.id}','Approved')`,'Customer accepted: mark Approved here and Accepted in QuickBooks')}${b('✕ Decline','#b91c1c',`estQuickStatus('${e.id}','Declined')`,'Customer declined or the job is on hold: mark Declined here and Rejected in QuickBooks')}</div>`;
+}
+async function estQuickStatus(id, status){
+  const e = estimates.find(x=>x.id===id); if(!e) return;
+  let note = '';
+  if(status==='Declined'){ note = prompt(`Decline "${e.projectName}"${e.qbNumber?' (#'+e.qbNumber+')':''}?\n\nOptional: why? (lost to another bid, budget, on hold…)`, ''); if(note===null) return; }
+  else if(status==='Approved' && !confirm(`Mark "${e.projectName}"${e.qbNumber?' (#'+e.qbNumber+')':''} accepted?\n\nIt's marked Approved here and Accepted in QuickBooks, and moves to Accepted estimates for Set up job.`)) return;
+  const stamp = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  const row = { status, updated_at: new Date().toISOString() };
+  if(status==='Approved') row.accepted_date = e.acceptedDate || new Date().toLocaleDateString('en-CA');
+  if(status==='Declined' && note.trim()) row.notes = [e.notes, `Declined ${stamp}: ${note.trim()}`].filter(Boolean).join(' · ');
+  try{
+    await sbFetch('PATCH', `/rest/v1/estimates?id=eq.${id}`, row);
+    e.status = status; if(row.notes) e.notes = row.notes; if(row.accepted_date) e.acceptedDate = row.accepted_date;
+    let qbMsg = '';
+    if(e.qbId){
+      const want = status==='Approved' ? 'Accepted' : status==='Declined' ? 'Rejected' : 'Pending';
+      try{ const r = await invAction({ action:'estimate_status', qb_estimate_id:e.qbId, status:want }); e.qbStatus = r.qb_status || want; qbMsg = r.note ? ' '+r.note : ''; }
+      catch(x){ qbMsg = ` (QuickBooks wasn't updated: ${x.message})`; }
+    }
+    if(view==='estimates') renderEstimates();
+    if(document.getElementById('est-pm-slot')){ document.querySelectorAll('.modal-overlay').forEach(o=>o.remove()); openEstimateDetail(id); }
+    if(typeof pmToast==='function') pmToast(status==='Approved' ? `✓ Accepted${qbMsg}. Next: Set up job, or upload the PO.` : status==='Declined' ? `Declined${qbMsg}` : `Reopened${qbMsg}`);
+    else if(qbMsg) alert(qbMsg.trim());
+  }catch(x){ alert('Could not update: '+x.message); }
+}
 const EST_ADMINS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com'];
 function canEstAdmin(){ return EST_ADMINS.includes(((currentUser&&currentUser.email)||'').toLowerCase()); }
 async function estAssignNumber(id){
@@ -6635,7 +6668,10 @@ function openEstimateDetail(id){
         <div class="sheet-title" style="margin-bottom:2px">${escEst(e.projectName)}</div>
         <div style="font-size:12px;color:var(--text-3)">${[e.qbNumber?`Est #${escEst(e.qbNumber)}`:(e.qbId?'<span style="color:#b45309">No estimate # in QuickBooks</span>':''),escEst(e.client),e.qbStatus?`QB ${escEst(e.qbStatus)}`:''].filter(Boolean).join(' · ')||'Entered manually'}</div>
       </div>
-      <span style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text};white-space:nowrap">${escEst(e.status)}</span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+        <span style="font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:${sc.bg};color:${sc.text};white-space:nowrap">${escEst(e.status)}</span>
+        ${estQuickButtons(e, false)}
+      </div>
     </div>
 
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">

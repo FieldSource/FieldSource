@@ -211,7 +211,8 @@ exports.handler = async function (event) {
       const prompt = `This is a client purchase order sent to Field Source (an Ohio sports field company). Read it and return ONLY a JSON object:
 {"po_number":"","po_date":"YYYY-MM-DD","client":"","total":0,"estimate_ref":"","description":"","signer_name":"","signer_title":"","signatures_ok":true,"signature_note":"","requisition":"","vendor_name":"","vendor_is_field_source":true,"instructions":[""],"unclear":[""]}
 Rules: copy numbers exactly as printed; never guess. If the PO number, date or total is hard to read, leave it "" (or 0) and name it in "unclear". estimate_ref is any Field Source quote or estimate number the PO references, else "". signatures_ok is false when a required signature (for school districts, the Treasurer's certificate) is missing; explain in signature_note. instructions lists anything the vendor must do, e.g. "PO number must appear on all invoices". vendor_is_field_source is false when the vendor or remit-to is not Field Source.`;
-      const headers = { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' };
+      const headers = { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01',
+        ...(process.env.ANTHROPIC_WORKSPACE_ID ? { 'anthropic-workspace-id': process.env.ANTHROPIC_WORKSPACE_ID } : {}) };
       const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers,
         body: JSON.stringify({ model: process.env.QUOTE_MODEL || 'claude-sonnet-4-6', max_tokens: 900, messages: [{ role: 'user', content: [block, { type: 'text', text: prompt }] }] }) });
       const d = await r.json().catch(() => ({}));

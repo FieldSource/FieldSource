@@ -7338,10 +7338,11 @@ async function openInvoiceBuilder(estNum){
     });
     const unsyncedBilled = invoicesForEstimate(estNum).filter(i=>i._unsynced).reduce((t,i)=>t+Number(i.total||0),0);
     const today = arToday();
-    billState = { estNum, prep, e, billed, mode:'pct', unsyncedBilled,
+    billState = { estNum, prep, e, billed, mode:'pctnow', unsyncedBilled,
       rows: prep.lines.map((l,k)=>({ ...l, billedAmt:billed[k].amt, billedQty:billed[k].qty, input:'', description:l.description })),
       doc: prep.next_doc_number||'', date: today, due:'', po: e.poNumber||'', memo:'',
       term: billDefaultTerm(prep) };
+    billPrefillFromRequest();
     renderInvoiceBuilder();
   }catch(err){ billOverlay('bill-overlay', `<div class="sheet-title">Couldn't load the estimate</div><div style="color:#b91c1c;font-size:13px;margin:8px 0 14px">${arEsc(err.message)}</div><div style="text-align:right"><button class="btn-cancel" onclick="document.getElementById('bill-overlay').remove()">Close</button></div>`, 520); }
 }
@@ -7360,6 +7361,7 @@ function billDueDate(st){
 }
 function billRowAmount(r){
   const v = parseFloat(r.input); if(isNaN(v)) return 0;
+  if(billState.mode==='pctnow') return Math.round(r.amount * v/100 * 100)/100;              // % of the contract line to bill on this invoice
   if(billState.mode==='pct') return Math.round((r.amount * v/100 - r.billedAmt)*100)/100;   // % complete to date → bill the difference
   if(billState.mode==='qty') return Math.round(v * r.rate * 100)/100;                       // quantity done this invoice
   return Math.round(v*100)/100;                                                               // dollar amount
@@ -7371,7 +7373,7 @@ function renderInvoiceBuilder(){
   const contract = Number(st.e.amount)||p.estimate.total;
   const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:6px 8px;text-align:left;background:var(--accent)';
   const td = 'font-size:12px;color:var(--text);padding:6px 8px;border-top:1px solid var(--border);vertical-align:top';
-  const modeLbl = { pct:'% complete to date', qty:'Qty this invoice', amt:'$ this invoice' }[st.mode];
+  const modeLbl = { pctnow:'% to bill now', pct:'% complete to date', qty:'Qty this invoice', amt:'$ this invoice' }[st.mode];
   const rq = billPendingRequest && String(billPendingRequest.estimate_number)===String(p.estimate.number) ? billPendingRequest : null;
   const html = `
     <div class="sheet-title" style="margin-bottom:2px">Create invoice</div>
@@ -7387,7 +7389,7 @@ function renderInvoiceBuilder(){
     </div>
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
       <span style="font-size:12px;color:var(--text-2)">Bill each line by:</span>
-      ${[['pct','% complete to date'],['qty','Quantity done'],['amt','Dollar amount']].map(([m,l])=>`<button onclick="billState.mode='${m}';billState.rows.forEach(r=>r.input='');renderInvoiceBuilder()" class="site-chip${st.mode===m?' active':''}" style="padding:4px 10px;font-size:12px">${l}</button>`).join('')}
+      ${[['pctnow','% to bill now'],['pct','% complete to date'],['qty','Quantity done'],['amt','Dollar amount']].map(([m,l])=>`<button onclick="billState.mode='${m}';billState.rows.forEach(r=>r.input='');renderInvoiceBuilder()" class="site-chip${st.mode===m?' active':''}" style="padding:4px 10px;font-size:12px">${l}</button>`).join('')}
       <button onclick="billFillRemaining()" class="site-chip" style="padding:4px 10px;font-size:12px;margin-left:auto" title="Bill everything that's left on every line">Bill all remaining</button>
     </div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="width:100%;border-collapse:collapse;min-width:640px"><thead><tr>
@@ -7414,9 +7416,24 @@ function billUpdateRow(k){
   if(cell) cell.innerHTML = `<b style="${over||neg?'color:#dc2626':''}">${arMoney(amt)}</b>${over?'<div style="font-size:10px;color:#dc2626">over the contract line</div>':neg?'<div style="font-size:10px;color:#dc2626">less than already billed</div>':amt?`<div style="font-size:10px;color:var(--text-3)">${r.amount?Math.round(after/r.amount*100):0}% after</div>`:''}`;
   const t = document.getElementById('bill-total'); if(t) t.textContent = arMoney(billState.rows.reduce((s,x)=>s+billRowAmount(x),0));
 }
+// A Ready to bill request fills the lines in: "Part: 50%" -> 50% on each line; "$X" -> spread over what's left; "everything left" -> all remaining
+function billPrefillFromRequest(){
+  const st = billState, rq = billPendingRequest;
+  if(!rq || String(rq.estimate_number)!==String(st.prep.estimate.number)) return;
+  if(rq.scope==='all'){ st.mode = 'pctnow'; st.rows.forEach(r=>{ const left = Math.max(0, r.amount - r.billedAmt); r.input = r.amount && left>0.005 ? String(Math.round(left/r.amount*1000000)/10000) : ''; }); return; }
+  if(rq.percent!=null && Number(rq.percent)>0){ st.mode = 'pctnow'; st.rows.forEach(r=>{ r.input = r.amount ? String(Number(rq.percent)) : ''; }); return; }
+  if(rq.amount!=null && Number(rq.amount)>0){
+    st.mode = 'amt';
+    const lefts = st.rows.map(r=>Math.max(0, r.amount - r.billedAmt)), base = lefts.reduce((t,x)=>t+x,0) || st.rows.reduce((t,r)=>t+r.amount,0);
+    let used = 0; const n = st.rows.length;
+    st.rows.forEach((r,k)=>{ const share = base ? (lefts.reduce((t,x)=>t+x,0) ? lefts[k] : r.amount)/base : 1/n;
+      const v = k===n-1 ? Math.round((Number(rq.amount)-used)*100)/100 : Math.round(Number(rq.amount)*share*100)/100; used += v; r.input = v ? String(v) : ''; });
+  }
+}
 function billFillRemaining(){
   billState.rows.forEach(r=>{ const left = Math.max(0, r.amount - r.billedAmt);
-    r.input = billState.mode==='pct' ? (r.amount && left>0.005 ? '100' : '') : billState.mode==='qty' ? (r.rate && left>0.005 ? String(Math.round(left/r.rate*10000)/10000) : '') : (left>0.005 ? String(Math.round(left*100)/100) : ''); });
+    r.input = billState.mode==='pctnow' ? (r.amount && left>0.005 ? String(Math.round(left/r.amount*1000000)/10000) : '')
+      : billState.mode==='pct' ? (r.amount && left>0.005 ? '100' : '') : billState.mode==='qty' ? (r.rate && left>0.005 ? String(Math.round(left/r.rate*10000)/10000) : '') : (left>0.005 ? String(Math.round(left*100)/100) : ''); });
   renderInvoiceBuilder();
 }
 function billConfirm(){

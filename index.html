@@ -7402,7 +7402,7 @@ function renderInvoiceBuilder(){
     </div>
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
       <span style="font-size:12px;color:var(--text-2)">Bill each line by:</span>
-      ${[['pctnow','% to bill now'],['qty','Quantity done'],['amt','Dollar amount']].map(([m,l])=>`<button onclick="billState.mode='${m}';billState.rows.forEach(r=>r.input='');renderInvoiceBuilder()" class="site-chip${st.mode===m?' active':''}" style="padding:4px 10px;font-size:12px">${l}</button>`).join('')}
+      ${[['pctnow','% to bill now'],['qty','Quantity done'],['amt','Dollar amount']].map(([m,l])=>`<button onclick="billSetMode('${m}')" class="site-chip${st.mode===m?' active':''}" style="padding:4px 10px;font-size:12px">${l}</button>`).join('')}
       <button onclick="billFillRemaining()" class="site-chip" style="padding:4px 10px;font-size:12px;margin-left:auto" title="Bill everything that's left on every line">Bill all remaining</button>
     </div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="width:100%;border-collapse:collapse;min-width:640px"><thead><tr>
@@ -7445,6 +7445,18 @@ function billPrefillFromRequest(){
     st.rows.forEach((r,k)=>{ const share = r.amount<=0 ? 0 : base ? (lefts.reduce((t,x)=>t+x,0) ? lefts[k] : r.amount)/base : 1/n;
       const v = k===n-1 ? Math.round((Number(rq.amount)-used)*100)/100 : Math.round(Number(rq.amount)*share*100)/100; used += v; r.input = v ? String(v) : ''; });
   }
+}
+// Switching how lines are entered keeps what's already typed: the same dollars, shown as %, quantity or $
+function billSetMode(m){
+  const st = billState; if(!st || st.mode===m) return;
+  const amts = st.rows.map(r=>billRowAmount(r));
+  st.mode = m;
+  st.rows.forEach((r,k)=>{ const a = amts[k];
+    if(!a){ r.input = ''; return; }
+    r.input = m==='pctnow' ? (r.amount ? String(Math.round(a/r.amount*1000000)/10000) : '')
+            : m==='qty' ? (r.rate ? String(Math.round(a/r.rate*10000)/10000) : '')
+            : String(Math.round(a*100)/100); });
+  renderInvoiceBuilder();
 }
 function billFillRemaining(){
   billState.rows.forEach(r=>{ const rawLeft = r.amount - r.billedAmt, left = Math.sign(rawLeft)===Math.sign(r.amount) ? Math.abs(rawLeft) : 0;   // what's left, in the line's own direction
@@ -7805,6 +7817,9 @@ async function runRecurringBillRequests(){
 // ===================== VENDORS: W-9 / COI / BWC TRACKING =====================
 let vendors = [], vendorDocs = [], vendorsLoaded = false, vendFilter = 'attention', vendQuery = '';
 const VEND_KINDS = { w9:'W-9', coi:'COI', bwc:'BWC' };
+// Who decides what a vendor needs, and who can archive or delete vendors / documents. Everyone else on Business Ops can view, upload and request.
+const VEND_ADMINS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+const canVendAdmin = ()=>VEND_ADMINS.includes(((currentUser&&currentUser.email)||'').toLowerCase());
 const VEND_CATS = ['Material supplier','Subcontractor','Equipment rental','Professional services','Hauling/trucking','Retail/online','Utility/government','Other'];
 const vendKey = s=>String(s||'').toLowerCase().replace(/&/g,' and ').replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(w=>w && !['the','inc','llc','co','company','corp','corporation','ltd','of','and'].includes(w)).join(' ');
 function vendorFor(name){
@@ -7969,7 +7984,7 @@ function openVendor(id){
     <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><div class="sheet-title" style="margin-bottom:2px">${esc(v.name)}</div>
       <span style="font-size:12px;color:var(--text-3)">${v.reviewed_at?`Reviewed by ${esc(getDisplayName(v.reviewed_by))} ${fmt(String(v.reviewed_at).slice(0,10))}`:'<b style="color:#1d4ed8">New: needs review</b>'}</span></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
-      <div><div style="${billLbl}">Category</div><select style="${inp};width:100%" onchange="vendSave('${v.id}',{category:this.value},false)"><option value="">Not categorized</option>${VEND_CATS.map(c=>`<option${v.category===c?' selected':''}>${c}</option>`).join('')}</select></div>
+      <div><div style="${billLbl}">Category</div><select style="${inp};width:100%" ${canVendAdmin()?'':'disabled title="Only Ali, Jake and Ryan can change this"'} onchange="vendSave('${v.id}',{category:this.value},false)"><option value="">Not categorized</option>${VEND_CATS.map(c=>`<option${v.category===c?' selected':''}>${c}</option>`).join('')}</select></div>
       <div><div style="${billLbl}">Contact name</div><input style="${inp};width:100%;box-sizing:border-box" value="${esc(v.contact_name||'')}" placeholder="e.g. Sarah in the office" onchange="vendSave('${v.id}',{contact_name:this.value.trim()},false)"></div>
       <div><div style="${billLbl}">Phone</div><input type="tel" style="${inp};width:100%;box-sizing:border-box" value="${esc(v.contact_phone||'')}" placeholder="(614) 555-0100" onchange="vendSave('${v.id}',{contact_phone:this.value.trim()},false)"></div>
       <div><div style="${billLbl}">Contact email (for document requests)</div><input type="email" style="${inp};width:100%;box-sizing:border-box" value="${esc(v.contact_email||'')}" placeholder="name@vendor.com" onchange="vendSave('${v.id}',{contact_email:this.value.trim()},false)"></div>
@@ -7979,11 +7994,13 @@ function openVendor(id){
       <b>Claude's recommendation</b> <span style="font-size:11px;color:var(--text-3)">(${esc(rec.confidence||'')} confidence)</span>: ${esc(rec.summary||'')}
       <ul style="margin:6px 0 0 18px;padding:0;font-size:12px;color:var(--text-2)">${Object.keys(VEND_KINDS).map(k=>`<li><b>${VEND_KINDS[k]}: ${rec.needs&&rec.needs[k]?'needed':'not needed'}.</b> ${esc((rec.reasons||{})[k]||'')}</li>`).join('')}</ul></div>`
       :`<div style="margin-top:12px;font-size:13px;color:var(--text-3)">No recommendation yet.</div>`}
-    <div style="margin-top:12px"><div style="${billLbl}">Required before payment</div>
+    ${!canVendAdmin() ? `<div style="margin-top:12px"><div style="${billLbl}">Required before payment</div>
+      <div style="font-size:13px;margin-top:4px">${Object.keys(VEND_KINDS).filter(k=>v['needs_'+k]).map(k=>VEND_KINDS[k]).join(', ') || 'Nothing'}${v.reviewed_at?'':' <span style="color:#1d4ed8">(waiting for Ali to confirm)</span>'} · 1099 vendor: ${v.is_1099===true?'Yes':v.is_1099===false?'No':'Unknown'}</div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:2px">Ali, Jake or Ryan set what each vendor needs.</div></div>` : `<div style="margin-top:12px"><div style="${billLbl}">Required before payment</div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:13px;margin-top:4px">${Object.keys(VEND_KINDS).map(k=>`<label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" id="vn-${k}" ${v['needs_'+k]?'checked':''}> ${VEND_KINDS[k]}</label>`).join('')}
         <label style="display:flex;gap:6px;align-items:center">1099 vendor: <select id="vn-1099" style="${inp};padding:3px 6px"><option value=""${v.is_1099==null?' selected':''}>Unknown</option><option value="yes"${v.is_1099===true?' selected':''}>Yes</option><option value="no"${v.is_1099===false?' selected':''}>No</option></select></label></div>
       <div style="display:flex;gap:8px;margin-top:8px"><button class="btn-save" style="flex:none;padding:6px 12px;font-size:12px" onclick="vendConfirm('${v.id}')">${v.reviewed_at?'Save requirements':'✓ Confirm requirements'}</button>
-        <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="vendAskClaude('${v.id}')">Ask Claude${rec?' again':''}</button></div></div>
+        <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="vendAskClaude('${v.id}')">Ask Claude${rec?' again':''}</button></div></div>`}
     <div style="margin-top:14px"><div style="${billLbl}">Documents</div>
       ${Object.keys(VEND_KINDS).map(k=>{ const s = vendDocState(v,k); return `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--border);font-size:13px"><b style="width:44px">${VEND_KINDS[k]}</b>${vendChip(v,k)}${s.doc?`<span style="font-size:12px;color:var(--text-2)">${esc(s.doc.file_name||'')}</span>`:''}</div>`; }).join('')}
       ${docs.length?`<div style="margin-top:8px">${docs.map(d=>`<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;margin-bottom:4px">
@@ -7991,7 +8008,7 @@ function openVendor(id){
           ${d.kind!=='w9'?`<span>expires <input type="date" value="${esc(d.expires_on||'')}" style="${inp};padding:2px 4px;font-size:12px" onchange="vendDocSave('${d.id}','${v.id}',{expires_on:this.value||null})"></span>`:''}
           ${d.details&&d.details.additional_insured_field_source===false?'<span style="color:#b91c1c;font-weight:600">Field Source not named as additional insured</span>':d.details&&d.details.additional_insured_field_source===true?'<span style="color:#166534">✓ additional insured</span>':''}
           ${d.details&&d.details.notes?`<span style="color:var(--text-3)">${esc(String(d.details.notes).slice(0,140))}</span>`:''}
-          <button onclick="vendDocDelete('${d.id}','${v.id}')" style="margin-left:auto;border:none;background:none;cursor:pointer;color:var(--text-3)">✕</button></div>`).join('')}</div>`:''}
+          ${canVendAdmin()?`<button onclick="vendDocDelete('${d.id}','${v.id}')" style="margin-left:auto;border:none;background:none;cursor:pointer;color:var(--text-3)">✕</button>`:''}</div>`).join('')}</div>`:''}
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
         <select id="vend-kind" style="${inp}"><option value="w9">W-9</option><option value="coi">COI</option><option value="bwc">Ohio BWC certificate</option><option value="other">Other</option></select>
         <label class="site-chip" style="padding:5px 10px;font-size:12px;cursor:pointer">📎 Upload<input type="file" accept=".pdf,.png,.jpg,.jpeg" style="display:none" onchange="vendUpload('${v.id}',this.files[0]);this.value=''"></label>
@@ -7999,8 +8016,8 @@ function openVendor(id){
     <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;flex-wrap:wrap">
       <button class="site-chip" style="padding:6px 12px" onclick="vendRequest('${v.id}')">✉ Request documents${v.last_requested_at?` <span style="font-size:11px;color:var(--text-3)">(last ${fmt(String(v.last_requested_at).slice(0,10))})</span>`:''}</button>
       <span style="display:flex;gap:6px;margin-left:auto">
-        <button class="site-chip" style="padding:6px 12px" onclick="vendArchive('${v.id}',${!v.archived})" title="${v.archived?'Make this vendor active again':'No longer doing business: hide from the lists and alerts. They come back automatically if a new invoice arrives.'}">${v.archived?'Unarchive':'Archive'}</button>
-        <button class="site-chip" style="padding:6px 12px;color:#b91c1c" onclick="vendDelete('${v.id}')" title="Remove this vendor and their documents completely">Delete</button>
+        ${canVendAdmin()?`<button class="site-chip" style="padding:6px 12px" onclick="vendArchive('${v.id}',${!v.archived})" title="${v.archived?'Make this vendor active again':'No longer doing business: hide from the lists and alerts. They come back automatically if a new invoice arrives.'}">${v.archived?'Unarchive':'Archive'}</button>
+        <button class="site-chip" style="padding:6px 12px;color:#b91c1c" onclick="vendDelete('${v.id}')" title="Remove this vendor and their documents completely">Delete</button>`:''}
         <button class="btn-cancel" style="flex:none" onclick="document.getElementById('vend-overlay').remove();renderVendors()">Done</button></span></div>`, 700);
 }
 async function vendSave(id, fields, reopen=true){
@@ -8009,6 +8026,7 @@ async function vendSave(id, fields, reopen=true){
   catch(e){ alert('Could not save: '+e.message); }
 }
 function vendConfirm(id){
+  if(!canVendAdmin()){ alert('Only Ali, Jake and Ryan can do that.'); return; }
   const g = k=>document.getElementById('vn-'+k), t = g('1099').value;
   vendSave(id, { needs_w9:g('w9').checked, needs_coi:g('coi').checked, needs_bwc:g('bwc').checked, is_1099: t===''?null:t==='yes', reviewed_by:(currentUser&&currentUser.email)||'', reviewed_at:new Date().toISOString() });
   updateApprovalBell();
@@ -8020,6 +8038,10 @@ async function vendAskClaude(id){
   const rec = await vendRecommend(v, f && f.extractedText, f && f.projectName);
   if(!rec) alert('Claude could not make a recommendation right now.');
   openVendor(id);
+}
+function vendMarkReviewed(v){
+  if(!v || v.reviewed_at || !canVendAdmin()) return Promise.resolve();
+  return vendSave(v.id, { reviewed_by:(currentUser&&currentUser.email)||'', reviewed_at:new Date().toISOString() }, false);
 }
 async function vendUpload(id, file){
   const v = vendors.find(x=>x.id===id); if(!v || !file) return;
@@ -8033,7 +8055,8 @@ async function vendUpload(id, file){
     if(!up.ok) throw new Error(`${up.status} ${(await up.text()).slice(0,150)}`);
     const r = await sbFetch('POST','/rest/v1/vendor_docs', { vendor_id:id, kind, file_name:file.name, file_path:path, uploaded_by:(currentUser&&currentUser.email)||'' });
     const d = r && r[0]; if(d) vendorDocs.unshift(d);
-    openVendor(id);
+    await vendMarkReviewed(v);
+    openVendor(id); updateApprovalBell();
     // Claude reads it: dates, additional insured, W-9 entity type (never the tax ID)
     if(d && /\.(pdf|png|jpe?g)$/i.test(file.name)){
       if(typeof pmToast==='function') pmToast('Claude is reading the document…');
@@ -8054,6 +8077,7 @@ async function vendUpload(id, file){
 }
 async function vendDocSave(docId, id, fields){ try{ await sbFetch('PATCH', `/rest/v1/vendor_docs?id=eq.${docId}`, fields); Object.assign(vendorDocs.find(d=>d.id===docId)||{}, fields); openVendor(id); updateApprovalBell(); }catch(e){ alert('Could not save: '+e.message); } }
 async function vendDocDelete(docId, id){
+  if(!canVendAdmin()){ alert('Only Ali, Jake and Ryan can do that.'); return; }
   const d = vendorDocs.find(x=>x.id===docId); if(!d || !confirm(`Remove ${d.file_name}?`)) return;
   try{ await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(d.file_path)}`, { method:'DELETE', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY } });
        await sbFetch('DELETE', `/rest/v1/vendor_docs?id=eq.${docId}`); vendorDocs = vendorDocs.filter(x=>x.id!==docId); openVendor(id); }
@@ -8130,9 +8154,9 @@ function vendReqRender(){
     <div style="margin-top:10px"><div style="${billLbl}">Subject</div><input id="vrq-subject" style="${billInput}" value="${escEst(s.subject)}"></div>
     <div style="margin-top:8px"><div style="${billLbl}">Message</div><textarea id="vrq-body" rows="13" style="${billInput};line-height:1.45">${escEst(s.body)}</textarea></div>
     <div style="display:flex;gap:10px;align-items:center;margin-top:6px;flex-wrap:wrap;font-size:12px">
-      <a style="cursor:pointer;color:var(--green-dark)" onclick="vendReqSaveStandard()">Save this wording as our standard</a>
+      ${canVendAdmin()?`<a style="cursor:pointer;color:var(--green-dark)" onclick="vendReqSaveStandard()">Save this wording as our standard</a>`:''}
       <span style="color:var(--text-3)">· blanks you can use: [Greeting] [Vendor] [Documents] [Document list] [COI note] [Your name]</span>
-      <a style="cursor:pointer;color:var(--text-3)" onclick="vendReqReset()">· reset to the original</a></div>
+      ${canVendAdmin()?`<a style="cursor:pointer;color:var(--text-3)" onclick="vendReqReset()">· reset to the original</a>`:''}</div>
     <div id="vrq-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>` : ''}
     <div style="display:flex;justify-content:space-between;margin-top:14px;gap:8px">
       <button class="btn-cancel" onclick="document.getElementById('vreq-overlay').remove()">Cancel</button>
@@ -8140,6 +8164,7 @@ function vendReqRender(){
     </div>`, 660);
 }
 async function vendReqSaveStandard(){
+  if(!canVendAdmin()){ alert('Only Ali, Jake and Ryan can do that.'); return; }
   vendReqSaveInputs();
   const s = vendReqState, v = vendors.find(x=>x.id===s.id);
   // turn this vendor's details back into blanks so the wording works for everyone
@@ -8154,6 +8179,7 @@ async function vendReqSaveStandard(){
   catch(e){ alert('Could not save: '+e.message); }
 }
 async function vendReqReset(){
+  if(!canVendAdmin()){ alert('Only Ali, Jake and Ryan can do that.'); return; }
   if(!confirm('Put the message back to the original standard wording?')) return;
   try{ await sbFetch('DELETE', "/rest/v1/tracker_settings?key=eq.vendor_request_template"); }catch(e){}
   vendReqTemplate = null; vendRequest(vendReqState.id);
@@ -8167,6 +8193,7 @@ async function vendReqSend(){
   try{
     const r = await invAction({ action:'send_plain_gmail', to:s.to, cc:s.cc, subject:s.subject, body:s.body, vendor_id:v.id, log_as:'vendor_docs_requested' });
     const upd = { last_requested_at: new Date().toISOString() };
+    if(!v.reviewed_at && canVendAdmin()){ upd.reviewed_by = (currentUser&&currentUser.email)||''; upd.reviewed_at = new Date().toISOString(); }
     if(!v.contact_email && !v.billing_email) upd.contact_email = s.to.split(/[,;]/)[0].trim();
     await vendSave(v.id, upd, false);
     document.getElementById('vreq-overlay').remove(); openVendor(v.id);
@@ -8174,12 +8201,14 @@ async function vendReqSend(){
   }catch(x){ err.textContent = 'Not sent: '+x.message; btn.disabled = false; btn.dataset.armed=''; btn.style.background=''; btn.textContent = 'Send…'; }
 }
 async function vendArchive(id, on){
+  if(!canVendAdmin()){ alert('Only Ali, Jake and Ryan can do that.'); return; }
   const v = vendors.find(x=>x.id===id); if(!v) return;
   if(on && !confirm(`Archive ${v.name}?\n\nThey'll be hidden from the lists and alerts, with their documents kept on file. If a new invoice comes in from them, they come back automatically and you're told what's missing or expired.`)) return;
   await vendSave(id, on ? { archived:true, archived_at:new Date().toISOString(), archived_by:(currentUser&&currentUser.email)||'' } : { archived:false, archived_at:null, archived_by:null }, false);
   document.getElementById('vend-overlay')?.remove(); renderVendors(); updateApprovalBell();
 }
 async function vendDelete(id){
+  if(!canVendAdmin()){ alert('Only Ali, Jake and Ryan can do that.'); return; }
   const v = vendors.find(x=>x.id===id); if(!v) return;
   const docs = vendorDocs.filter(d=>d.vendor_id===id);
   if(!confirm(`Delete ${v.name} completely?\n\nThis removes the vendor${docs.length?` and their ${docs.length} document${docs.length===1?'':'s'}`:''} from the tracker and can't be undone. To keep the records, use Archive instead.`)) return;
@@ -8192,7 +8221,9 @@ async function vendDelete(id){
 }
 function bellVendorItems(){
   if(typeof canBillInvoices!=='function' || !canBillInvoices() || !vendorsLoaded) return [];
-  return vendors.filter(v=>!v.archived).map(v=>({ v, st: vendStatus(v) })).filter(x=>x.st==='review' || x.st==='expiring' || (x.st==='missing' && vendIssues(x.v.name).includes('expired')));
+  const weekAgo = Date.now() - 7*864e5;
+  return vendors.filter(v=>!v.archived).map(v=>({ v, st: vendStatus(v) })).filter(x=>x.st==='review' || x.st==='expiring' ||
+    (x.st==='missing' && (!x.v.last_requested_at || new Date(x.v.last_requested_at).getTime() < weekAgo)));   // missing: not requested yet, or no reply in a week
 }
 // =================== END VENDORS ===================
 
@@ -12339,7 +12370,7 @@ function openApprovalPanel(isRefresh){
   const toFmt = d=>new Date(d+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
   const toEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
   const vdList = (typeof bellVendorItems==='function') ? bellVendorItems() : [];
-  const vdHtml = vdList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Vendor documents</div>` + vdList.slice(0,8).map(x=>`<div onclick="document.getElementById('approval-panel')?.remove();setView('vendors');setTimeout(()=>openVendor('${x.v.id}'),300)" style="cursor:pointer;background:var(--bg);border:1px solid var(--border);border-left:4px solid ${x.st==='review'?'#2563eb':'#f59e0b'};border-radius:var(--radius);padding:8px 12px;margin-bottom:6px;font-size:13px"><b>${escEst(x.v.name)}</b> <span style="color:var(--text-3)">· ${x.st==='review'?'new vendor: confirm what they need':x.st==='expiring'?'a document expires within 30 days':'a required document has expired'}</span></div>`).join('') + (vdList.length>8?`<div style="font-size:12px;color:var(--text-3);margin-bottom:8px">and ${vdList.length-8} more in Business Ops → Vendors</div>`:'') : '';
+  const vdHtml = vdList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Vendor documents</div>` + vdList.slice(0,8).map(x=>`<div onclick="document.getElementById('approval-panel')?.remove();setView('vendors');setTimeout(()=>openVendor('${x.v.id}'),300)" style="cursor:pointer;background:var(--bg);border:1px solid var(--border);border-left:4px solid ${x.st==='review'?'#2563eb':'#f59e0b'};border-radius:var(--radius);padding:8px 12px;margin-bottom:6px;font-size:13px"><b>${escEst(x.v.name)}</b> <span style="color:var(--text-3)">· ${x.st==='review'?'new vendor: confirm what they need':x.st==='expiring'?'a document expires within 30 days':`needs ${escEst(vendIssues(x.v.name))}${x.v.last_requested_at?' (requested over a week ago)':': request it'}`}</span></div>`).join('') + (vdList.length>8?`<div style="font-size:12px;color:var(--text-3);margin-bottom:8px">and ${vdList.length-8} more in Business Ops → Vendors</div>`:'') : '';
   const rbList = bellBillRequests();
   const rbHtml = rbList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Ready to bill</div>` + billReqCardsHtml(rbList, true) : '';
   const toHtml0 = toList.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:4px 0 8px">Time off</div>` + toList.map(e=>`

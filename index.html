@@ -7359,6 +7359,12 @@ function billDueDate(st){
   const t = BILL_TERMS.find(x=>x.key===st.term); if(!t || !st.date) return '';
   const d = new Date(st.date+'T12:00:00'); d.setDate(d.getDate()+t.days); return d.toLocaleDateString('en-CA');
 }
+// Discount lines carry a negative contract amount; checks compare in the line's own direction
+function billLineIssue(r, amt){
+  const after = r.billedAmt + amt;
+  if(r.amount < 0) return { over: after < r.amount - 0.5, wrong: amt > 0.005 };
+  return { over: after > r.amount + 0.5, wrong: amt < -0.005 };
+}
 function billRowAmount(r){
   const v = parseFloat(r.input); if(isNaN(v)) return 0;
   if(billState.mode==='pctnow') return Math.round(r.amount * v/100 * 100)/100;              // % of the contract line to bill on this invoice
@@ -7401,7 +7407,7 @@ function renderInvoiceBuilder(){
     </div>
     <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm)"><table style="width:100%;border-collapse:collapse;min-width:640px"><thead><tr>
       <th style="${th}">Line</th><th style="${th};text-align:right">Contract</th><th style="${th};text-align:right">Billed so far</th><th style="${th};width:110px">${modeLbl}</th><th style="${th};text-align:right">This invoice</th></tr></thead><tbody>
-      ${st.rows.map((r,k)=>{ const amt = billRowAmount(r), after = r.billedAmt + amt, over = after > r.amount + 0.5, neg = amt < -0.005;
+      ${st.rows.map((r,k)=>{ const amt = billRowAmount(r), after = r.billedAmt + amt, iss = billLineIssue(r, amt), over = iss.over, neg = iss.wrong;
         return `<tr><td style="${td}"><textarea rows="2" style="${billInput};font-size:12px;resize:vertical" oninput="billState.rows[${k}].description=this.value">${arEsc(r.description)}</textarea><div style="font-size:10px;color:var(--text-3);margin-top:2px">${arEsc(r.item_name)}${r.qty?` · ${r.qty} @ ${arMoney(r.rate)}`:''}</div></td>
           <td style="${td};text-align:right">${arMoney(r.amount)}</td>
           <td style="${td};text-align:right">${arMoney(r.billedAmt)}<div style="font-size:10px;color:var(--text-3)">${r.amount?Math.round(r.billedAmt/r.amount*100):0}%</div></td>
@@ -7418,7 +7424,7 @@ function renderInvoiceBuilder(){
   billOverlay('bill-overlay', html, 860);
 }
 function billUpdateRow(k){
-  const r = billState.rows[k], amt = billRowAmount(r), after = r.billedAmt + amt, over = after > r.amount + 0.5, neg = amt < -0.005;
+  const r = billState.rows[k], amt = billRowAmount(r), after = r.billedAmt + amt, iss = billLineIssue(r, amt), over = iss.over, neg = iss.wrong;
   const cell = document.getElementById('bill-amt-'+k);
   if(cell) cell.innerHTML = `<b style="${over||neg?'color:#dc2626':''}">${arMoney(amt)}</b>${over?'<div style="font-size:10px;color:#dc2626">over the contract line</div>':neg?'<div style="font-size:10px;color:#dc2626">less than already billed</div>':amt?`<div style="font-size:10px;color:var(--text-3)">${r.amount?Math.round(after/r.amount*100):0}% after</div>`:''}`;
   const t = document.getElementById('bill-total'); if(t) t.textContent = arMoney(billState.rows.reduce((s,x)=>s+billRowAmount(x),0));
@@ -7430,20 +7436,20 @@ function billUpdateRow(k){
 function billPrefillFromRequest(){
   const st = billState, rq = billPendingRequest;
   if(!rq || String(rq.estimate_number)!==String(st.prep.estimate.number)) return;
-  if(rq.scope==='all'){ st.mode = 'pctnow'; st.rows.forEach(r=>{ const left = Math.max(0, r.amount - r.billedAmt); r.input = r.amount && left>0.005 ? String(Math.round(left/r.amount*1000000)/10000) : ''; }); return; }
+  if(rq.scope==='all'){ st.mode = 'pctnow'; st.rows.forEach(r=>{ const rawLeft = r.amount - r.billedAmt; r.input = r.amount && Math.sign(rawLeft)===Math.sign(r.amount) && Math.abs(rawLeft)>0.005 ? String(Math.round(rawLeft/r.amount*1000000)/10000) : ''; }); return; }
   if(rq.percent!=null && Number(rq.percent)>0){ st.mode = 'pctnow'; st.rows.forEach(r=>{ r.input = r.amount ? String(Number(rq.percent)) : ''; }); return; }
   if(rq.amount!=null && Number(rq.amount)>0){
     st.mode = 'amt';
-    const lefts = st.rows.map(r=>Math.max(0, r.amount - r.billedAmt)), base = lefts.reduce((t,x)=>t+x,0) || st.rows.reduce((t,r)=>t+r.amount,0);
+    const lefts = st.rows.map(r=>r.amount>0 ? Math.max(0, r.amount - r.billedAmt) : 0), base = lefts.reduce((t,x)=>t+x,0) || st.rows.reduce((t,r)=>t+Math.max(0,r.amount),0);
     let used = 0; const n = st.rows.length;
-    st.rows.forEach((r,k)=>{ const share = base ? (lefts.reduce((t,x)=>t+x,0) ? lefts[k] : r.amount)/base : 1/n;
+    st.rows.forEach((r,k)=>{ const share = r.amount<=0 ? 0 : base ? (lefts.reduce((t,x)=>t+x,0) ? lefts[k] : r.amount)/base : 1/n;
       const v = k===n-1 ? Math.round((Number(rq.amount)-used)*100)/100 : Math.round(Number(rq.amount)*share*100)/100; used += v; r.input = v ? String(v) : ''; });
   }
 }
 function billFillRemaining(){
-  billState.rows.forEach(r=>{ const left = Math.max(0, r.amount - r.billedAmt);
-    r.input = billState.mode==='pctnow' ? (r.amount && left>0.005 ? String(Math.round(left/r.amount*1000000)/10000) : '')
-      : billState.mode==='pct' ? (r.amount && left>0.005 ? '100' : '') : billState.mode==='qty' ? (r.rate && left>0.005 ? String(Math.round(left/r.rate*10000)/10000) : '') : (left>0.005 ? String(Math.round(left*100)/100) : ''); });
+  billState.rows.forEach(r=>{ const rawLeft = r.amount - r.billedAmt, left = Math.sign(rawLeft)===Math.sign(r.amount) ? Math.abs(rawLeft) : 0;   // what's left, in the line's own direction
+    r.input = billState.mode==='pctnow' ? (r.amount && left>0.005 ? String(Math.round(rawLeft/r.amount*1000000)/10000) : '')
+      : billState.mode==='pct' ? (r.amount && left>0.005 ? '100' : '') : billState.mode==='qty' ? (r.rate && left>0.005 ? String(Math.round(rawLeft/r.rate*10000)/10000) : '') : (left>0.005 ? String(Math.round(rawLeft*100)/100) : ''); });
   renderInvoiceBuilder();
 }
 function billConfirm(){
@@ -7451,8 +7457,9 @@ function billConfirm(){
   const err = document.getElementById('bill-err');
   if(!lines.length){ err.textContent = 'Enter an amount on at least one line.'; return; }
   if(st.term==='custom' && !st.due){ err.textContent = 'Pick the custom due date.'; return; }
-  if(lines.some(x=>x.amt<0)){ err.textContent = 'A line is less than what was already billed. Fix it, or bill a credit separately in QuickBooks.'; return; }
-  const total = lines.reduce((t,x)=>t+x.amt,0), over = lines.filter(x=>x.r.billedAmt + x.amt > x.r.amount + 0.5);
+  if(lines.some(x=>billLineIssue(x.r, x.amt).wrong)){ err.textContent = 'A line goes the wrong way (less than already billed, or a discount billed as a charge). Fix it, or handle it as a credit in QuickBooks.'; return; }
+  const total = lines.reduce((t,x)=>t+x.amt,0), over = lines.filter(x=>billLineIssue(x.r, x.amt).over);
+  if(total <= 0.004){ err.textContent = 'The invoice total has to be more than $0.'; return; }
   billOverlay('bill-confirm', `<div class="sheet-title">Create this invoice in QuickBooks?</div>
     <div style="font-size:13px;margin:8px 0">${arEsc(st.prep.estimate.customer)} · estimate #${arEsc(st.prep.estimate.number)}</div>
     ${st.po?`<div style="font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-bottom:8px">🧾 <b>PO ${arEsc(st.po.replace(/^p\.?\s*o\.?\s*#?\s*/i,''))}</b> will be added on its own line at the end of ${lines.length>1?'the last line\u2019s':'the'} description.</div>`:''}

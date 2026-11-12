@@ -13234,7 +13234,7 @@ function showInvoiceConfirmModal(file, extracted, notes){
       return `<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;font-size:13px">
         <b>This PDF has ${inv.length} separate invoices</b> (${'$'+tot.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} total):
         <div style="margin:6px 0 8px;font-size:12px;color:var(--text-2)">${inv.map(x=>`#${String(x.invoice_number||'?').replace(/</g,'&lt;')} · ${'$'+(Number(x.amount)||0).toLocaleString('en-US',{minimumFractionDigits:2})}${Array.isArray(x.pages)&&x.pages.length?` · page ${x.pages.join(', ')}`:''}`).join('<br>')}</div>
-        <button class="btn-save" style="flex:none;padding:7px 14px" onclick="invSplitPdf()">Split into ${inv.length} invoices</button>
+        <button type="button" style="padding:8px 16px;border:none;border-radius:8px;background:#ea580c;color:#fff;font-weight:700;font-size:13px;font-family:inherit;cursor:pointer" onclick="invSplitPdf()">Split into ${inv.length} invoices</button>
         <span style="font-size:11px;color:var(--text-3);margin-left:6px">each gets its own number, amount and job, and is filed separately</span></div>`; })()}
     ${extracted ? `<div style="background:var(--accent);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px;font-size:13px">
       <div style="font-weight:600;color:var(--text);margin-bottom:4px">📄 ${file.name}</div>
@@ -13281,7 +13281,7 @@ function showInvoiceConfirmModal(file, extracted, notes){
     <div style="font-size:11px;color:var(--green-dark);background:var(--green-light);padding:6px 10px;border-radius:var(--radius-sm);margin-bottom:8px">✓ A Direct Cost entry will be created automatically from this invoice.</div>
     <div class="sheet-actions">
       <button class="btn-cancel" onclick="document.getElementById('inv-confirm-overlay').remove();invoiceQueueResults.push({ok:false,name:window._pendingFile?.name});invoiceQueueIndex++;processNextInQueue()">${invoiceQueue.length>1?'Skip':'Cancel'}</button>
-      <button class="btn-save" onclick="
+      <button class="btn-save" id="inv-file-btn" onclick="
         const proj = document.getElementById('inv-confirm-project').value;
         const vend = document.getElementById('inv-confirm-vendor').value.trim();
         const n = document.getElementById('inv-confirm-notes').value.trim();
@@ -13298,7 +13298,7 @@ function showInvoiceConfirmModal(file, extracted, notes){
   window._pendingVendor = suggestedVendor;
 
   // Fix the onclick to use closure properly
-  overlay.querySelector('.btn-save').onclick = function(){
+  overlay.querySelector('#inv-file-btn').onclick = function(){
     const newProjOverride = (document.getElementById('inv-confirm-new-project')?.value||'').trim();
     const proj = newProjOverride || document.getElementById('inv-confirm-project').value;
     const vend = document.getElementById('inv-confirm-vendor').value.trim();

@@ -59,10 +59,10 @@ exports.handler = async function(event) {
       content: [
         { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } },
         { type: 'text', text: `Extract invoice data. Field Source is the CUSTOMER not the vendor. Return ONLY this JSON with no other text:
-{"vendor":"","project":"","amount":0,"invoice_number":"","invoice_date":"YYYY-MM-DD","confidence":"high","notes":""}
+{"invoices":[{"invoice_number":"","amount":0,"invoice_date":"YYYY-MM-DD","pages":[1]}],"vendor":"","project":"","amount":0,"invoice_number":"","invoice_date":"YYYY-MM-DD","confidence":"high","notes":""}
 
-amount is the invoice total due. Keep notes to one short sentence, or leave it empty. Match project to one of: ${clientList}
-If the PDF contains MORE THAN ONE separate invoice (different invoice numbers, each with its own total), also add "invoices": [{"invoice_number":"","amount":0,"invoice_date":"YYYY-MM-DD","pages":[1]}] listing every invoice in page order with its own total and the 1-based PDF page numbers it is on; the top-level fields then describe the first one. For a single invoice, leave "invoices" out.` }
+"invoices" is REQUIRED: list every separate invoice in the PDF, in page order, each with its own invoice number, its own total and the 1-based PDF pages it is on. A PDF can hold several invoices (one per page, each with a different invoice number); list each one. For a single invoice the list has one entry. The top-level fields describe the first invoice.
+amount is that invoice's total due. Keep notes to one short sentence, or leave it empty. Match project to one of: ${clientList}` }
       ]
     }]
   });

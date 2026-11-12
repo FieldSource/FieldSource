@@ -430,6 +430,7 @@ main{padding:12px 16px 100px}
     <button class="portal-tab" id="ptab-bizops" onclick="setPortal('bizops')" style="display:none">Business Ops</button>
     <button class="portal-tab" id="ptab-consulting" onclick="setPortal('consulting')" style="display:none">Design</button>
     <button class="portal-tab" id="ptab-fleet" onclick="setPortal('fleet')" style="display:none">Fleet</button>
+    <button class="portal-tab" id="ptab-mylist" onclick="setPortal('mylist')" style="display:none">✓ My List</button>
   </div>
 </div>
 
@@ -3196,6 +3197,10 @@ function setPortal(portal){
   else if(portal==='consulting'){
     loadConsulting().then(()=>pmShow(pmMe() ? 'mywork' : 'overview'));
   }
+  else if(portal==='mylist'){
+    if(!canMyList()){ setPortal('tracker'); return; }
+    view = 'mylist'; myTasksLoaded = false; renderMyList();
+  }
   else if(portal==='fleet'){
     loadFleet().then(()=>{
       view='fleet-loans';
@@ -3207,6 +3212,106 @@ function setPortal(portal){
   }
 }
 
+
+// ===================== MY LIST (private checklist; only the owner can read their items) =====================
+const MY_LIST_EMAILS = ['jake@fieldsourceohio.com'];
+const canMyList = ()=>MY_LIST_EMAILS.includes(((currentUser&&currentUser.email)||'').toLowerCase());
+let myTasks = [], myTasksLoaded = false, myCat = '', myShowDone = false, myOpen = null;
+const myEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+async function loadMyTasks(){
+  try{ myTasks = (await sbFetch('GET', '/rest/v1/my_tasks?select=*&order=created_at.asc&limit=3000')) || []; window._myErr = ''; }
+  catch(e){ window._myErr = e.message; myTasks = []; }
+  myTasksLoaded = true;
+}
+function myBucket(t){
+  if(!t.due_date) return 'none';
+  const today = new Date().toLocaleDateString('en-CA'), d = t.due_date;
+  if(d < today) return 'overdue'; if(d === today) return 'today';
+  const wk = new Date(Date.now()+7*864e5).toLocaleDateString('en-CA');
+  return d <= wk ? 'week' : 'later';
+}
+function renderMyList(){
+  const el = document.getElementById('main-content');
+  if(!myTasksLoaded){ el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-3)">Loading…</div>'; loadMyTasks().then(()=>{ if(currentPortal==='mylist') renderMyList(); }); return; }
+  const cats = [...new Set(myTasks.map(t=>t.category).filter(Boolean))].sort();
+  const open = myTasks.filter(t=>!t.done && (!myCat || t.category===myCat));
+  const done = myTasks.filter(t=>t.done && (!myCat || t.category===myCat)).sort((a,b)=>String(b.done_at).localeCompare(String(a.done_at)));
+  const groups = [['overdue','Overdue','#b91c1c'],['today','Today','#b45309'],['week','This week','var(--text)'],['later','Later','var(--text)'],['none','No date','var(--text-2)']];
+  const sortKey = t=>(t.high?'0':'1')+(t.due_date||'9999')+t.created_at;
+  const inp = 'font-size:16px;padding:10px 12px;border:1px solid var(--border-2);border-radius:10px;background:var(--bg);color:var(--text);font-family:inherit';
+  const row = t=>{ const isOpen = myOpen===t.id, b = myBucket(t);
+    return `<div style="border-top:1px solid var(--border);padding:10px 4px">
+      <div style="display:flex;gap:10px;align-items:flex-start">
+        <input type="checkbox" ${t.done?'checked':''} onchange="myToggle('${t.id}',this.checked)" style="width:20px;height:20px;margin-top:2px;accent-color:var(--green);flex-shrink:0">
+        <div style="flex:1;min-width:0;cursor:pointer" onclick="myOpen=myOpen==='${t.id}'?null:'${t.id}';renderMyList()">
+          <div style="font-size:15px;${t.done?'text-decoration:line-through;color:var(--text-3)':''}">${t.high&&!t.done?'<span style="color:#dc2626" title="High priority">★ </span>':''}${myEsc(t.title)}</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap">
+            ${t.due_date?`<span style="color:${!t.done&&b==='overdue'?'#b91c1c':!t.done&&b==='today'?'#b45309':'var(--text-3)'}">${new Date(t.due_date+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})}</span>`:''}
+            ${t.category?`<span style="background:var(--accent);border-radius:99px;padding:0 8px">${myEsc(t.category)}</span>`:''}
+            ${t.notes&&!isOpen?'<span>📝</span>':''}${t.done&&t.done_at?`<span>done ${new Date(t.done_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>`:''}</div>
+        </div></div>
+      ${isOpen?`<div style="margin:10px 0 4px 30px;display:grid;gap:8px">
+        <input id="my-e-title" style="${inp}" value="${myEsc(t.title)}">
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><input id="my-e-due" type="date" style="${inp}" value="${myEsc(t.due_date||'')}">
+          <input id="my-e-cat" list="my-cats" style="${inp};flex:1;min-width:140px" placeholder="Category" value="${myEsc(t.category)}">
+          <label style="display:flex;gap:6px;align-items:center;font-size:14px"><input id="my-e-high" type="checkbox" ${t.high?'checked':''}> High priority</label></div>
+        <textarea id="my-e-notes" rows="3" style="${inp};line-height:1.4" placeholder="Notes">${myEsc(t.notes)}</textarea>
+        <div style="display:flex;gap:8px;justify-content:space-between"><button class="site-chip" style="color:#b91c1c;padding:6px 12px" onclick="myDelete('${t.id}')">Delete</button>
+          <span style="display:flex;gap:8px"><button class="btn-cancel" style="flex:none" onclick="myOpen=null;renderMyList()">Cancel</button><button class="btn-save" style="flex:none" onclick="mySave('${t.id}')">Save</button></span></div></div>`:''}
+    </div>`; };
+  el.innerHTML = `<div style="max-width:760px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><div style="font-size:18px;font-weight:700">✓ My List</div>
+      <div style="font-size:12px;color:var(--text-3)">🔒 Only you can see this · ${open.length} open</div></div>
+    ${window._myErr?`<div style="padding:10px 14px;background:#fee2e2;border-radius:8px;font-size:13px;color:#991b1b;margin-bottom:10px">Couldn't load your list: ${myEsc(window._myErr).slice(0,160)}${/my_tasks/.test(window._myErr)?' (run my-list.sql)':''}</div>`:''}
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:12px">
+      <input id="my-new" style="${inp};width:100%;box-sizing:border-box" placeholder="Add an item… then press Enter" onkeydown="if(event.key==='Enter'){event.preventDefault();myAdd();}">
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+        <input id="my-new-due" type="date" style="${inp};padding:7px 10px;font-size:14px" title="Due date (optional)">
+        <input id="my-new-cat" list="my-cats" style="${inp};padding:7px 10px;font-size:14px;width:150px" placeholder="Category" value="${myEsc(myCat)}">
+        <label style="display:flex;gap:6px;align-items:center;font-size:14px"><input id="my-new-high" type="checkbox"> ★ High</label>
+        <button class="btn-save" style="flex:none;margin-left:auto;padding:8px 16px" onclick="myAdd()">Add</button></div>
+      <datalist id="my-cats">${cats.map(c=>`<option value="${myEsc(c)}">`).join('')}</datalist>
+    </div>
+    ${cats.length?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${['',...cats].map(c=>`<button class="site-chip${myCat===c?' active':''}" style="padding:4px 12px;font-size:12px" onclick="myCat='${myEsc(c).replace(/'/g,"\\'")}';renderMyList()">${c?myEsc(c):'All'}</button>`).join('')}</div>`:''}
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 12px 8px">
+      ${open.length ? groups.map(([k,l,c])=>{ const g = open.filter(t=>myBucket(t)===k).sort((a,b)=>sortKey(a).localeCompare(sortKey(b)));
+          return g.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${c};margin:12px 0 2px">${l} · ${g.length}</div>${g.map(row).join('')}` : ''; }).join('')
+        : `<div style="padding:24px;text-align:center;color:var(--text-3)">${myTasks.length?'All caught up. ✓':'Nothing on your list yet. Add the first item above.'}</div>`}
+    </div>
+    ${done.length?`<div style="margin-top:12px"><button class="site-chip" style="padding:5px 12px;font-size:12px" onclick="myShowDone=!myShowDone;renderMyList()">${myShowDone?'Hide':'Show'} done (${done.length})</button>
+      ${myShowDone?`<button class="site-chip" style="padding:5px 12px;font-size:12px;margin-left:6px" onclick="myClearDone()">Clear done</button>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:4px 12px;margin-top:8px">${done.slice(0,100).map(row).join('')}</div>`:''}</div>`:''}
+  </div>`;
+}
+async function myAdd(){
+  const t = document.getElementById('my-new'), title = (t.value||'').trim(); if(!title) return;
+  const row = { title, due_date: document.getElementById('my-new-due').value || null, category: document.getElementById('my-new-cat').value.trim(), high: document.getElementById('my-new-high').checked,
+    owner_email: (currentUser&&currentUser.email)||'' };
+  t.value = '';
+  try{ const r = await sbFetch('POST', '/rest/v1/my_tasks', row); if(r && r[0]) myTasks.push(r[0]); renderMyList(); setTimeout(()=>document.getElementById('my-new')?.focus(), 50); }
+  catch(e){ t.value = title; alert('Could not add it: '+e.message+(/my_tasks/.test(e.message)?' (run my-list.sql)':'')); }
+}
+async function myToggle(id, on){
+  const t = myTasks.find(x=>x.id===id); if(!t) return;
+  const upd = { done:on, done_at: on ? new Date().toISOString() : null };
+  Object.assign(t, upd); renderMyList();
+  try{ await sbFetch('PATCH', `/rest/v1/my_tasks?id=eq.${id}`, upd); }catch(e){ alert('Could not save: '+e.message); }
+}
+async function mySave(id){
+  const t = myTasks.find(x=>x.id===id); if(!t) return;
+  const upd = { title: document.getElementById('my-e-title').value.trim() || t.title, due_date: document.getElementById('my-e-due').value || null,
+    category: document.getElementById('my-e-cat').value.trim(), high: document.getElementById('my-e-high').checked, notes: document.getElementById('my-e-notes').value };
+  try{ await sbFetch('PATCH', `/rest/v1/my_tasks?id=eq.${id}`, upd); Object.assign(t, upd); myOpen = null; renderMyList(); }catch(e){ alert('Could not save: '+e.message); }
+}
+async function myDelete(id){
+  const t = myTasks.find(x=>x.id===id); if(!t || !confirm(`Delete "${t.title}"?`)) return;
+  try{ await sbFetch('DELETE', `/rest/v1/my_tasks?id=eq.${id}`); myTasks = myTasks.filter(x=>x.id!==id); myOpen = null; renderMyList(); }catch(e){ alert('Could not delete: '+e.message); }
+}
+async function myClearDone(){
+  const ids = myTasks.filter(t=>t.done && (!myCat || t.category===myCat)).map(t=>t.id); if(!ids.length || !confirm(`Remove ${ids.length} done item${ids.length===1?'':'s'}?`)) return;
+  try{ await sbFetch('DELETE', `/rest/v1/my_tasks?id=in.(${ids.join(',')})`); myTasks = myTasks.filter(t=>!ids.includes(t.id)); renderMyList(); }catch(e){ alert('Could not clear: '+e.message); }
+}
+// =================== END MY LIST ===================
 
 // ===================== PROJECT PLANNER (Design portal) =====================
 // Projects -> collapsible phases -> nested tasks / deliverables / milestones.
@@ -10683,6 +10788,7 @@ function render(){
   else if(view==='paybills') renderPayBills();
   else if(view==='vendors') renderVendors();
   else if(view==='receipts') renderReceipts();
+  else if(view==='mylist'){ const ae = document.activeElement; if(!myOpen && !(ae && /^my-/.test(ae.id||''))) renderMyList(); }
   else if(view==='invoices'){ if(invoiceView==='reports') renderInvoiceReports(); else renderInvoices(); }
   else if(view==='inv-approval') renderInvApproval();
   else if(view==='materials') renderMaterials();
@@ -15554,6 +15660,8 @@ function showApp(){
   const FLEET_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com','luanne@fieldsourceohio.com'];
   const fleetPortalTab = document.getElementById('ptab-fleet');
   if(fleetPortalTab) fleetPortalTab.style.display = FLEET_EMAILS.includes(userEmail) ? '' : 'none';
+  const myListTab = document.getElementById('ptab-mylist');
+  if(myListTab) myListTab.style.display = canMyList() ? '' : 'none';
 
 
   const ESTIMATES_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','haller@fieldsourceohio.com','gibson@fieldsourceohio.com'];

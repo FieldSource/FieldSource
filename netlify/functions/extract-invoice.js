@@ -53,7 +53,7 @@ exports.handler = async function(event) {
 
   const requestBody = JSON.stringify({
     model: 'claude-sonnet-4-6',
-    max_tokens: 400,
+    max_tokens: 1200,
     messages: [{
       role: 'user',
       content: [
@@ -61,7 +61,7 @@ exports.handler = async function(event) {
         { type: 'text', text: `Extract invoice data. Field Source is the CUSTOMER not the vendor. Return ONLY this JSON with no other text:
 {"vendor":"","project":"","amount":0,"invoice_number":"","invoice_date":"YYYY-MM-DD","confidence":"high","notes":""}
 
-Match project to one of: ${clientList}` }
+amount is the invoice total due. Keep notes to one short sentence, or leave it empty. Match project to one of: ${clientList}` }
       ]
     }]
   });
@@ -88,8 +88,19 @@ Match project to one of: ${clientList}` }
           const result = JSON.parse(data);
           const textBlock = (result?.content || []).find(b => b.type === 'text');
           const rawText = textBlock?.text || '';
-          const match = rawText.replace(/```json|```/g,'').trim().match(/\{[\s\S]*\}/);
-          const extracted = match ? JSON.parse(match[0]) : { confidence: 'low', notes: 'Could not parse invoice' };
+          const clean = rawText.replace(/```json|```/g,'').trim();
+          const match = clean.match(/\{[\s\S]*\}/);
+          let extracted = null;
+          try { if (match) extracted = JSON.parse(match[0]); } catch (e) { /* fall through to salvage */ }
+          if (!extracted) {
+            // The answer was cut off or malformed: salvage the fields we can read
+            const grab = k => { const m = clean.match(new RegExp('"' + k + '"\\s*:\\s*("((?:[^"\\\\]|\\\\.)*)"|-?[\\d.]+)')); return m ? (m[2] !== undefined ? m[2] : Number(m[1])) : undefined; };
+            const got = { vendor: grab('vendor'), project: grab('project'), amount: grab('amount'), invoice_number: grab('invoice_number'), invoice_date: grab('invoice_date') };
+            const any = Object.values(got).some(v => v !== undefined && v !== '');
+            console.error('Unreadable answer (stop: ' + (result && result.stop_reason) + '):', clean.slice(0, 300));
+            extracted = any ? { ...Object.fromEntries(Object.entries(got).filter(([, v]) => v !== undefined)), confidence: 'low', notes: 'Partly read: check the amount and date against the invoice' }
+                            : { confidence: 'low', notes: 'Could not parse invoice' };
+          }
           resolve({
             statusCode: 200,
             headers: { 'Content-Type': 'application/json' },

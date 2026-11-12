@@ -13149,7 +13149,38 @@ function openInvoiceEditModal(id){
   document.body.appendChild(overlay);
 }
 
+// Split a PDF holding several invoices into one PDF per invoice, then run each through the normal filing step
+async function invSplitPdf(){
+  const file = invoiceQueue[invoiceQueueIndex] || window._confirmFile, inv = window._splitInvoices || [];
+  if(!file || inv.length < 2) return;
+  try{
+    if(!window.PDFLib) await new Promise((res,rej)=>{ const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js'; sc.onload = res; sc.onerror = ()=>rej(new Error('could not load the PDF splitter')); document.head.appendChild(sc); });
+    const src = await PDFLib.PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption:true });
+    const n = src.getPageCount();
+    // pages per invoice: as reported, else one page each in order
+    let groups = inv.map(x=>(Array.isArray(x.pages)?x.pages:[]).map(Number).filter(p=>p>=1 && p<=n));
+    const used = new Set(groups.flat());
+    if(groups.some(g=>!g.length) || used.size !== groups.flat().length){ groups = inv.length===n ? inv.map((_,k)=>[k+1]) : null; }
+    if(!groups){ alert(`Couldn't tell which pages belong to which invoice (${inv.length} invoices, ${n} pages). File it as one invoice, or split the PDF before uploading.`); return; }
+    const base = (file.name||'invoice.pdf').replace(/\.pdf$/i,'');
+    const parts = [];
+    for(let k=0;k<groups.length;k++){
+      const out = await PDFLib.PDFDocument.create();
+      const pages = await out.copyPages(src, groups[k].map(p=>p-1));
+      pages.forEach(p=>out.addPage(p));
+      const bytes = await out.save();
+      const num = String(inv[k].invoice_number||`part ${k+1}`).replace(/[^\w.-]+/g,'_');
+      parts.push(new File([bytes], `${base} - ${num}.pdf`, { type:'application/pdf' }));
+    }
+    document.getElementById('inv-confirm-overlay')?.remove();
+    if(!invoiceQueue.length){ invoiceQueue = [file]; invoiceQueueIndex = 0; invoiceQueueResults = []; }
+    invoiceQueue.splice(invoiceQueueIndex, 1, ...parts);   // replace the combined PDF with its parts, keep any other files after them
+    window._splitInvoices = null;
+    await processNextInQueue();
+  }catch(e){ alert('Could not split the PDF: '+e.message); }
+}
 function showInvoiceConfirmModal(file, extracted, notes){
+  window._confirmFile = file;
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'inv-confirm-overlay';
@@ -13168,6 +13199,15 @@ function showInvoiceConfirmModal(file, extracted, notes){
       <div class="sheet-title" style="margin-bottom:0">Confirm Invoice Filing${queueLabel}</div>
       ${invoiceQueue.length>1?`<div style="font-size:12px;color:var(--text-3)">${invoiceQueue.length-invoiceQueueIndex-1} remaining after this</div>`:''}
     </div>
+    ${(()=>{ const inv = (extracted && Array.isArray(extracted.invoices)) ? extracted.invoices.filter(x=>x && (x.invoice_number || x.amount)) : [];
+      if(inv.length < 2 || !/pdf$/i.test(file.type||'') && !/\.pdf$/i.test(file.name||'')) return '';
+      window._splitInvoices = inv;
+      const tot = inv.reduce((t,x)=>t+(Number(x.amount)||0),0);
+      return `<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;font-size:13px">
+        <b>This PDF has ${inv.length} separate invoices</b> (${'$'+tot.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})} total):
+        <div style="margin:6px 0 8px;font-size:12px;color:var(--text-2)">${inv.map(x=>`#${String(x.invoice_number||'?').replace(/</g,'&lt;')} · ${'$'+(Number(x.amount)||0).toLocaleString('en-US',{minimumFractionDigits:2})}${Array.isArray(x.pages)&&x.pages.length?` · page ${x.pages.join(', ')}`:''}`).join('<br>')}</div>
+        <button class="btn-save" style="flex:none;padding:7px 14px" onclick="invSplitPdf()">Split into ${inv.length} invoices</button>
+        <span style="font-size:11px;color:var(--text-3);margin-left:6px">each gets its own number, amount and job, and is filed separately</span></div>`; })()}
     ${extracted ? `<div style="background:var(--accent);border-radius:var(--radius-sm);padding:12px;margin-bottom:16px;font-size:13px">
       <div style="font-weight:600;color:var(--text);margin-bottom:4px">📄 ${file.name}</div>
       ${extracted.vendor?`<div style="color:var(--text-2)">Vendor detected: <strong>${extracted.vendor}</strong></div>`:''}

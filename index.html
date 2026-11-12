@@ -406,6 +406,7 @@ main{padding:12px 16px 100px}
       <button class="logout-btn" onclick="doLogout()">Sign out</button>
     </div>
     <button class="header-add" id="new-wo-btn" onclick="openNewWorkOrderModal()" style="display:none">+ Work Order</button>
+    <button class="header-add" onclick="openReceiptSheet()">📷 Receipt</button>
     <button class="header-add" onclick="openReportModal()">+ File report</button>
     <button class="header-add" id="add-job-btn" onclick="openModal()">+ Add job</button>
     <input type="file" id="csv-file-input" accept=".csv" style="display:none" onchange="importCsvJobs(this)">
@@ -451,6 +452,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="inv-approval-tab" onclick="Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="paybills-tab" onclick="payLoaded=false;setView('paybills')">Approve to Pay</button>
     <button class="vtab" id="vendors-tab" onclick="vendorsLoaded=false;setView('vendors')">Vendors</button>
+    <button class="vtab" id="receipts-tab" onclick="receiptsLoaded=false;setView('receipts')">Card Receipts</button>
     <button class="vtab" id="costs-tab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts());syncBizGroup()">Direct Cost</button>
     <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting());syncBizGroup()">WIP</button>
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor());syncBizGroup()">Labor Costs</button>
@@ -2891,11 +2893,15 @@ function toFmtTime(t, short){
 }
 function toTimeLabel(e, short){ return toIsPartial(e) ? `${toFmtTime(e.startTime,short)}${short?'–':' – '}${toFmtTime(e.endTime,short)}` : ''; }
 function toPartialHours(e){ if(!toIsPartial(e)) return 0; const f = t=>{ const [h,m]=t.split(':').map(Number); return h+(m||0)/60; }; return Math.max(0, f(e.endTime)-f(e.startTime)); }
+// Sign-in names that differ from the schedule's row names
+const PERSON_ALIASES = { 'dan trubisky':'Dan Sr', 'wes ganobcik':'Wes', 'gase':'Gase - Intern' };
+function canonPerson(n){ const k = String(n||'').trim().toLowerCase(); return (PERSON_ALIASES[k] || String(n||'').trim()).toLowerCase(); }
+function samePerson(a, b){ return canonPerson(a) === canonPerson(b); }
 function isPersonOff(person, dateStr){   // off the whole day
-  return timeOffEntries.some(e => e.person === person && dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved' && !toIsPartial(e));
+  return timeOffEntries.some(e => samePerson(e.person, person) && dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved' && !toIsPartial(e));
 }
 function partialOffOn(person, dateStr){  // off part of the day (returns the entry)
-  return timeOffEntries.find(e => e.person === person && e.startDate === dateStr && e.status==='Approved' && toIsPartial(e)) || null;
+  return timeOffEntries.find(e => samePerson(e.person, person) && e.startDate === dateStr && e.status==='Approved' && toIsPartial(e)) || null;
 }
 function getOffPeopleOnDate(dateStr){
   return timeOffEntries.filter(e => dateStr >= e.startDate && dateStr <= e.endDate && e.status==='Approved').map(e => toIsPartial(e) ? `${e.person} (${toTimeLabel(e,true)})` : e.person);
@@ -8226,6 +8232,259 @@ function bellVendorItems(){
     (x.st==='missing' && (!x.v.last_requested_at || new Date(x.v.last_requested_at).getTime() < weekAgo)));   // missing: not requested yet, or no reply in a week
 }
 // =================== END VENDORS ===================
+// ===================== CARD RECEIPTS (mobile: snap → Claude reads → submit; office reviews) =====================
+const RCPT_LANES = ['Design & Consulting','Construction','Maintenance'];
+const RCPT_ACCOUNTS = ['Materials & Supplies','Equipment Rental','Maintenance & Repairs','Fuel & Fleet','Tools & Small Equipment','Professional Services','Office & Admin','Marketing','Travel & Meals'];   // placeholder until the new chart of accounts
+const RCPT_REVIEWERS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+const canReviewReceipts = ()=>RCPT_REVIEWERS.includes(((currentUser&&currentUser.email)||'').toLowerCase());
+let receipts = [], receiptsLoaded = false, rcpt = null, rcptFilter = 'submitted', rcptPerson = '', rcptMonth = '';
+const rcptEsc = v=>String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const rcptMoney = n=>'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const rcptKey = s=>String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'').replace(/(inc|llc|co|corp|store)$/,'');
+async function loadReceipts(mineOnly){
+  try{
+    const me = encodeURIComponent((currentUser&&currentUser.email)||'');
+    receipts = (await sbFetch('GET', `/rest/v1/receipts?select=*&order=created_at.desc&limit=${mineOnly?'30':'2000'}${mineOnly?`&submitted_by=eq.${me}`:''}`)) || [];
+    receiptsLoaded = !mineOnly; window._rcptErr = '';
+  }catch(e){ window._rcptErr = e.message; receipts = []; }
+}
+// Today's jobs for this person, from the schedule
+function rcptTodayJobs(){
+  const me = getDisplayName(currentUser&&currentUser.email), t = isoDate(today());
+  try{ return (jobs||[]).filter(j=>(j.crew||[]).includes(me) && jobDates(j).includes(t)).map(j=>({ client:j.client, label:[j.client,j.field].filter(Boolean).join(' · '), services:(j.services||[]).join(', ') })); }catch(e){ return []; }
+}
+function rcptJobServices(chargeTo){
+  if(!chargeTo || (typeof isOverhead==='function' && isOverhead(chargeTo))) return chargeTo ? 'Overhead: '+chargeTo : '';
+  const t = isoDate(today()), recent = (jobs||[]).filter(j=>j.client===chargeTo).sort((a,b)=>String(b.startDate).localeCompare(String(a.startDate)));
+  const near = recent.find(j=>jobDates(j).includes(t)) || recent[0];
+  return near ? (near.services||[]).join(', ') : '';
+}
+// Shrink phone photos before upload (faster, and well within what Claude needs to read a receipt)
+function rcptShrink(file){
+  return new Promise(res=>{
+    if(!/^image\//.test(file.type) || /heic|heif/i.test(file.type)) return res(file);
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = ()=>{ const max = 1600, sc = Math.min(1, max/Math.max(img.width,img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width*sc); c.height = Math.round(img.height*sc);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height); URL.revokeObjectURL(url);
+      c.toBlob(b=>res(b ? new File([b], (file.name||'receipt').replace(/\.\w+$/,'')+'.jpg', { type:'image/jpeg' }) : file), 'image/jpeg', 0.82); };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); res(file); };
+    img.src = url;
+  });
+}
+function openReceiptSheet(){
+  rcpt = { step:'start' };
+  rcptRender();
+  loadReceipts(true).then(()=>{ if(rcpt && rcpt.step==='start') rcptRender(); });
+}
+function rcptClose(){ document.getElementById('rcpt-overlay')?.remove(); rcpt = null; }
+function rcptRender(){
+  let o = document.getElementById('rcpt-overlay');
+  if(!o){ o = document.createElement('div'); o.id = 'rcpt-overlay'; o.className = 'modal-overlay'; o.style.zIndex = '10040'; o.onclick = e=>{ if(e.target===o) rcptClose(); }; document.body.appendChild(o); }
+  const big = 'width:100%;padding:16px;font-size:17px;font-weight:700;border-radius:12px;font-family:inherit;cursor:pointer';
+  const inp = 'width:100%;box-sizing:border-box;padding:12px;font-size:16px;border:1px solid var(--border-2);border-radius:10px;background:var(--bg);color:var(--text);font-family:inherit';
+  const lbl = 'font-size:12px;font-weight:700;color:var(--text-2);margin:12px 0 4px';
+  let body = '';
+  if(rcpt.step==='start'){
+    const mine = receipts.filter(r=>r.submitted_by===(currentUser&&currentUser.email)).slice(0,8);
+    body = `<div class="sheet-title" style="margin-bottom:4px">📷 Company card receipt</div>
+      <div style="font-size:13px;color:var(--text-3);margin-bottom:16px">Snap it right after you pay. Claude reads it; you pick the job.</div>
+      <label style="${big};display:block;text-align:center;background:var(--green);color:#fff;margin-bottom:10px">📷 Take a photo<input type="file" accept="image/*" capture="environment" style="display:none" onchange="rcptPicked(this.files[0])"></label>
+      <label style="${big};display:block;text-align:center;background:var(--bg);border:1px solid var(--border-2);color:var(--text)">🖼 Choose a photo or PDF<input type="file" accept="image/*,.pdf" style="display:none" onchange="rcptPicked(this.files[0])"></label>
+      ${window._rcptErr && /receipts/.test(window._rcptErr) ? `<div style="margin-top:12px;font-size:12px;color:#b91c1c">Receipts aren't set up yet (run receipts-setup.sql).</div>` : ''}
+      ${mine.length?`<div style="${lbl};margin-top:20px">My recent receipts</div>${mine.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:10px 0;border-top:1px solid var(--border);font-size:14px">
+        <div><b>${rcptEsc(r.vendor||'Receipt')}</b><div style="font-size:12px;color:var(--text-3)">${r.receipt_date?new Date(r.receipt_date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):''} · ${rcptEsc(r.charge_to||'no job')}</div></div>
+        <div style="text-align:right"><b>${rcptMoney(r.amount)}</b><div style="font-size:11px;color:${r.status==='submitted'?'#b45309':'#166534'}">${r.status==='submitted'?'Waiting for review':r.status==='reviewed'?'✓ Reviewed':'✓ In QuickBooks'}</div></div></div>`).join('')}`:''}
+      <button class="btn-cancel" style="width:100%;margin-top:16px" onclick="rcptClose()">Close</button>`;
+  } else if(rcpt.step==='reading'){
+    body = `<div style="text-align:center;padding:30px 10px">${rcpt.preview?`<img src="${rcpt.preview}" style="max-width:100%;max-height:260px;border-radius:10px;margin-bottom:14px">`:''}
+      <div style="font-size:16px;font-weight:700">${rcptEsc(rcpt.status||'Reading the receipt…')}</div><div style="font-size:13px;color:var(--text-3);margin-top:4px">This takes a few seconds.</div></div>`;
+  } else {
+    const d = rcpt.d, tj = rcptTodayJobs();
+    const allFlags = rcptFlags(d);
+    body = `<div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:6px">
+        ${rcpt.preview?`<img src="${rcpt.preview}" style="width:72px;height:96px;object-fit:cover;border-radius:8px;border:1px solid var(--border)">`:''}
+        <div><div class="sheet-title" style="margin-bottom:2px">Check the receipt</div><div style="font-size:12px;color:var(--text-3)">Fix anything Claude read wrong, then submit.</div></div></div>
+      ${allFlags.length?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">${allFlags.map(f=>`<span style="font-size:12px;font-weight:700;padding:4px 10px;border-radius:99px;background:${/Loan|Personal|mismatch|Over/.test(f)?'#fee2e2':'#fef3c7'};color:${/Loan|Personal|mismatch|Over/.test(f)?'#991b1b':'#92400e'}">⚑ ${rcptEsc(f)}</span>`).join('')}</div>`:''}
+      <div style="${lbl}">Vendor</div><input id="rc-vendor" style="${inp}" value="${rcptEsc(d.vendor)}" placeholder="Home Depot">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><div style="${lbl}">Total</div><input id="rc-amount" type="number" inputmode="decimal" step="0.01" style="${inp}" value="${d.amount!=null&&d.amount!==''&&!isNaN(Number(d.amount))?Number(d.amount).toFixed(2):''}" placeholder="0.00"></div>
+        <div><div style="${lbl}">Date</div><input id="rc-date" type="date" style="${inp}" value="${rcptEsc(d.date||isoDate(today()))}"></div></div>
+      <div style="${lbl}">Job (or overhead)</div>
+      <select id="rc-job" style="${inp}" onchange="rcptJobChanged(this.value)"><option value="">Choose…</option>
+        ${tj.length?`<optgroup label="Your jobs today">${tj.map(j=>`<option value="${rcptEsc(j.client)}"${d.charge_to===j.client?' selected':''}>${rcptEsc(j.label)}</option>`).join('')}</optgroup>`:''}
+        ${chargeToOptions(tj.some(j=>j.client===d.charge_to) ? '' : d.charge_to)}</select>
+      <div style="${lbl}">What was it for?</div><input id="rc-items" style="${inp}" value="${rcptEsc(d.items)}" placeholder="Landscape fabric, stakes, seed">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><div style="${lbl}">Business lane</div><select id="rc-lane" style="${inp}"><option value="">—</option>${RCPT_LANES.map(l=>`<option${d.business_lane===l?' selected':''}>${l}</option>`).join('')}</select></div>
+        <div><div style="${lbl}">QuickBooks account</div><select id="rc-acct" style="${inp}"><option value="">—</option>${RCPT_ACCOUNTS.map(a=>`<option${d.suggested_qb_account===a?' selected':''}>${a}</option>`).join('')}</select></div></div>
+      <div id="rc-err" style="color:#b91c1c;font-size:13px;margin-top:10px"></div>
+      <button id="rc-go" style="${big};background:var(--green);color:#fff;border:none;margin-top:14px" onclick="rcptSubmit()">Submit receipt</button>
+      <button class="btn-cancel" style="width:100%;margin-top:8px" onclick="if(confirm('Discard this receipt?')){rcpt={step:'start'};rcptRender();}">Discard</button>`;
+  }
+  o.innerHTML = `<div class="modal-sheet" style="max-width:520px">${body}</div>`;
+}
+function rcptFlags(d){
+  const f = [...(d.flags||[])];
+  const amt = Number(d.amount);
+  if(amt > 1000 && !f.includes('Over $1,000')) f.unshift('Over $1,000');
+  if(d.vendor && rcpt && rcpt.knownVendors && !rcpt.knownVendors.has(rcptKey(d.vendor)) && !f.includes('New vendor')) f.push('New vendor');
+  return f;
+}
+async function rcptCall(body){
+  if(typeof ensureFreshToken==='function') await ensureFreshToken();
+  const r = await fetch('/.netlify/functions/receipt-ai', { method:'POST', headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+sbToken() }, body: JSON.stringify(body) });
+  const d = await r.json().catch(()=>({ error:`Error ${r.status}` }));
+  if(!r.ok || d.error) throw new Error(d.error || `Error ${r.status}`);
+  return d.receipt || {};
+}
+async function rcptPicked(file){
+  if(!file) return;
+  if(/heic|heif/i.test(file.type) || /\.hei[cf]$/i.test(file.name)){ alert('That photo is in HEIC format. On iPhone, use "Take a photo" here (it saves as JPG), or change Settings → Camera → Formats → Most Compatible.'); return; }
+  rcpt = { step:'reading', status:'Uploading…', preview: /^image\//.test(file.type) ? URL.createObjectURL(file) : '' };
+  rcptRender();
+  try{
+    const small = await rcptShrink(file);
+    if(typeof ensureFreshToken==='function') await ensureFreshToken();
+    const who = ((currentUser&&currentUser.email)||'user').split('@')[0].replace(/[^\w.-]/g,'');
+    const ext = /pdf$/i.test(small.type) || /\.pdf$/i.test(small.name) ? 'pdf' : 'jpg';
+    const path = `receipts/${who}/${Date.now()}.${ext}`;
+    const up = await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${path}`, { method:'POST', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type': small.type||'image/jpeg', 'x-upsert':'true' }, body: await small.arrayBuffer() });
+    if(!up.ok) throw new Error(`Upload failed (${up.status})`);
+    rcpt.path = path; rcpt.fileName = file.name || `receipt.${ext}`;
+    rcpt.status = 'Reading the receipt…'; rcptRender();
+    // who's bought from this vendor before (for the New vendor flag)
+    const prior = await sbFetch('GET', '/rest/v1/receipts?select=vendor&limit=3000').catch(()=>[]);
+    rcpt.knownVendors = new Set((prior||[]).map(x=>rcptKey(x.vendor)).filter(Boolean));
+    const tj = rcptTodayJobs(), job = tj.length===1 ? tj[0] : null;
+    let d = {};
+    try{ d = await rcptCall({ file_path:path, job: job ? job.label : '', job_services: job ? job.services : '' }); }
+    catch(e){ d = { flags:['Hard to read'], notes:e.message }; }
+    d.charge_to = job ? job.client : '';
+    rcpt.d = d; rcpt.step = 'form'; rcptRender();
+  }catch(e){ rcpt = { step:'start' }; rcptRender(); alert('Could not upload the receipt: '+e.message); }
+}
+async function rcptJobChanged(chargeTo){
+  if(!rcpt || !rcpt.d) return;
+  ['vendor','amount','date','items'].forEach(k=>{ const el = document.getElementById('rc-'+k); if(el) rcpt.d[k] = el.value; });
+  rcpt.d.charge_to = chargeTo;
+  if(!chargeTo) return;
+  try{
+    const r = await rcptCall({ job: chargeTo, job_services: rcptJobServices(chargeTo), vendor: rcpt.d.vendor, amount: rcpt.d.amount, items: rcpt.d.items });
+    rcpt.d.business_lane = r.business_lane || rcpt.d.business_lane; rcpt.d.suggested_qb_account = r.suggested_qb_account || rcpt.d.suggested_qb_account;
+    rcpt.d.flags = (r.flags||[]).filter(f=>!/Hard to read/.test(f)).concat((rcpt.d.flags||[]).filter(f=>/Hard to read/.test(f)));
+    rcptRender();
+  }catch(e){ console.warn('re-categorize', e.message); }
+}
+async function rcptSubmit(){
+  const g = k=>document.getElementById('rc-'+k).value.trim();
+  const err = document.getElementById('rc-err'), btn = document.getElementById('rc-go');
+  const amt = Number(g('amount'));
+  if(!g('vendor')){ err.textContent = 'Enter the vendor.'; return; }
+  if(!(amt > 0)){ err.textContent = 'Enter the total.'; return; }
+  if(!g('job')){ err.textContent = 'Pick the job (or overhead).'; return; }
+  rcpt.d.vendor = g('vendor'); rcpt.d.amount = amt;
+  btn.disabled = true; btn.textContent = 'Submitting…';
+  try{
+    const me = (currentUser&&currentUser.email)||'';
+    await sbFetch('POST', '/rest/v1/receipts', { submitted_by: me, submitted_name: getDisplayName(me), vendor: g('vendor'), amount: amt, receipt_date: g('date')||null, items: g('items'),
+      charge_to: g('job'), business_lane: g('lane'), qb_account: g('acct'), flags: rcptFlags(rcpt.d), card_last4: String(rcpt.d.card_last4||'').replace(/\D/g,'').slice(-4),
+      file_path: rcpt.path, file_name: rcpt.fileName, ai: rcpt.d, status: 'submitted' });
+    rcpt = { step:'start' }; await loadReceipts(true); rcptRender();
+    if(typeof pmToast==='function') pmToast('✓ Receipt submitted'); else alert('✓ Receipt submitted');
+    if(view==='receipts'){ receiptsLoaded = false; renderReceipts(); }
+  }catch(e){ err.textContent = 'Not submitted: '+e.message+(/receipts/.test(e.message)?' (run receipts-setup.sql)':''); btn.disabled = false; btn.textContent = 'Submit receipt'; }
+}
+// ---------- Office: Business Ops → Accounts Payable → Card Receipts ----------
+function renderReceipts(){
+  const el = document.getElementById('main-content');
+  if(!receiptsLoaded){ el.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-3)">Loading receipts…</div>'; loadReceipts(false).then(()=>{ receiptsLoaded = true; if(view==='receipts') renderReceipts(); }); return; }
+  const people = [...new Set(receipts.map(r=>r.submitted_name).filter(Boolean))].sort();
+  const months = [...new Set(receipts.map(r=>String(r.receipt_date||r.created_at||'').slice(0,7)).filter(Boolean))].sort().reverse();
+  const list = receipts.filter(r=>(rcptFilter==='all' || r.status===rcptFilter) && (!rcptPerson || r.submitted_name===rcptPerson) && (!rcptMonth || String(r.receipt_date||r.created_at).startsWith(rcptMonth)));
+  const cnt = s=>receipts.filter(r=>r.status===s).length;
+  const th = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-2);padding:8px;text-align:left;background:var(--surface)';
+  const td = 'font-size:13px;padding:8px;border-top:1px solid var(--border);vertical-align:top';
+  const sel = 'font-size:13px;padding:6px 10px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  el.innerHTML = `<div style="max-width:1180px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <div style="font-size:18px;font-weight:700">Card Receipts <span style="font-size:12px;font-weight:400;color:var(--text-3)">snapped by card holders · categorized by Claude · reviewed here</span></div>
+      <div style="display:flex;gap:6px"><button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="openReceiptSheet()">📷 Add a receipt</button>
+        <button class="site-chip" style="padding:5px 10px;font-size:12px" onclick="rcptExport()">⬇ Export CSV (this view)</button></div></div>
+    ${window._rcptErr?`<div style="padding:10px 14px;background:#fee2e2;border-radius:8px;font-size:13px;color:#991b1b;margin-bottom:12px">Couldn't load receipts: ${rcptEsc(window._rcptErr).slice(0,200)}${/receipts/.test(window._rcptErr)?' (run receipts-setup.sql)':''}</div>`:''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${[['submitted',`Needs review (${cnt('submitted')})`],['reviewed',`Reviewed (${cnt('reviewed')})`],['entered',`In QuickBooks (${cnt('entered')})`],['all','All']].map(([k,l])=>`<button class="site-chip${rcptFilter===k?' active':''}" style="padding:6px 14px;font-size:13px" onclick="rcptFilter='${k}';renderReceipts()">${l}</button>`).join('')}
+      <select style="${sel};margin-left:auto" onchange="rcptPerson=this.value;renderReceipts()"><option value="">Everyone</option>${people.map(p=>`<option${rcptPerson===p?' selected':''}>${rcptEsc(p)}</option>`).join('')}</select>
+      <select style="${sel}" onchange="rcptMonth=this.value;renderReceipts()"><option value="">All months</option>${months.map(m=>`<option value="${m}"${rcptMonth===m?' selected':''}>${new Date(m+'-15T12:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</option>`).join('')}</select></div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:900px"><thead><tr>
+      <th style="${th}">Date</th><th style="${th}">Vendor / items</th><th style="${th}">Who</th><th style="${th}">Job</th><th style="${th}">Lane</th><th style="${th}">QB account</th><th style="${th}">Flags</th><th style="${th};text-align:right">Total</th><th style="${th}"></th></tr></thead><tbody>
+      ${list.map(r=>`<tr style="cursor:pointer" onclick="rcptOpen('${r.id}')"><td style="${td};white-space:nowrap">${r.receipt_date?new Date(r.receipt_date+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—'}</td>
+        <td style="${td}"><b>${rcptEsc(r.vendor)}</b><div style="font-size:11px;color:var(--text-3)">${rcptEsc(String(r.items||'').slice(0,80))}</div></td>
+        <td style="${td}">${rcptEsc(r.submitted_name||'')}${r.card_last4?`<div style="font-size:11px;color:var(--text-3)">card …${rcptEsc(r.card_last4)}</div>`:''}</td>
+        <td style="${td}">${rcptEsc(r.charge_to||'')}</td><td style="${td}">${rcptEsc(r.business_lane||'—')}</td><td style="${td}">${rcptEsc(r.qb_account||'—')}</td>
+        <td style="${td}">${(r.flags||[]).map(f=>`<span style="display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:99px;margin:1px;background:${/Loan|Personal|mismatch|Over/.test(f)?'#fee2e2':'#fef3c7'};color:${/Loan|Personal|mismatch|Over/.test(f)?'#991b1b':'#92400e'}">${rcptEsc(f)}</span>`).join('')}</td>
+        <td style="${td};text-align:right;font-weight:600">${rcptMoney(r.amount)}</td>
+        <td style="${td};font-size:12px;color:${r.status==='submitted'?'#b45309':'#166534'};white-space:nowrap">${r.status==='submitted'?'Needs review':r.status==='reviewed'?'✓ Reviewed':'✓ In QB'}</td></tr>`).join('') || `<tr><td colspan="9" style="${td};color:var(--text-3)">Nothing here.</td></tr>`}
+      </tbody></table></div>
+    <div style="font-size:12px;color:var(--text-3);margin-top:8px">${list.length} receipt${list.length===1?'':'s'} · ${rcptMoney(list.reduce((t,r)=>t+Number(r.amount||0),0))}</div></div>`;
+}
+function rcptOpen(id){
+  const r = receipts.find(x=>x.id===id); if(!r) return;
+  const can = canReviewReceipts(), inp = `${billInput}`;
+  billOverlay('rcptd-overlay', `
+    <div style="display:flex;justify-content:space-between;gap:8px"><div class="sheet-title" style="margin-bottom:2px">${rcptEsc(r.vendor)} · ${rcptMoney(r.amount)}</div><a style="cursor:pointer;color:var(--green-dark);font-size:13px" onclick="rcptViewPhoto('${r.id}')">View receipt ↗</a></div>
+    <div style="font-size:12px;color:var(--text-3);margin-bottom:10px">Submitted by ${rcptEsc(r.submitted_name)} ${new Date(r.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}${r.card_last4?` · card …${rcptEsc(r.card_last4)}`:''}</div>
+    ${(r.flags||[]).length?`<div style="margin-bottom:8px">${r.flags.map(f=>`<span style="font-size:12px;font-weight:600;padding:2px 9px;border-radius:99px;margin-right:4px;background:#fef3c7;color:#92400e">⚑ ${rcptEsc(f)}</span>`).join('')}</div>`:''}
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div><div style="${billLbl}">Vendor</div><input id="rd-vendor" style="${inp}" value="${rcptEsc(r.vendor)}" ${can?'':'disabled'}></div>
+      <div><div style="${billLbl}">Total</div><input id="rd-amount" type="number" step="0.01" style="${inp}" value="${rcptEsc(r.amount)}" ${can?'':'disabled'}></div>
+      <div><div style="${billLbl}">Date</div><input id="rd-date" type="date" style="${inp}" value="${rcptEsc(r.receipt_date||'')}" ${can?'':'disabled'}></div></div>
+    <div style="${billLbl};margin-top:8px">Job (or overhead)</div><select id="rd-job" style="${inp}" ${can?'':'disabled'}><option value="">—</option>${chargeToOptions(r.charge_to)}</select>
+    <div style="${billLbl};margin-top:8px">What was it for</div><input id="rd-items" style="${inp}" value="${rcptEsc(r.items)}" ${can?'':'disabled'}>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
+      <div><div style="${billLbl}">Business lane</div><select id="rd-lane" style="${inp}" ${can?'':'disabled'}><option value="">—</option>${RCPT_LANES.map(l=>`<option${r.business_lane===l?' selected':''}>${l}</option>`).join('')}</select></div>
+      <div><div style="${billLbl}">QuickBooks account</div><select id="rd-acct" style="${inp}" ${can?'':'disabled'}><option value="">—</option>${RCPT_ACCOUNTS.map(a=>`<option${r.qb_account===a?' selected':''}>${a}</option>`).join('')}${r.qb_account&&!RCPT_ACCOUNTS.includes(r.qb_account)?`<option selected>${rcptEsc(r.qb_account)}</option>`:''}</select></div></div>
+    <div style="${billLbl};margin-top:8px">Office notes</div><input id="rd-notes" style="${inp}" value="${rcptEsc(r.notes)}" ${can?'':'disabled'}>
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;flex-wrap:wrap">
+      ${can?`<button class="site-chip" style="padding:6px 12px;color:#b91c1c" onclick="rcptDelete('${r.id}')">Delete</button>`:'<span></span>'}
+      <span style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn-cancel" style="flex:none" onclick="document.getElementById('rcptd-overlay').remove()">Close</button>
+        ${can?`<button class="site-chip" style="padding:6px 12px" onclick="rcptSave('${r.id}','${r.status}')">Save</button>
+          ${r.status==='submitted'?`<button class="btn-save" style="flex:none" onclick="rcptSave('${r.id}','reviewed')">✓ Reviewed</button>`:''}
+          ${r.status!=='entered'?`<button class="btn-save" style="flex:none" onclick="rcptSave('${r.id}','entered')">✓ Entered in QuickBooks</button>`:`<button class="site-chip" style="padding:6px 12px" onclick="rcptSave('${r.id}','reviewed')">Undo "in QuickBooks"</button>`}`:''}
+      </span></div>`, 640);
+}
+async function rcptSave(id, status){
+  const r = receipts.find(x=>x.id===id); if(!r) return;
+  const g = k=>document.getElementById('rd-'+k).value.trim(), me = (currentUser&&currentUser.email)||'';
+  const upd = { vendor:g('vendor'), amount:Number(g('amount'))||0, receipt_date:g('date')||null, charge_to:g('job'), items:g('items'), business_lane:g('lane'), qb_account:g('acct'), notes:g('notes'), status };
+  if(status==='reviewed' && r.status==='submitted'){ upd.reviewed_by = me; upd.reviewed_at = new Date().toISOString(); }
+  if(status==='entered'){ upd.entered_by = me; upd.entered_at = new Date().toISOString(); if(!r.reviewed_at){ upd.reviewed_by = me; upd.reviewed_at = upd.entered_at; } }
+  try{ await sbFetch('PATCH', `/rest/v1/receipts?id=eq.${id}`, upd); Object.assign(r, upd); document.getElementById('rcptd-overlay')?.remove(); renderReceipts(); updateApprovalBell(); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+async function rcptDelete(id){
+  const r = receipts.find(x=>x.id===id); if(!r || !confirm(`Delete the ${r.vendor} receipt (${rcptMoney(r.amount)})?`)) return;
+  try{ if(r.file_path) await fetch(`${SUPABASE_URL}/storage/v1/object/${PM_BUCKET}/${encodeURI(r.file_path)}`, { method:'DELETE', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY } });
+       await sbFetch('DELETE', `/rest/v1/receipts?id=eq.${id}`); receipts = receipts.filter(x=>x.id!==id); document.getElementById('rcptd-overlay')?.remove(); renderReceipts(); }
+  catch(e){ alert('Could not delete: '+e.message); }
+}
+async function rcptViewPhoto(id){
+  const r = receipts.find(x=>x.id===id); if(!r || !r.file_path) return;
+  try{ const x = await fetch(`${SUPABASE_URL}/storage/v1/object/sign/${PM_BUCKET}/${encodeURI(r.file_path)}`, { method:'POST', headers:{ Authorization:`Bearer ${sbToken()}`, apikey:SUPABASE_KEY, 'Content-Type':'application/json' }, body: JSON.stringify({ expiresIn: 600 }) });
+       const j = await x.json(); if(!j.signedURL) throw new Error(j.message||'no link'); window.open(`${SUPABASE_URL}/storage/v1${j.signedURL}`, '_blank'); }
+  catch(e){ alert('Could not open it: '+e.message); }
+}
+function rcptExport(){
+  const list = receipts.filter(r=>(rcptFilter==='all' || r.status===rcptFilter) && (!rcptPerson || r.submitted_name===rcptPerson) && (!rcptMonth || String(r.receipt_date||r.created_at).startsWith(rcptMonth)));
+  const q = v=>`"${String(v??'').replace(/"/g,'""')}"`;
+  const rows = [['Date','Vendor','Total','Card holder','Card last 4','Job / overhead','Business lane','QuickBooks account','What it was for','Flags','Status','Office notes']]
+    .concat(list.map(r=>[r.receipt_date||'', r.vendor, Number(r.amount||0).toFixed(2), r.submitted_name, r.card_last4, r.charge_to, r.business_lane, r.qb_account, r.items, (r.flags||[]).join('; '), r.status==='entered'?'In QuickBooks':r.status, r.notes]));
+  const blob = new Blob([rows.map(r=>r.map(q).join(',')).join('\r\n')], { type:'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Field Source card receipts ${rcptMonth||new Date().toLocaleDateString('en-CA')}.csv`; a.click();
+}
+function bellReceiptCount(){ return canReviewReceipts() && receiptsLoaded ? receipts.filter(r=>r.status==='submitted').length : 0; }
+// =================== END CARD RECEIPTS ===================
+
 
 
 
@@ -10262,15 +10521,15 @@ function setView(v){
   const bizopsIdx={pipeline:0,po:1,costs:2,clients:3,labor:4,costing:5};
   const allIdx={...trackerIdx,...bizopsIdx,'consulting-home':0};
   // Find the right bar and highlight correct tab
-  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials','receivables','paybills','vendors'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
+  const barId = ['week','next','month','list','equipment','reports','timeoff','hours','workorders','mileage'].includes(v)?'tracker-bar':['pipeline','po','costs','clients','labor','costing','estimates','invoices','inv-approval','materials','receivables','paybills','vendors','receipts'].includes(v)?'bizops-bar':['fleet-loans','fuel'].includes(v)?'fleet-bar':'consulting-bar';
   const bar = document.getElementById(barId);
   const barTabs = bar ? Array.from(bar.querySelectorAll('.vtab')) : [];
   // Business Ops tabs are highlighted by id (button order no longer matches index)
-  const BIZOPS_TAB_IDS={po:'po-tab',costs:'costs-tab',pipeline:'pipeline-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab',receivables:'receivables-tab',paybills:'paybills-tab',vendors:'vendors-tab'};
+  const BIZOPS_TAB_IDS={po:'po-tab',costs:'costs-tab',pipeline:'pipeline-tab',costing:'costing-tab',labor:'labor-tab',clients:'clients-tab',estimates:'estimates-tab',invoices:'invoices-tab','inv-approval':'inv-approval-tab',materials:'materials-tab',receivables:'receivables-tab',paybills:'paybills-tab',vendors:'vendors-tab',receipts:'receipts-tab'};
   const byId = BIZOPS_TAB_IDS[v] && document.getElementById(BIZOPS_TAB_IDS[v]);
   if(byId) byId.classList.add('active');
   else { const localIdx = allIdx[v]; if(barTabs[localIdx]) barTabs[localIdx].classList.add('active'); }
-  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials'||v==='receivables'||v==='paybills'||v==='vendors';
+  const hideNav = v==='reports'||v==='workorders'||v==='timeoff'||v==='mileage'||v==='pipeline'||v==='po'||v==='hours'||v==='consulting-home'||v==='pm'||v==='consulting-deadlines'||v==='costs'||v==='clients'||v==='labor'||v==='costing'||v==='fleet-loans'||v==='fuel'||v==='estimates'||v==='invoices'||v==='inv-approval'||v==='materials'||v==='receivables'||v==='paybills'||v==='vendors'||v==='receipts';
   const legendBar = document.getElementById('legend-bar');
   const navRow = document.querySelector('.nav-row');
   if(legendBar) legendBar.style.display=(v==='equipment'||hideNav)?'none':'flex';
@@ -10360,9 +10619,9 @@ async function removeOfficeClosure(ids){
 // =================== END OFFICE CLOSED DAYS ===================
 
 // ===================== BUSINESS OPS: grouped tabs =====================
-const BIZ_GROUP_OF = { invoices:'ap', 'inv-approval':'ap', paybills:'ap', vendors:'ap', estimates:'ar', receivables:'ar',
+const BIZ_GROUP_OF = { invoices:'ap', 'inv-approval':'ap', paybills:'ap', vendors:'ap', receipts:'ap', estimates:'ar', receivables:'ar',
   costs:'jc', costing:'jc', labor:'jc', materials:'jc', pipeline:'jc', po:'jc', clients:'jc' };
-const BIZ_TAB_OF = { invoices:'invoices-tab', 'inv-approval':'inv-approval-tab', paybills:'paybills-tab', vendors:'vendors-tab', estimates:'estimates-tab', receivables:'receivables-tab',
+const BIZ_TAB_OF = { invoices:'invoices-tab', 'inv-approval':'inv-approval-tab', paybills:'paybills-tab', vendors:'vendors-tab', receipts:'receipts-tab', estimates:'estimates-tab', receivables:'receivables-tab',
   costs:'costs-tab', costing:'costing-tab', labor:'labor-tab', materials:'materials-tab', pipeline:'pipeline-tab', po:'po-tab', clients:'clients-tab' };
 const BIZ_DEFAULT = { ap:'inv-approval', ar:'receivables', jc:'costs' };
 let bizGroup = 'ap', bizLast = {};
@@ -10411,6 +10670,7 @@ function render(){
   else if(view==='receivables') renderReceivables();
   else if(view==='paybills') renderPayBills();
   else if(view==='vendors') renderVendors();
+  else if(view==='receipts') renderReceipts();
   else if(view==='invoices'){ if(invoiceView==='reports') renderInvoiceReports(); else renderInvoices(); }
   else if(view==='inv-approval') renderInvApproval();
   else if(view==='materials') renderMaterials();
@@ -10465,6 +10725,7 @@ function renderWeekByPerson(days){
           html += `<div style="color:var(--text-3);font-size:11px;text-align:center;padding:6px 0">—</div>`;
         }
       } else {
+        if(isPersonOff(person, ds)) html += `<div title="Approved time off, but still on the schedule this day" style="font-size:10px;font-weight:700;color:#991b1b;background:#fee2e2;border-radius:4px;padding:3px 5px;text-align:center;margin-bottom:3px">Off · still scheduled</div>`;
         personJobs.forEach(j=>{
           const isOff = (j.services&&j.services.includes('Off'))||(j.service==='Off');
           const bg = isOff ? '#fecaca' : (getCrewColor(j.crew||[], j.service||'') || 'var(--card)');
@@ -10480,6 +10741,19 @@ function renderWeekByPerson(days){
     });
     html += '</tr>';
   });
+
+  // "Also off": approved time off for people who aren't rows on the schedule (office staff, etc.)
+  if(!(crewFilter && crewFilter!=='All')){
+    const onRows = p=>CREW.some(c=>samePerson(c, p));
+    const others = days.map(d=>{ const ds = isoDate(d);
+      return timeOffEntries.filter(e=>e.status==='Approved' && ds>=e.startDate && ds<=e.endDate && !onRows(e.person)).map(e=>toIsPartial(e) ? (e.startDate===ds ? `${e.person} ${toTimeLabel(e,true)}` : null) : e.person).filter(Boolean); });
+    if(others.some(l=>l.length)){
+      html += '<tr>';
+      html += `<td style="padding:6px 8px;font-size:12px;font-weight:600;color:var(--text-2);border-bottom:1px solid var(--border);border-right:1px solid var(--border);background:var(--surface);position:sticky;left:0;z-index:1;vertical-align:top">Also off</td>`;
+      others.forEach(l=>{ html += `<td style="padding:4px;border-bottom:1px solid var(--border);border-right:1px solid var(--border);vertical-align:top">${l.map(n=>`<div style="font-size:10px;color:#92400e;background:#fef3c7;border-radius:4px;padding:2px 5px;margin-bottom:2px;text-align:center">${String(n).replace(/</g,'&lt;')}</div>`).join('')}</td>`; });
+      html += '</tr>';
+    }
+  }
 
   html += '</tbody></table></div>';
   document.getElementById('main-content').innerHTML = crewFilterBar() + statsBar() + html;
@@ -12384,7 +12658,9 @@ function openApprovalPanel(isRefresh){
         <button onclick="denyTimeOff('${e.id}')" style="flex:1;padding:7px;background:none;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:13px;cursor:pointer;color:#dc2626">✕ Deny</button>
       </div>
     </div>`).join('') + (pending.length?`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>`:'') : '';
-  const toHtml = vdHtml + rbHtml + ((vdHtml||rbHtml) && (toHtml0 || pending.length) ? '<div style="height:6px"></div>' : '') + (toHtml0 || ((rbHtml||vdHtml) && pending.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>` : ''));
+  const rcN = (typeof bellReceiptCount==='function') ? bellReceiptCount() : 0;
+  const rcHtml = rcN ? `<div onclick="document.getElementById('approval-panel')?.remove();document.querySelectorAll('#approval-backdrop').forEach(b=>b.remove());rcptFilter='submitted';setView('receipts')" style="cursor:pointer;background:var(--bg);border:1px solid var(--border);border-left:4px solid #0ea5e9;border-radius:var(--radius);padding:10px 12px;margin-bottom:10px;font-size:13px">🧾 <b>${rcN} card receipt${rcN===1?'':'s'}</b> waiting for review <span style="color:var(--text-3)">· Card Receipts</span></div>` : '';
+  const toHtml = rcHtml + vdHtml + rbHtml + ((rcHtml||vdHtml||rbHtml) && (toHtml0 || pending.length) ? '<div style="height:6px"></div>' : '') + (toHtml0 || ((rbHtml||vdHtml) && pending.length ? `<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-3);margin:14px 0 8px">Vendor invoices</div>` : ''));
 
   const panel = document.createElement('div');
   panel.id = 'approval-panel';
@@ -12491,12 +12767,13 @@ function bellTimeOff(){ return (typeof timeOffEntries!=='undefined' ? timeOffEnt
 function updateApprovalBell(pulse){
   if(!approvalRulesLoaded && currentUser){ approvalRulesLoaded = true; loadApprovalRules().then(()=>updateApprovalBell()); }
   const vd = (typeof bellVendorItems==='function') ? bellVendorItems().length : 0;
-  const inv = bellInvoices().length, to = bellTimeOff().length, rb = bellBillRequests().length, total = inv + to + rb + vd;
+  const rc = (typeof bellReceiptCount==='function') ? bellReceiptCount() : 0;
+  const inv = bellInvoices().length, to = bellTimeOff().length, rb = bellBillRequests().length, total = inv + to + rb + vd + rc;
   const bell = document.getElementById('approval-bell');
   const badge = document.getElementById('approval-badge');
   if(bell){
     bell.style.display = total > 0 ? '' : 'none';
-    bell.title = [vd?`${vd} vendor${vd===1?'':'s'} need documents reviewed`:'', rb?`${rb} ready to bill`:'', to?`${to} time-off request${to===1?'':'s'}`:'', inv?`${inv} invoice${inv===1?'':'s'}`:''].filter(Boolean).join(' · ') + ' to review';
+    bell.title = [rc?`${rc} card receipt${rc===1?'':'s'} to review`:'', vd?`${vd} vendor${vd===1?'':'s'} need documents reviewed`:'', rb?`${rb} ready to bill`:'', to?`${to} time-off request${to===1?'':'s'}`:'', inv?`${inv} invoice${inv===1?'':'s'}`:''].filter(Boolean).join(' · ') + ' to review';
     if(pulse && total){ bell.animate([{transform:'rotate(0)'},{transform:'rotate(-18deg)'},{transform:'rotate(16deg)'},{transform:'rotate(-10deg)'},{transform:'rotate(0)'}], {duration:700, iterations:2}); }
   }
   if(badge) badge.textContent = total;
@@ -15137,7 +15414,7 @@ async function doLogin(){
     currentUser = data.user;
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); });
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); if(typeof canReviewReceipts==='function' && canReviewReceipts()) loadReceipts(false).then(()=>{ receiptsLoaded = true; updateApprovalBell(); }); });
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);
@@ -15268,7 +15545,7 @@ function checkSession(){
       currentToken = token;
       refreshToken = refresh;
       currentUser = JSON.parse(user);
-      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); });
+      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); if(typeof canReviewReceipts==='function' && canReviewReceipts()) loadReceipts(false).then(()=>{ receiptsLoaded = true; updateApprovalBell(); }); });
       isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
       isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());

@@ -406,7 +406,7 @@ main{padding:12px 16px 100px}
       <button class="logout-btn" onclick="doLogout()">Sign out</button>
     </div>
     <button class="header-add" id="new-wo-btn" onclick="openNewWorkOrderModal()" style="display:none">+ Work Order</button>
-    <button class="header-add" onclick="openReceiptSheet()">📷 Receipt</button>
+    <button class="header-add" id="receipt-btn" onclick="openReceiptSheet()" style="display:none">📷 Receipt</button>
     <button class="header-add" onclick="openReportModal()">+ File report</button>
     <button class="header-add" id="add-job-btn" onclick="openModal()">+ Add job</button>
     <input type="file" id="csv-file-input" accept=".csv" style="display:none" onchange="importCsvJobs(this)">
@@ -452,7 +452,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" id="inv-approval-tab" onclick="Promise.all([loadInvApproval(),loadInvoices()]).then(()=>setView('inv-approval'))">Approvals <span id="inv-approval-badge" class="vtab-badge" style="display:none"></span></button>
     <button class="vtab" id="paybills-tab" onclick="payLoaded=false;setView('paybills')">Approve to Pay</button>
     <button class="vtab" id="vendors-tab" onclick="vendorsLoaded=false;setView('vendors')">Vendors</button>
-    <button class="vtab" id="receipts-tab" onclick="receiptsLoaded=false;setView('receipts')">Card Receipts</button>
+    <button class="vtab" id="receipts-tab" onclick="receiptsLoaded=false;setView('receipts')" style="display:none">Card Receipts</button>
     <button class="vtab" id="costs-tab" onclick="view='costs';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadCosts().then(()=>renderCosts());syncBizGroup()">Direct Cost</button>
     <button class="vtab" id="costing-tab" onclick="view='costing';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';Promise.all([loadReports(),loadCosts(),loadLaborRates(),loadPO()]).then(()=>renderCosting());syncBizGroup()">WIP</button>
     <button class="vtab" id="labor-tab" onclick="view='labor';document.querySelectorAll('.vtab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('main-content').innerHTML='';loadLaborRates().then(()=>renderLabor());syncBizGroup()">Labor Costs</button>
@@ -8233,6 +8233,8 @@ function bellVendorItems(){
 }
 // =================== END VENDORS ===================
 // ===================== CARD RECEIPTS (mobile: snap → Claude reads → submit; office reviews) =====================
+// Turned off for now (Nov 12, 2026). Set to true to bring back the 📷 Receipt button, the Card Receipts tab and the bell count.
+const RECEIPTS_ENABLED = false;
 const RCPT_LANES = ['Design & Consulting','Construction','Maintenance'];
 const RCPT_ACCOUNTS = ['Materials & Supplies','Equipment Rental','Maintenance & Repairs','Fuel & Fleet','Tools & Small Equipment','Professional Services','Office & Admin','Marketing','Travel & Meals'];   // placeholder until the new chart of accounts
 const RCPT_REVIEWERS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','gibson@fieldsourceohio.com'];
@@ -8482,7 +8484,8 @@ function rcptExport(){
   const blob = new Blob([rows.map(r=>r.map(q).join(',')).join('\r\n')], { type:'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Field Source card receipts ${rcptMonth||new Date().toLocaleDateString('en-CA')}.csv`; a.click();
 }
-function bellReceiptCount(){ return canReviewReceipts() && receiptsLoaded ? receipts.filter(r=>r.status==='submitted').length : 0; }
+if(RECEIPTS_ENABLED){ document.addEventListener('DOMContentLoaded', ()=>{ ['receipt-btn','receipts-tab'].forEach(id=>{ const el = document.getElementById(id); if(el) el.style.display = ''; }); }); }
+function bellReceiptCount(){ return RECEIPTS_ENABLED && canReviewReceipts() && receiptsLoaded ? receipts.filter(r=>r.status==='submitted').length : 0; }
 // =================== END CARD RECEIPTS ===================
 
 
@@ -15414,7 +15417,7 @@ async function doLogin(){
     currentUser = data.user;
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); if(typeof canReviewReceipts==='function' && canReviewReceipts()) loadReceipts(false).then(()=>{ receiptsLoaded = true; updateApprovalBell(); }); });
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); if(typeof RECEIPTS_ENABLED!=='undefined' && RECEIPTS_ENABLED && typeof canReviewReceipts==='function' && canReviewReceipts()) loadReceipts(false).then(()=>{ receiptsLoaded = true; updateApprovalBell(); }); });
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);
@@ -15545,7 +15548,7 @@ function checkSession(){
       currentToken = token;
       refreshToken = refresh;
       currentUser = JSON.parse(user);
-      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); if(typeof canReviewReceipts==='function' && canReviewReceipts()) loadReceipts(false).then(()=>{ receiptsLoaded = true; updateApprovalBell(); }); });
+      isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); if(typeof RECEIPTS_ENABLED!=='undefined' && RECEIPTS_ENABLED && typeof canReviewReceipts==='function' && canReviewReceipts()) loadReceipts(false).then(()=>{ receiptsLoaded = true; updateApprovalBell(); }); });
       isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
       isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());

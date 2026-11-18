@@ -483,6 +483,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" data-pm="calendar" onclick="pmShow('calendar')">Calendar</button>
     <button class="vtab" data-pm="timeline" onclick="pmShow('timeline')">Timeline</button>
     <button class="vtab" data-pm="workload" onclick="pmShow('workload')">Workload</button>
+    <button class="vtab" data-pm="reports" onclick="pmShow('reports')">Reports</button>
     <button class="vtab" data-pm="settings" onclick="pmShow('settings')">Templates &amp; Closures</button>
   </div>
 </div>
@@ -3420,6 +3421,9 @@ async function pmLoad(force){
     const qQ = sbFetch('GET','/rest/v1/pm_questions?select=*&order=created_at.asc').catch(()=>[]);
     const tQ = sbFetch('GET','/rest/v1/pm_time?select=*&order=work_date.asc').catch(()=>[]);
     const sQ = sbFetch('GET','/rest/v1/pm_submittals?select=*&order=sent_on.asc').catch(()=>[]);
+    const dwQ = sbFetch('GET','/rest/v1/pm_drawings?select=*&order=sort.asc').catch(()=>[]);
+    const peQ = sbFetch('GET','/rest/v1/app_lists?list=eq.pm_people&active=eq.true&select=id,value').catch(()=>[]);
+    const rpQ = sbFetch('GET','/rest/v1/pm_reports?select=*&order=name.asc').catch(()=>[]);
     const [p,i,t,c,f] = await Promise.all([
       sbFetch('GET','/rest/v1/pm_projects?select=*&order=created_at.asc'),
       sbFetch('GET','/rest/v1/pm_items?select=*&order=sort.asc'),
@@ -3427,7 +3431,7 @@ async function pmLoad(force){
       sbFetch('GET','/rest/v1/pm_closures?select=*&order=date.asc'),
       sbFetch('GET','/rest/v1/pm_files?select=*&order=created_at.desc'),
     ]);
-    pm.projects = p||[]; pm.items = i||[]; pm.templates = t||[]; pm.closures = c||[]; pm.files = f||[]; pm.notes = (await notesQ)||[]; pm.decisions = (await decQ)||[]; pm.questions = (await qQ)||[]; pm.time = (await tQ)||[]; pm.submittals = (await sQ)||[];
+    pm.projects = p||[]; pm.items = i||[]; pm.templates = t||[]; pm.closures = c||[]; pm.files = f||[]; pm.notes = (await notesQ)||[]; pm.decisions = (await decQ)||[]; pm.questions = (await qQ)||[]; pm.time = (await tQ)||[]; pm.submittals = (await sQ)||[]; pm.drawings = (await dwQ)||[]; pm.people = (await peQ)||[]; pm.reports = (await rpQ)||[];
     pm.loaded = true; pm.error = '';
     if(!pm.sel || !pmProject(pm.sel)){ const first = pm.projects.find(x=>x.status!=='Complete'); pm.sel = first ? first.id : (pm.projects[0]||{}).id || null; }
   }catch(e){
@@ -3666,6 +3670,11 @@ function pmStyles(){
   .pm-proj:hover{background:var(--bg)} .pm-proj.sel{background:var(--accent)}
   .pm-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:4px}
   .pm-row{display:flex;align-items:center;gap:8px;padding:6px 6px;border-bottom:1px solid var(--border);font-size:13px}
+.pm-grip{opacity:0;cursor:grab;color:var(--text-3);font-size:12px;letter-spacing:-2px;user-select:none;flex-shrink:0;width:10px;margin-left:-6px}
+.pm-row:hover .pm-grip,.pm-dw-row:hover .pm-grip{opacity:1}.pm-dw-row .pm-grip{margin:6px 0 0}
+@media (hover:none){.pm-grip{opacity:.5}}
+.pm-row.pm-sel{background:#dbeafe !important}
+.pm-drop-above{box-shadow:inset 0 3px 0 #2563eb}.pm-drop-below{box-shadow:inset 0 -3px 0 #2563eb}
   .pm-row:hover{background:var(--bg)} .pm-row .pm-acts{opacity:0;display:flex;gap:2px} .pm-row:hover .pm-acts{opacity:1}
   .pm-ic{border:none;background:none;cursor:pointer;color:var(--text-3);font-size:13px;padding:2px 4px;border-radius:4px}
   .pm-ic:hover{background:var(--surface);color:var(--text)}
@@ -3698,10 +3707,405 @@ function pmRender(){
   else if(pm.tab==='mywork') el.innerHTML = pmMyWorkHtml();
   else if(pm.tab==='overview') el.innerHTML = pmOverviewHtml();
   else if(pm.tab==='workload') el.innerHTML = pmWorkloadHtml();
+  else if(pm.tab==='reports'){ el.innerHTML = pmReportsHtml(); setTimeout(pmRpFit, 0); }
   else el.innerHTML = pmProjectsHtml();
   window.scrollTo(sx, sy);
   if(pm.tab==='timeline') pmGanttAfter(gl, gt);
   pmUpdateBadge();
+}
+
+// ===================== DESIGN PLANNER ADDITIONS (Brian's feedback, Nov 18) =====================
+// Questions: table with categories, answered-by / chased-by, statuses, dependencies, link to decisions
+const PM_Q_STATUSES = ['Not started','In progress','Awaiting response','Resolved','Dropped'];
+const PM_Q_CATS = ['Baseball','Softball','Football','Soccer','Track','Site utilities','Survey / grading','Drainage','Lighting','Fencing','Dugouts / structures','Permits','Client / budget','Other'];
+function pmQOpen(q){ return !['Resolved','Answered','Dropped'].includes(q.status); }
+function pmQBlockedBy(q){ if(!q.depends_on) return null; const d = pm.questions.find(x=>x.id===q.depends_on); return d && pmQOpen(d) ? d : null; }
+function pmQStatusChip(q){
+  const blk = pmQOpen(q) && pmQBlockedBy(q);
+  const st = blk ? 'Blocked' : q.status==='Answered' ? 'Resolved' : q.status;
+  const c = { 'Not started':['#f1f5f9','#475569'], 'In progress':['#dbeafe','#1d4ed8'], 'Awaiting response':['#fef3c7','#92400e'], 'Resolved':['#dcfce7','#166534'], 'Dropped':['#f1f5f9','#94a3b8'], 'Blocked':['#fee2e2','#991b1b'] }[st] || ['#f1f5f9','#475569'];
+  return `<span class="pm-chip" style="background:${c[0]};color:${c[1]};white-space:nowrap">${blk?'🔒 ':''}${pmEsc(st)}</span>`;
+}
+function pmOpenQuestions(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  pm._qf = pm._qf || { status:'open', cat:'', of:'', owner:'', text:'', sort:'due', dir:1 };
+  const f = pm._qf, all = pmQs(projectId);
+  const cats = [...new Set(all.map(q=>q.category).filter(Boolean))].sort(), ofs = [...new Set(all.map(q=>q.asked_of).filter(Boolean))].sort(), owners = [...new Set(all.map(q=>q.owner).filter(Boolean))].sort();
+  let list = all.filter(q=>(f.status==='all' || (f.status==='open' ? pmQOpen(q) : f.status==='blocked' ? (pmQOpen(q) && pmQBlockedBy(q)) : (q.status===f.status || (f.status==='Resolved' && q.status==='Answered'))))
+    && (!f.cat || q.category===f.cat) && (!f.of || q.asked_of===f.of) && (!f.owner || q.owner===f.owner)
+    && (!f.text || (q.question+' '+(q.answer||'')).toLowerCase().includes(f.text.toLowerCase())));
+  const key = { question:q=>q.question.toLowerCase(), cat:q=>q.category||'~', of:q=>q.asked_of||'~', owner:q=>q.owner||'~', asked:q=>q.asked_on||'9', due:q=>q.due_date||'9', status:q=>PM_Q_STATUSES.indexOf(q.status==='Answered'?'Resolved':q.status) }[f.sort];
+  list.sort((a,b)=>{ const x = key(a), y = key(b); return (x<y?-1:x>y?1:0)*f.dir || (a.created_at||'').localeCompare(b.created_at||''); });
+  const openN = all.filter(pmQOpen).length;
+  const sel = 'font-size:12px;padding:5px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  const th = (k,l,w)=>`<th onclick="pm._qf.dir=pm._qf.sort==='${k}'?-pm._qf.dir:1;pm._qf.sort='${k}';pmOpenQuestions('${projectId}')" style="cursor:pointer;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-2);padding:7px 8px;background:var(--surface);position:sticky;top:0;white-space:nowrap;${w?'width:'+w:''}">${l}${f.sort===k?(f.dir>0?' ▲':' ▼'):''}</th>`;
+  const td = 'padding:7px 8px;border-top:1px solid var(--border);font-size:12px;vertical-align:top';
+  pmModal(`
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">❓ Questions</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)} · ${openN} open · resolved questions go to the decision log</div></div>
+      <div style="display:flex;gap:6px"><button class="pm-btn primary" onclick="pmEditQuestion(null,'${projectId}')">+ Add a question</button><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">✕</button></div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">
+      <select style="${sel}" onchange="pm._qf.status=this.value;pmOpenQuestions('${projectId}')">${[['open','Open (not resolved)'],['blocked','Blocked'],...PM_Q_STATUSES.map(s=>[s,s]),['all','All']].map(([v,l])=>`<option value="${v}"${f.status===v?' selected':''}>${l}</option>`).join('')}</select>
+      <select style="${sel}" onchange="pm._qf.cat=this.value;pmOpenQuestions('${projectId}')"><option value="">All categories</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${pmEsc(c)}</option>`).join('')}</select>
+      <select style="${sel}" onchange="pm._qf.of=this.value;pmOpenQuestions('${projectId}')"><option value="">Anyone answering</option>${ofs.map(c=>`<option${f.of===c?' selected':''}>${pmEsc(c)}</option>`).join('')}</select>
+      <select style="${sel}" onchange="pm._qf.owner=this.value;pmOpenQuestions('${projectId}')"><option value="">Anyone chasing</option>${owners.map(c=>`<option${f.owner===c?' selected':''}>${pmEsc(c)}</option>`).join('')}</select>
+      <input style="${sel};flex:1;min-width:140px" placeholder="Search" value="${pmEsc(f.text)}" onchange="pm._qf.text=this.value;pmOpenQuestions('${projectId}')">
+      ${(f.cat||f.of||f.owner||f.text||f.status!=='open')?`<button class="pm-btn" style="font-size:12px" onclick="pm._qf={status:'open',cat:'',of:'',owner:'',text:'',sort:'${f.sort}',dir:${f.dir}};pmOpenQuestions('${projectId}')">Clear</button>`:''}
+    </div>
+    <div style="max-height:62vh;overflow:auto;border:1px solid var(--border);border-radius:8px"><table style="width:100%;border-collapse:collapse;min-width:900px"><thead><tr>
+      ${th('question','Question')}${th('cat','Category','110px')}${th('of','Answered by','120px')}${th('owner','Chased by','90px')}${th('asked','Asked','80px')}${th('due','Needed by','90px')}${th('status','Status','130px')}<th style="background:var(--surface);position:sticky;top:0;width:90px"></th></tr></thead><tbody>
+      ${list.map(q=>{ const late = pmQOpen(q) && q.due_date && q.due_date < pmToday(), blk = pmQOpen(q) && pmQBlockedBy(q), it = q.item_id && pmItem(q.item_id);
+        const waiters = pm.questions.filter(x=>x.depends_on===q.id && pmQOpen(x));
+        return `<tr style="${!pmQOpen(q)?'opacity:.6':''}">
+          <td style="${td};font-size:13px"><div style="font-weight:600;white-space:pre-wrap">${pmEsc(q.question)}</div>
+            ${blk?`<div style="font-size:11px;color:#991b1b;margin-top:2px">🔒 Waits on: ${pmEsc(blk.question.slice(0,90))}</div>`:''}
+            ${waiters.length?`<div style="font-size:11px;color:var(--text-3);margin-top:2px">⛓ ${waiters.length} question${waiters.length===1?' waits':'s wait'} on this</div>`:''}
+            ${it?`<div style="font-size:11px;color:var(--text-3)">re: ${pmEsc(it.title)}</div>`:''}
+            ${!pmQOpen(q)&&q.answer?`<div style="font-size:12px;margin-top:4px;padding:5px 7px;background:var(--bg);border-radius:6px"><b>Answer${q.answered_on?' ('+pmFmt(q.answered_on)+')':''}:</b> ${pmEsc(q.answer)}${q.decision_id?' <span class="pm-chip">📋 decision log</span>':''}</div>`:''}</td>
+          <td style="${td}">${q.category?`<span class="pm-chip">${pmEsc(q.category)}</span>`:'<span style="color:var(--text-3)">—</span>'}</td>
+          <td style="${td}">${pmEsc(q.asked_of||'—')}</td><td style="${td}">${pmEsc(q.owner||'—')}</td>
+          <td style="${td};white-space:nowrap">${q.asked_on?pmFmt(q.asked_on):'—'}</td>
+          <td style="${td};white-space:nowrap;color:${late?'#dc2626':'inherit'};font-weight:${late?600:400}">${q.due_date?pmFmt(q.due_date):'—'}${late?'<div style="font-size:10px">overdue</div>':''}</td>
+          <td style="${td}">${pmQOpen(q)?`<select style="${sel};padding:3px 4px" onchange="pmQSetStatus('${q.id}',this.value)">${PM_Q_STATUSES.map(s=>`<option${q.status===s?' selected':''}>${s}</option>`).join('')}</select>${blk?'<div style="margin-top:3px">'+pmQStatusChip(q)+'</div>':''}`:pmQStatusChip(q)}</td>
+          <td style="${td};white-space:nowrap;text-align:right">${pmQOpen(q)?`<button class="pm-btn primary" style="font-size:11px;padding:3px 8px" onclick="pmAnswerQuestion('${q.id}')">Answer</button>`:''}<button class="pm-ic" title="Edit" onclick="pmEditQuestion('${q.id}','${projectId}')">✎</button></td></tr>`; }).join('')
+      || `<tr><td colspan="8" style="${td};color:var(--text-3);padding:16px">${all.length?'No questions match these filters.':'Nothing yet. Add questions as they come up, with who answers, who chases it and by when.'}</td></tr>`}
+    </tbody></table></div>`, 1150);
+}
+async function pmQSetStatus(id, st){
+  const q = pm.questions.find(x=>x.id===id); if(!q) return;
+  if(st==='Resolved'){ pmAnswerQuestion(id); return; }
+  try{ await sbFetch('PATCH', `/rest/v1/pm_questions?id=eq.${id}`, { status:st }); q.status = st; pmOpenQuestions(q.project_id); pmRender(); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+
+// People who can be assigned work: Field Source owners plus anyone added ("Other…"), no admin needed
+function pmAssignPeople(){ return [...new Set([...PM_OWNERS.map(o=>o.name), ...(typeof pmPeople==='function'?pmPeople():[]), ...pm.items.map(i=>i.assigned_to), ...((pm.people||[]).map(x=>x.value))].filter(Boolean))].sort((a,b)=>a.localeCompare(b)); }
+function pmAssignSelect(cur){
+  const names = pmAssignPeople();
+  return `<select id="pmi-assigned" class="pm-in" onchange="if(this.value==='__other'){ const n = prompt('Name of the person doing the work (they\\u2019ll be added to the list):'); if(n && n.trim()){ pmAddPerson(n.trim()); const o = document.createElement('option'); o.text = o.value = n.trim(); this.insertBefore(o, this.lastElementChild); this.value = n.trim(); } else this.value=''; }">
+    <option value="">Same as owner</option>${names.map(n=>`<option${cur===n?' selected':''}>${pmEsc(n)}</option>`).join('')}${cur && !names.includes(cur)?`<option selected>${pmEsc(cur)}</option>`:''}<option value="__other">Other…</option></select>`;
+}
+async function pmAddPerson(name){
+  if(pmAssignPeople().some(n=>n.toLowerCase()===name.toLowerCase())) return;
+  try{ const r = await sbFetch('POST','/rest/v1/app_lists', { list:'pm_people', value:name, active:true }); pm.people = [...(pm.people||[]), ...(r||[{ value:name }])]; }catch(e){ console.warn('add person', e.message); }
+}
+
+// Drawing set: sheets and site details, standalone per project
+const PM_DW_STATUSES = ['Not started','In progress','Complete'];
+function pmDw(projectId, kind){ return (pm.drawings||[]).filter(d=>d.project_id===projectId && d.kind===kind).sort((a,b)=>(a.sort||0)-(b.sort||0) || String(a.created_at).localeCompare(String(b.created_at))); }
+function pmDwSummary(projectId){ const all = (pm.drawings||[]).filter(d=>d.project_id===projectId); return all.length ? `${all.filter(d=>d.status==='Complete').length}/${all.length}` : ''; }
+function pmOpenDrawings(projectId){
+  const p = pmProject(projectId); if(!p) return;
+  pm._dwOpen = pm._dwOpen || { sheet:true, detail:true };
+  const sel = 'font-size:12px;padding:4px 6px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  const col = { 'Not started':'#f1f5f9', 'In progress':'#dbeafe', 'Complete':'#dcfce7' };
+  const section = (kind, label, icon)=>{ const rows = pmDw(projectId, kind), done = rows.filter(d=>d.status==='Complete').length, open = pm._dwOpen[kind];
+    return `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:10px">
+      <div onclick="pm._dwOpen.${kind}=!pm._dwOpen.${kind};pmOpenDrawings('${projectId}')" style="cursor:pointer;padding:9px 12px;background:var(--surface);display:flex;gap:8px;align-items:center;font-weight:600;border-radius:8px">
+        <span style="color:var(--text-3)">${open?'▾':'▸'}</span>${icon} ${label} <span style="font-weight:400;font-size:12px;color:var(--text-3)">${rows.length?`${done}/${rows.length} complete`:'none yet'}</span></div>
+      ${open?`<div data-dnd-group="dw-${kind}">${rows.map((d,k)=>`<div class="pm-dw-row" data-dnd="dw" data-id="${d.id}" data-group="dw-${kind}" style="display:flex;gap:6px;align-items:flex-start;padding:6px 10px;border-top:1px solid var(--border);background:${d.status==='Complete'?'#f7fdf8':'transparent'}">
+          <span class="pm-grip" onmousedown="pmGripDown(this)" title="Drag to reorder">⋮⋮</span>
+          ${kind==='sheet'?`<input style="${sel};width:70px" value="${pmEsc(d.number||'')}" placeholder="Sheet #" onchange="pmDwSave('${d.id}',{number:this.value.trim()})">`:''}
+          <div style="flex:1;min-width:140px"><input style="${sel};width:100%;box-sizing:border-box;font-size:13px;${d.status==='Complete'?'text-decoration:line-through;color:var(--text-3)':''}" value="${pmEsc(d.title)}" onchange="pmDwSave('${d.id}',{title:this.value.trim()||'${pmEsc(d.title).replace(/'/g,"\\'")}'})">
+            ${pm._dwNotes===d.id?`<textarea style="${sel};width:100%;box-sizing:border-box;margin-top:4px" rows="2" placeholder="Notes: pull from this vendor, talk to Wes…" onchange="pmDwSave('${d.id}',{notes:this.value})">${pmEsc(d.notes||'')}</textarea>`:(d.notes?`<div style="font-size:11px;color:var(--text-2);margin-top:2px;white-space:pre-wrap;cursor:pointer" onclick="pm._dwNotes='${d.id}';pmOpenDrawings('${projectId}')">📝 ${pmEsc(d.notes)}</div>`:'')}</div>
+          <select style="${sel};background:${col[d.status]||'var(--bg)'}" onchange="pmDwSave('${d.id}',{status:this.value})">${PM_DW_STATUSES.map(s=>`<option${d.status===s?' selected':''}>${s}</option>`).join('')}</select>
+          <input type="date" style="${sel};width:128px" value="${pmEsc(d.due_date||'')}" title="Optional date" onchange="pmDwSave('${d.id}',{due_date:this.value||null})">
+          <button class="pm-ic" title="Notes" onclick="pm._dwNotes=pm._dwNotes==='${d.id}'?null:'${d.id}';pmOpenDrawings('${projectId}')" style="${d.notes?'':'opacity:.45'}">📝</button>
+          <button class="pm-ic" title="Move up" onclick="pmDwMove('${d.id}',-1)">↑</button><button class="pm-ic" title="Move down" onclick="pmDwMove('${d.id}',1)">↓</button>
+          <button class="pm-ic" title="Remove" onclick="pmDwDelete('${d.id}')">✕</button></div>`).join('')}
+        <div style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border);align-items:center;flex-wrap:wrap">
+          ${kind==='sheet'?`<input id="pmdw-num-${kind}" style="${sel};width:70px" placeholder="Sheet #">`:''}
+          <input id="pmdw-title-${kind}" style="${sel};flex:1;min-width:160px;font-size:13px" placeholder="${kind==='sheet'?'Add a sheet (e.g. Grading plan)… Enter':'Add a site detail (e.g. Concrete profile)… Enter'}" onkeydown="if(event.key==='Enter'){event.preventDefault();pmDwAdd('${projectId}','${kind}');}">
+          <button class="pm-btn" style="font-size:12px" onclick="pmDwAdd('${projectId}','${kind}')">Add</button>
+          <button class="pm-btn" style="font-size:12px" onclick="pmDwPaste('${projectId}','${kind}')" title="Paste a list, one per line">Paste a list</button></div></div>`:''}
+    </div>`; };
+  pmModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
+      <div><div class="sheet-title" style="margin-bottom:2px">🗂 Drawing set</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)} · the sheet index and site details, separate from phases and tasks</div></div>
+      <div style="display:flex;gap:6px"><button class="pm-btn" onclick="pmReportPreset('drawings','${projectId}')" title="Print or download the sheet index">⬇ Index</button><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove();pmRender()">✕</button></div></div>
+    ${section('sheet','Sheets','📄')}${section('detail','Site details','🔍')}`, 920);
+}
+async function pmDwAdd(projectId, kind){
+  const t = document.getElementById('pmdw-title-'+kind), n = document.getElementById('pmdw-num-'+kind), title = (t.value||'').trim(); if(!title) return;
+  const rows = pmDw(projectId, kind);
+  try{ const r = await sbFetch('POST','/rest/v1/pm_drawings', { project_id:projectId, kind, title, number: n ? n.value.trim() : '', sort: rows.length ? Math.max(...rows.map(x=>x.sort||0))+1 : 0, created_by:(currentUser&&currentUser.email)||'' });
+       pm.drawings = [...(pm.drawings||[]), ...(r||[])]; pmOpenDrawings(projectId); setTimeout(()=>document.getElementById('pmdw-title-'+kind)?.focus(), 30); }
+  catch(e){ alert('Could not add: '+e.message+(/pm_drawings/.test(e.message)?' (the drawing set table isn\u2019t set up)':'')); }
+}
+async function pmDwPaste(projectId, kind){
+  const txt = prompt(kind==='sheet' ? 'Paste your sheet list, one per line (e.g. "C-001 Cover sheet"):' : 'Paste your site details, one per line:'); if(!txt) return;
+  const lines = txt.split(/\r?\n/).map(l=>l.trim()).filter(Boolean); let s = pmDw(projectId, kind).length;
+  const rows = lines.map(l=>{ const m = kind==='sheet' && l.match(/^([A-Z]{1,3}[-.]?\d{1,4}(?:\.\d+)?)\s+[-–:]?\s*(.+)$/i); return { project_id:projectId, kind, number: m?m[1]:'', title: m?m[2]:l, sort: s++, created_by:(currentUser&&currentUser.email)||'' }; });
+  try{ const r = await sbFetch('POST','/rest/v1/pm_drawings', rows); pm.drawings = [...(pm.drawings||[]), ...(r||[])]; pmOpenDrawings(projectId); }catch(e){ alert('Could not add: '+e.message); }
+}
+async function pmDwSave(id, fields){
+  const d = (pm.drawings||[]).find(x=>x.id===id); if(!d) return;
+  try{ await sbFetch('PATCH', `/rest/v1/pm_drawings?id=eq.${id}`, { ...fields, updated_at:new Date().toISOString() }); Object.assign(d, fields); if('status' in fields || 'notes' in fields){ if('notes' in fields) pm._dwNotes = null; pmOpenDrawings(d.project_id); } }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+async function pmDwMove(id, dir){
+  const d = (pm.drawings||[]).find(x=>x.id===id); if(!d) return;
+  const rows = pmDw(d.project_id, d.kind), i = rows.findIndex(x=>x.id===id), j = i+dir; if(j<0 || j>=rows.length) return;
+  rows.splice(j, 0, rows.splice(i,1)[0]); await pmDwResort(rows); pmOpenDrawings(d.project_id);
+}
+async function pmDwResort(rows){ rows.forEach((r,k)=>r.sort=k); try{ await Promise.all(rows.map(r=>sbFetch('PATCH', `/rest/v1/pm_drawings?id=eq.${r.id}`, { sort:r.sort }))); }catch(e){ alert('Could not reorder: '+e.message); } }
+async function pmDwDelete(id){
+  const d = (pm.drawings||[]).find(x=>x.id===id); if(!d || !confirm(`Remove "${d.title}"?`)) return;
+  try{ await sbFetch('DELETE', `/rest/v1/pm_drawings?id=eq.${id}`); pm.drawings = pm.drawings.filter(x=>x.id!==id); pmOpenDrawings(d.project_id); }catch(e){ alert('Could not remove: '+e.message); }
+}
+
+// Drag to reorder (grip handle only, so clicking and editing aren't affected) — tasks and drawing rows
+let pmDrag = null;
+function pmGripDown(el){ const row = el.closest('[data-dnd]'); if(row) row.draggable = true; }
+document.addEventListener('dragstart', e=>{ const row = e.target.closest && e.target.closest('[data-dnd]'); if(!row || !row.draggable) return; pmDrag = { id: row.dataset.id, group: row.dataset.group, type: row.dataset.dnd }; e.dataTransfer.effectAllowed = 'move'; try{ e.dataTransfer.setData('text/plain', row.dataset.id); }catch(x){} row.style.opacity = '.4'; });
+document.addEventListener('dragover', e=>{ if(!pmDrag) return; const row = e.target.closest && e.target.closest('[data-dnd]'); document.querySelectorAll('.pm-drop-above,.pm-drop-below').forEach(r=>r.classList.remove('pm-drop-above','pm-drop-below'));
+  if(!row || row.dataset.group!==pmDrag.group || row.dataset.id===pmDrag.id) return; e.preventDefault(); const b = row.getBoundingClientRect(); row.classList.add(e.clientY < b.top + b.height/2 ? 'pm-drop-above' : 'pm-drop-below'); });
+document.addEventListener('drop', async e=>{ if(!pmDrag) return; const row = e.target.closest && e.target.closest('[data-dnd]'); const d = pmDrag; pmDrag = null;
+  document.querySelectorAll('[data-dnd]').forEach(r=>{ r.draggable = false; r.style.opacity = ''; r.classList.remove('pm-drop-above','pm-drop-below'); });
+  if(!row || row.dataset.group!==d.group || row.dataset.id===d.id) return; e.preventDefault();
+  const b = row.getBoundingClientRect(), after = e.clientY >= b.top + b.height/2;
+  if(d.type==='dw'){ const it = pm.drawings.find(x=>x.id===d.id); const rows = pmDw(it.project_id, it.kind).filter(x=>x.id!==d.id); const k = rows.findIndex(x=>x.id===row.dataset.id) + (after?1:0); rows.splice(k, 0, it); await pmDwResort(rows); pmOpenDrawings(it.project_id); }
+  else { const it = pmItem(d.id); const sibs = pmKids(it.project_id, it.parent_id).filter(x=>x.id!==d.id); const k = sibs.findIndex(x=>x.id===row.dataset.id) + (after?1:0); sibs.splice(k, 0, it); sibs.forEach((s,i)=>s.sort=i); pmRender(); try{ await Promise.all(sibs.map(pmPatchItem)); }catch(x){ alert('Could not reorder: '+x.message); } }
+});
+document.addEventListener('dragend', ()=>{ pmDrag = null; document.querySelectorAll('[data-dnd]').forEach(r=>{ r.draggable = false; r.style.opacity = ''; r.classList.remove('pm-drop-above','pm-drop-below'); }); });
+
+// Select several tasks (Ctrl/Cmd-click, Shift-click for a range) and delete them together
+pm.selected = pm.selected || new Set(); let pmSelAnchor = null;
+function pmSelClick(e, id, bare){
+  if(!(e.ctrlKey || e.metaKey || e.shiftKey || bare)) return false;
+  e.preventDefault(); e.stopPropagation();
+  if(e.shiftKey && pmSelAnchor){
+    const ids = [...document.querySelectorAll('.pm-row[data-id]')].map(r=>r.dataset.id), a = ids.indexOf(pmSelAnchor), b = ids.indexOf(id);
+    if(a>=0 && b>=0) ids.slice(Math.min(a,b), Math.max(a,b)+1).forEach(x=>pm.selected.add(x));
+  } else if(pm.selected.has(id)) pm.selected.delete(id); else pm.selected.add(id);
+  pmSelAnchor = id; pmSelPaint(); return true;
+}
+function pmSelPaint(){
+  document.querySelectorAll('.pm-row[data-id]').forEach(r=>r.classList.toggle('pm-sel', pm.selected.has(r.dataset.id)));
+  let bar = document.getElementById('pm-selbar');
+  if(!pm.selected.size){ bar?.remove(); return; }
+  if(!bar){ bar = document.createElement('div'); bar.id = 'pm-selbar'; bar.style.cssText = 'position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:9000;background:#1f2937;color:#fff;border-radius:12px;padding:10px 14px;display:flex;gap:12px;align-items:center;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.25)'; document.body.appendChild(bar); }
+  bar.innerHTML = `<b>${pm.selected.size} selected</b><button onclick="pmDeleteSelected()" style="background:#dc2626;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-weight:600;cursor:pointer;font-family:inherit">🗑 Delete</button><button onclick="pm.selected.clear();pmSelPaint()" style="background:transparent;color:#fff;border:1px solid #6b7280;border-radius:8px;padding:6px 12px;cursor:pointer;font-family:inherit">Clear</button><span style="font-size:11px;color:#9ca3af">Ctrl/Cmd-click to add · Shift-click for a range</span>`;
+}
+async function pmDeleteSelected(){
+  const ids = [...pm.selected].filter(id=>pmItem(id)); if(!ids.length){ pm.selected.clear(); pmSelPaint(); return; }
+  const all = new Set(ids); ids.forEach(id=>pmDesc(id).forEach(d=>all.add(d.id)));
+  const extra = all.size - ids.length;
+  if(!confirm(`Delete ${ids.length} item${ids.length===1?'':'s'}${extra?` and the ${extra} item${extra===1?'':'s'} under them`:''}?`)) return;
+  try{
+    const list = [...all];
+    for(let i=0;i<list.length;i+=80) await sbFetch('DELETE', `/rest/v1/pm_items?id=in.(${list.slice(i,i+80).join(',')})`);
+    pm.items = pm.items.filter(i=>!all.has(i.id)); pm.items.forEach(i=>{ if(all.has(i.depends_on)) i.depends_on = null; });
+    pm.selected.clear(); pmSelPaint(); pmRender(); pmToast(`Deleted ${list.length} item${list.length===1?'':'s'}`);
+  }catch(e){ alert('Could not delete: '+e.message); }
+}
+
+// ===================== DESIGN PLANNER: REPORTS =====================
+const PM_RP_TYPES = {
+  tasks:{ label:'Tasks & to-dos' }, survey:{ label:'Survey & site visits' }, drawings:{ label:'Drawing index' }, questions:{ label:'Questions' },
+  decisions:{ label:'Decisions' }, time:{ label:'Time (hours)' }, fees:{ label:'Fees & billing' }, submittals:{ label:'Submittals' }, projects:{ label:'Projects' } };
+const PM_RP_LAYOUTS = { table:'Table', list:'Bullet list', checklist:'Checklist', calendar:'Calendar', gantt:'Gantt chart', summary:'Summary' };
+const PM_RP_PAGES = { letter:[816,1056], legal:[816,1344], tabloid:[1056,1632] };
+const PM_SURVEY_RX = /survey|site visit|staking|stake|topo|layout|as-?built|field verif|locate/i;
+function pmRpDefault(){ return { name:'', type:'tasks', projects:[], includeDone:false, person:'', status:'', from:'', to:'', cat:'', text:'', layout:'table', group:'project', page:'letter', orient:'portrait' }; }
+function pmRpRows(c){
+  const projOk = id=>{ const p = pmProject(id); if(!p) return false; return c.projects.length ? c.projects.includes(id) : p.status!=='Complete'; };
+  const pName = id=>(pmProject(id)||{}).name||'';
+  const inRange = d=>(!c.from || (d && d>=c.from)) && (!c.to || (d && d<=c.to));
+  const txt = (...v)=>!c.text || v.join(' ').toLowerCase().includes(c.text.toLowerCase());
+  const leaf = it=>!pm.items.some(x=>x.parent_id===it.id);
+  let rows = [];
+  if(c.type==='tasks' || c.type==='survey'){
+    rows = pm.items.filter(it=>it.type!=='phase' && leaf(it) && projOk(it.project_id) && (c.includeDone || it.status!=='done')
+        && (c.type!=='survey' || PM_SURVEY_RX.test(it.title+' '+(it.description||'')))
+        && (!c.person || it.owner===c.person || it.assigned_to===c.person) && (!c.status || it.status===c.status)
+        && ((!c.from && !c.to) || inRange(it.start_date||it.due_date) || inRange(it.due_date)) && txt(it.title, it.description||''))
+      .map(it=>({ project:pName(it.project_id), title:it.title, person: it.assigned_to||it.owner||'', owner:it.owner||'', assigned:it.assigned_to||'', status:{todo:'Not started',in_progress:'In progress',done:'Done'}[it.status]||it.status, date:it.start_date||it.due_date||'', end:it.due_date||it.start_date||'', hours:Number(it.est_hours)||0, category:(PM_TYPES[it.type]||{}).label||'', done: it.status==='done', phase:(pmItem(it.parent_id)||{}).title||'' }));
+  } else if(c.type==='drawings'){
+    rows = (pm.drawings||[]).filter(d=>projOk(d.project_id) && (c.includeDone || d.status!=='Complete') && (!c.status || d.status===c.status) && txt(d.title, d.number, d.notes||''))
+      .sort((a,b)=>pName(a.project_id).localeCompare(pName(b.project_id)) || a.kind.localeCompare(b.kind)*-1 || (a.sort||0)-(b.sort||0))
+      .map(d=>({ project:pName(d.project_id), title:d.title, number:d.number||'', kindLabel: d.kind==='sheet'?'Sheet':'Site detail', status:d.status, date:d.due_date||'', end:d.due_date||'', notes:d.notes||'', category: d.kind==='sheet'?'Sheets':'Site details', done: d.status==='Complete', person:'' }));
+  } else if(c.type==='questions'){
+    rows = pm.questions.filter(q=>projOk(q.project_id) && (c.includeDone || pmQOpen(q)) && (!c.person || q.owner===c.person || q.asked_of===c.person) && (!c.status || q.status===c.status) && (!c.cat || q.category===c.cat) && inRange(q.due_date||q.asked_on||'') && txt(q.question, q.answer||''))
+      .map(q=>({ project:pName(q.project_id), title:q.question, category:q.category||'', of:q.asked_of||'', person:q.owner||'', status: q.status==='Answered'?'Resolved':q.status, date:q.asked_on||'', end:q.due_date||'', answer:q.answer||'', done:!pmQOpen(q), blocked: !!(pmQOpen(q) && pmQBlockedBy(q)) }));
+  } else if(c.type==='decisions'){
+    rows = pm.decisions.filter(d=>projOk(d.project_id) && (c.includeDone || d.status!=='Superseded') && inRange(d.decided_on||'') && txt(d.topic, d.decision))
+      .map(d=>({ project:pName(d.project_id), title:d.topic, decision:d.decision, category:d.category||'', person:d.decided_by||'', status:d.status, date:d.decided_on||'', end:d.decided_on||'', done:true }));
+  } else if(c.type==='time'){
+    rows = (pm.time||[]).filter(t=>projOk(t.project_id) && (!c.person || t.person===c.person) && inRange(t.work_date) && txt(t.note||'', (pmItem(t.item_id)||{}).title||''))
+      .map(t=>({ project:pName(t.project_id), title:(pmItem(t.item_id)||{}).title||'(project)', person:t.person||'', date:t.work_date, end:t.work_date, hours:Number(t.hours)||0, category: ({billable:'Billable'})[t.category]||(t.category?'Non-billable':'Billable'), where:t.location||'', notes:t.note||'', status:'', done:true }));
+  } else if(c.type==='fees'){
+    rows = pm.items.filter(it=>Number(it.fee) && projOk(it.project_id) && txt(it.title))
+      .map(it=>({ project:pName(it.project_id), title:it.title, amount:Number(it.fee)||0, status: it.billed?'Billed':it.bill_ready?'Ready to bill':'Not billed', date:it.billed_on||it.due_date||'', end:it.due_date||'', person:it.owner||'', invoice:it.invoice_no||'', done:!!it.billed, category:'Fee' }))
+      .filter(r=>(c.includeDone || !r.done) && (!c.status || r.status===c.status) && ((!c.from && !c.to) || inRange(r.date)));
+  } else if(c.type==='submittals'){
+    rows = (pm.submittals||[]).filter(x=>projOk(x.project_id) && inRange(x.sent_on||'') && txt(x.title, x.sent_to||''))
+      .map(x=>({ project:pName(x.project_id), title:x.title, rev:x.revision||'', person:x.sent_to||'', method:x.method||'', date:x.sent_on||'', end:x.sent_on||'', status:'Sent', done:true, category:'Submittal' }));
+  } else if(c.type==='projects'){
+    rows = pm.projects.filter(p=>(c.projects.length ? c.projects.includes(p.id) : (c.includeDone || p.status!=='Complete')) && (!c.cat || (p.tags||[]).includes(c.cat)) && (!c.status || p.status===c.status) && txt(p.name, p.client||'', (p.tags||[]).join(' ')))
+      .map(p=>{ const its = pm.items.filter(i=>i.project_id===p.id && i.type!=='phase'); return { project:p.name, title:p.name, client:p.client||'', kind:p.kind||'', status:p.status||'', tags:(p.tags||[]).join(', '), date:p.start_date||'', end:'', open: its.filter(i=>i.status!=='done').length, hours: pmHoursLogged(t=>t.project_id===p.id), done:p.status==='Complete', category:(p.tags||[])[0]||'', person:'' }; });
+  }
+  return rows;
+}
+function pmRpCols(type){
+  return { tasks:[['project','Project'],['phase','Phase'],['title','Task'],['owner','Owner'],['assigned','Assigned'],['status','Status'],['date','Start','d'],['end','Due','d'],['hours','Est. hrs','h']],
+    survey:[['date','Date','d'],['project','Project'],['title','Task'],['person','Who'],['status','Status'],['end','Due','d']],
+    drawings:[['project','Project'],['kindLabel','Type'],['number','Sheet #'],['title','Title'],['status','Status'],['date','Date','d'],['notes','Notes']],
+    questions:[['project','Project'],['title','Question'],['category','Category'],['of','Answered by'],['person','Chased by'],['date','Asked','d'],['end','Needed by','d'],['status','Status'],['answer','Answer']],
+    decisions:[['project','Project'],['title','Topic'],['decision','Decision'],['category','Category'],['date','Decided','d'],['person','By']],
+    time:[['date','Date','d'],['person','Person'],['project','Project'],['title','Task'],['category','Kind'],['where','Where'],['hours','Hours','h'],['notes','Note']],
+    fees:[['project','Project'],['title','Phase / item'],['amount','Fee','$'],['status','Status'],['invoice','Invoice'],['date','Date','d']],
+    submittals:[['date','Sent','d'],['project','Project'],['title','Submittal'],['rev','Rev'],['person','Sent to'],['method','Method']],
+    projects:[['title','Project'],['client','Client'],['kind','Type'],['tags','Tags'],['status','Status'],['date','Start','d'],['open','Open items'],['hours','Hours logged','h']] }[type];
+}
+const pmRpFmt = (v,k)=>k==='d' ? (v?pmFmt(v):'') : k==='h' ? (v?pmH(v):'') : k==='$' ? (v?'$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2}):'') : pmEsc(v??'');
+function pmRpGroupKey(c, r){ return c.group==='project' ? r.project : c.group==='person' ? (r.person||'Unassigned') : c.group==='status' ? (r.status||'—') : c.group==='category' ? (r.category||'—') : c.group==='date' ? (r.date ? new Date(r.date+'T12:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'}) : 'No date') : ''; }
+function pmRpBody(c){
+  const rows = pmRpRows(c), cols = pmRpCols(c.type), byDate = (a,b)=>(a.date||'9').localeCompare(b.date||'9');
+  if(['tasks','survey','time','submittals','decisions'].includes(c.type)) rows.sort(byDate);
+  const groups = {}; rows.forEach(r=>{ const k = pmRpGroupKey(c, r); (groups[k] = groups[k] || []).push(r); });
+  const keys = Object.keys(groups); if(c.group==='date') keys.sort((a,b)=>(groups[a][0].date||'9').localeCompare(groups[b][0].date||'9')); else keys.sort();
+  const sum = (list,f)=>list.reduce((t,r)=>t+(Number(r[f])||0),0);
+  const th = 'text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:#334155 !important;background:#f1f5f9 !important;padding:5px 6px;border-bottom:2px solid #cbd5e1';
+  const td = 'padding:5px 6px;border-bottom:1px solid #e2e8f0;font-size:11px;vertical-align:top';
+  if(!rows.length) return `<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">Nothing matches these settings.</div>`;
+  const gHead = k=>c.group!=='none' && k ? `<div style="font-weight:700;font-size:13px;color:#1e5631;margin:14px 0 4px;border-bottom:1px solid #1e5631;padding-bottom:2px">${pmEsc(k)} <span style="font-weight:400;color:#64748b;font-size:11px">· ${groups[k].length}${sum(groups[k],'hours')?' · '+pmH(sum(groups[k],'hours')):''}${sum(groups[k],'amount')?' · $'+sum(groups[k],'amount').toLocaleString():''}</span></div>` : '';
+  if(c.layout==='table'){
+    const showCols = cols.filter(([f])=>!(c.group==='project' && f==='project') && rows.some(r=>r[f]!=='' && r[f]!=null && r[f]!==0));
+    return keys.map(k=>`${gHead(k)}<table style="width:100%;border-collapse:collapse"><thead><tr>${showCols.map(([,l])=>`<th style="${th}">${l}</th>`).join('')}</tr></thead><tbody>${groups[k].map(r=>`<tr>${showCols.map(([f,,t])=>`<td style="${td}${t==='h'||t==='$'?';text-align:right':''}">${pmRpFmt(r[f],t)}${f==='title'&&r.blocked?' 🔒':''}</td>`).join('')}</tr>`).join('')}
+      ${(cols.some(x=>x[2]==='h')||cols.some(x=>x[2]==='$')) && groups[k].length>1 ? `<tr>${showCols.map(([f,,t],i)=>`<td style="${td};font-weight:700;border-top:1px solid #94a3b8${t==='h'||t==='$'?';text-align:right':''}">${i===0?'Total':t==='h'?pmH(sum(groups[k],f)):t==='$'?'$'+sum(groups[k],f).toLocaleString():''}</td>`).join('')}</tr>`:''}</tbody></table>`).join('');
+  }
+  const line = r=>`<b>${pmEsc(r.number?r.number+' ':'')}${pmEsc(r.title)}</b>${[c.group!=='project'?r.project:'', r.person, r.status, r.date?pmFmt(r.date):'', r.hours?pmH(r.hours):'', r.amount?'$'+Number(r.amount).toLocaleString():''].filter(Boolean).map(x=>` <span style="color:#64748b">· ${pmEsc(x)}</span>`).join('')}${r.notes?`<div style="color:#475569;font-size:10px">${pmEsc(r.notes)}</div>`:''}${r.answer?`<div style="color:#166534;font-size:10px">Answer: ${pmEsc(r.answer)}</div>`:''}`;
+  if(c.layout==='list') return keys.map(k=>`${gHead(k)}<ul style="margin:4px 0 0 18px;padding:0;font-size:12px;line-height:1.55">${groups[k].map(r=>`<li>${line(r)}</li>`).join('')}</ul>`).join('');
+  if(c.layout==='checklist') return keys.map(k=>`${gHead(k)}<div style="font-size:12px;line-height:1.6">${groups[k].map(r=>`<div style="display:flex;gap:8px;align-items:flex-start;padding:3px 0;border-bottom:1px dotted #e2e8f0"><span style="font-size:14px;line-height:1">${r.done?'☑':'☐'}</span><div>${line(r)}</div></div>`).join('')}</div>`).join('');
+  if(c.layout==='summary'){
+    const tot = { n:rows.length, hours:sum(rows,'hours'), amount:sum(rows,'amount'), done:rows.filter(r=>r.done).length };
+    const late = rows.filter(r=>!r.done && r.end && r.end < pmToday()).length, projs = new Set(rows.map(r=>r.project)).size;
+    const noun = { tasks:'tasks', survey:'survey and site-visit tasks', drawings:'sheets and details', questions:'questions', decisions:'decisions', time:'time entries', fees:'fee items', submittals:'submittals', projects:'projects' }[c.type];
+    return `<div style="font-size:13px;line-height:1.6;margin-bottom:10px">${tot.n} ${noun} across ${projs} project${projs===1?'':'s'}${tot.done && tot.done<tot.n?`; ${tot.done} done, ${tot.n-tot.done} open`:''}${late?`; <b style="color:#b91c1c">${late} past due</b>`:''}${tot.hours?`; ${pmH(tot.hours)} total`:''}${tot.amount?`; $${tot.amount.toLocaleString()} total`:''}.</div>
+      <table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">${c.group==='none'?'All':({project:'Project',person:'Person',status:'Status',category:'Category',date:'Month'})[c.group]}</th><th style="${th};text-align:right">Count</th>${tot.hours?`<th style="${th};text-align:right">Hours</th>`:''}${tot.amount?`<th style="${th};text-align:right">Amount</th>`:''}<th style="${th};text-align:right">Open</th></tr></thead><tbody>
+      ${keys.map(k=>`<tr><td style="${td}">${pmEsc(k||'All')}</td><td style="${td};text-align:right">${groups[k].length}</td>${tot.hours?`<td style="${td};text-align:right">${pmH(sum(groups[k],'hours'))}</td>`:''}${tot.amount?`<td style="${td};text-align:right">$${sum(groups[k],'amount').toLocaleString()}</td>`:''}<td style="${td};text-align:right">${groups[k].filter(r=>!r.done).length}</td></tr>`).join('')}</tbody></table>`;
+  }
+  const dated = rows.filter(r=>r.date || r.end);
+  if(!dated.length) return `<div style="padding:30px;text-align:center;color:#64748b;font-size:13px">These items have no dates to place on a ${c.layout==='calendar'?'calendar':'chart'}.</div>`;
+  const first = c.from || dated.map(r=>r.date||r.end).sort()[0], last = c.to || dated.map(r=>r.end||r.date).sort().slice(-1)[0];
+  if(c.layout==='calendar'){
+    const out = []; let m = new Date(first.slice(0,7)+'-01T12:00:00'); const stop = new Date(last.slice(0,7)+'-01T12:00:00');
+    for(let n=0; m<=stop && n<12; n++, m = new Date(m.getFullYear(), m.getMonth()+1, 1, 12)){
+      const y = m.getFullYear(), mo = m.getMonth(), days = new Date(y, mo+1, 0).getDate(), lead = new Date(y, mo, 1).getDay();
+      const cells = []; for(let i=0;i<lead;i++) cells.push(''); for(let d=1; d<=days; d++){ const iso = new Date(y,mo,d,12).toLocaleDateString('en-CA'); const evs = rows.filter(r=>(r.date||r.end)===iso || (r.date && r.end && r.date<iso && r.end>=iso && c.type!=='time'));
+        cells.push(`<div style="font-size:10px;font-weight:700;color:#334155">${d}</div>${evs.slice(0,4).map(r=>`<div style="font-size:9px;background:${r.done?'#e2e8f0':'#dcfce7'};border-radius:3px;padding:1px 3px;margin-top:2px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${pmEsc(r.title)}${r.person&&c.group!=='person'?' · '+pmEsc(r.person):''}</div>`).join('')}${evs.length>4?`<div style="font-size:9px;color:#64748b">+${evs.length-4} more</div>`:''}`); }
+      while(cells.length%7) cells.push('');
+      out.push(`<div style="font-weight:700;font-size:14px;color:#1e5631;margin:12px 0 6px">${m.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</div>
+        <div style="display:grid;grid-template-columns:repeat(7,1fr);border-left:1px solid #cbd5e1;border-top:1px solid #cbd5e1">${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(x=>`<div style="font-size:9px;font-weight:700;text-align:center;padding:3px;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;background:#f1f5f9">${x}</div>`).join('')}
+        ${cells.map(x=>`<div style="min-height:70px;padding:3px;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1">${x}</div>`).join('')}</div>`);
+    }
+    return out.join('');
+  }
+  // Gantt
+  const t0 = new Date(first+'T12:00:00'), t1 = new Date(last+'T12:00:00'), span = Math.max(1, Math.round((t1-t0)/864e5)+1);
+  const pos = d=>Math.max(0, Math.min(100, (Math.round((new Date(d+'T12:00:00')-t0)/864e5))/span*100));
+  const ticks = []; for(let d = new Date(t0); d<=t1; d = new Date(d.getTime()+7*864e5)) ticks.push(d);
+  return keys.map(k=>`${gHead(k)}<div style="position:relative;margin-left:34%;height:16px;border-bottom:1px solid #cbd5e1">${ticks.map(d=>`<span style="position:absolute;left:${pos(d.toLocaleDateString('en-CA'))}%;font-size:8px;color:#64748b">${d.toLocaleDateString('en-US',{month:'numeric',day:'numeric'})}</span>`).join('')}</div>
+    ${groups[k].filter(r=>r.date||r.end).map(r=>{ const a = pos(r.date||r.end), b = pos(r.end||r.date); return `<div style="display:flex;align-items:center;height:20px;border-bottom:1px solid #f1f5f9"><div style="width:34%;font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding-right:6px">${pmEsc(r.title)}${r.person&&c.group!=='person'?` <span style="color:#64748b">· ${pmEsc(r.person)}</span>`:''}</div><div style="position:relative;flex:1;height:12px"><div style="position:absolute;left:${a}%;width:${Math.max(0.8,b-a+100/span)}%;height:12px;border-radius:3px;background:${r.done?'#94a3b8':'#4a9c3f'}"></div></div></div>`; }).join('')}`).join('');
+}
+function pmRpTitle(c){
+  if(c.name) return c.name;
+  const ps = c.projects.length===1 ? (pmProject(c.projects[0])||{}).name : c.projects.length ? `${c.projects.length} projects` : 'All active projects';
+  return `${PM_RP_TYPES[c.type].label}${c.person?' · '+c.person:''} · ${ps}`;
+}
+function pmReportsHtml(){
+  pm.rp = pm.rp || pmRpDefault(); const c = pm.rp;
+  const sel = 'font-size:13px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
+  const lbl = 'font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-2);margin:10px 0 3px';
+  const set = (k,v)=>`pm.rp.${k}=${v};pmRender()`;
+  const people = [...new Set([...pmAssignPeople(), ...pm.questions.map(q=>q.asked_of).filter(Boolean), ...(pm.time||[]).map(t=>t.person).filter(Boolean)])].sort();
+  const cats = c.type==='projects' ? [...new Set(pm.projects.flatMap(p=>p.tags||[]))].sort() : [...new Set(pm.questions.map(q=>q.category).filter(Boolean))].sort();
+  const statuses = { tasks:[['todo','Not started'],['in_progress','In progress'],['done','Done']], survey:[['todo','Not started'],['in_progress','In progress'],['done','Done']], drawings:PM_DW_STATUSES.map(x=>[x,x]), questions:PM_Q_STATUSES.map(x=>[x,x]), fees:[['Not billed','Not billed'],['Ready to bill','Ready to bill'],['Billed','Billed']], projects:[...new Set(pm.projects.map(p=>p.status).filter(Boolean))].map(x=>[x,x]) }[c.type] || [];
+  const [pw, ph] = PM_RP_PAGES[c.page] || PM_RP_PAGES.letter, W = c.orient==='landscape' ? ph : pw, H = c.orient==='landscape' ? pw : ph;
+  const presets = [['survey','Robert\u2019s survey schedule'],['drawings','Drawing index'],['hours','Hours by person (this month)'],['questions','Open questions by category'],['projects','Projects by tag']];
+  return `<div style="display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start">
+    <div class="pm-card" style="padding:12px 14px;position:sticky;top:10px">
+      <div style="font-weight:700;margin-bottom:4px">Build a report</div>
+      <div style="${lbl}">Quick start</div>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">${presets.map(([k,l])=>`<button class="pm-btn" style="font-size:11px;padding:3px 8px" onclick="pmReportPreset('${k}')">${l}</button>`).join('')}</div>
+      ${(pm.reports||[]).length?`<div style="${lbl}">Saved reports</div><div style="display:flex;flex-wrap:wrap;gap:4px">${pm.reports.map(r=>`<span style="display:inline-flex;align-items:center;border:1px solid var(--border-2);border-radius:99px;font-size:11px"><a style="cursor:pointer;padding:3px 8px" onclick="pm.rp={...pmRpDefault(),...(pm.reports.find(x=>x.id==='${r.id}')||{}).config};pmRender()">${pmEsc(r.name)}</a><a style="cursor:pointer;padding:3px 6px;color:var(--text-3)" title="Delete" onclick="pmRpDelete('${r.id}')">✕</a></span>`).join('')}</div>`:''}
+      <div style="${lbl}">What</div><select style="${sel}" onchange="pm.rp.type=this.value;pm.rp.status='';pm.rp.cat='';pmRender()">${Object.entries(PM_RP_TYPES).map(([k,v])=>`<option value="${k}"${c.type===k?' selected':''}>${v.label}</option>`).join('')}</select>
+      <div style="${lbl}">Projects</div><select style="${sel};height:${Math.min(120, 22*Math.max(3,pm.projects.length))}px" multiple onchange="pm.rp.projects=[...this.selectedOptions].map(o=>o.value);pmRender()">${pm.projects.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${p.id}"${c.projects.includes(p.id)?' selected':''}>${pmEsc(p.name)}${p.status==='Complete'?' (complete)':''}</option>`).join('')}</select>
+      <div style="font-size:10px;color:var(--text-3)">None selected = all active projects. Ctrl/Cmd-click for several.</div>
+      ${['tasks','survey','questions','time','decisions'].includes(c.type)?`<div style="${lbl}">Person</div><select style="${sel}" onchange="pm.rp.person=this.value;pmRender()"><option value="">Anyone</option>${people.map(n=>`<option${c.person===n?' selected':''}>${pmEsc(n)}</option>`).join('')}</select>`:''}
+      ${statuses.length?`<div style="${lbl}">Status</div><select style="${sel}" onchange="pm.rp.status=this.value;pmRender()"><option value="">Any</option>${statuses.map(([v,l])=>`<option value="${v}"${c.status===v?' selected':''}>${l}</option>`).join('')}</select>`:''}
+      ${cats.length && ['questions','projects'].includes(c.type)?`<div style="${lbl}">${c.type==='projects'?'Tag':'Category'}</div><select style="${sel}" onchange="pm.rp.cat=this.value;pmRender()"><option value="">Any</option>${cats.map(x=>`<option${c.cat===x?' selected':''}>${pmEsc(x)}</option>`).join('')}</select>`:''}
+      <div style="${lbl}">Dates</div><div style="display:flex;gap:4px"><input type="date" style="${sel}" value="${c.from}" onchange="pm.rp.from=this.value;pmRender()"><input type="date" style="${sel}" value="${c.to}" onchange="pm.rp.to=this.value;pmRender()"></div>
+      <div style="${lbl}">Search</div><input style="${sel}" value="${pmEsc(c.text)}" placeholder="Words in the title or notes" onchange="pm.rp.text=this.value;pmRender()">
+      <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin-top:8px"><input type="checkbox" ${c.includeDone?'checked':''} onchange="pm.rp.includeDone=this.checked;pmRender()"> Include done / resolved / complete</label>
+      <div style="${lbl}">Layout</div><select style="${sel}" onchange="pm.rp.layout=this.value;pmRender()">${Object.entries(PM_RP_LAYOUTS).map(([k,v])=>`<option value="${k}"${c.layout===k?' selected':''}>${v}</option>`).join('')}</select>
+      <div style="${lbl}">Group by</div><select style="${sel}" onchange="pm.rp.group=this.value;pmRender()">${[['project','Project'],['person','Person'],['status','Status'],['category','Category / type'],['date','Month'],['none','No grouping']].map(([k,v])=>`<option value="${k}"${c.group===k?' selected':''}>${v}</option>`).join('')}</select>
+      <div style="${lbl}">Page</div><div style="display:flex;gap:4px"><select style="${sel}" onchange="pm.rp.page=this.value;pmRender()">${[['letter','Letter 8½×11'],['legal','Legal 8½×14'],['tabloid','Tabloid 11×17']].map(([k,v])=>`<option value="${k}"${c.page===k?' selected':''}>${v}</option>`).join('')}</select>
+        <select style="${sel}" onchange="pm.rp.orient=this.value;pmRender()">${[['portrait','Portrait'],['landscape','Landscape']].map(([k,v])=>`<option value="${k}"${c.orient===k?' selected':''}>${v}</option>`).join('')}</select></div>
+      <div style="${lbl}">Title</div><input style="${sel}" value="${pmEsc(c.name)}" placeholder="${pmEsc(pmRpTitle({...c,name:''}))}" onchange="pm.rp.name=this.value;pmRender()">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px">
+        <button class="pm-btn primary" onclick="pmRpExport('pdf')">⬇ PDF</button><button class="pm-btn" onclick="pmRpExport('png')">⬇ Image</button><button class="pm-btn" onclick="pmRpExport('doc')">⬇ Word</button></div>
+      <div style="display:flex;gap:6px;margin-top:8px"><button class="pm-btn" style="flex:1" onclick="pmRpSave()">💾 Save this report</button><button class="pm-btn" onclick="pm.rp=pmRpDefault();pmRender()">Reset</button></div>
+    </div>
+    <div id="pm-rp-wrap" data-w="${W}" style="overflow:hidden;background:#e2e8f0;border-radius:10px;padding:16px;min-width:0">
+      <div id="pm-rp-scale" style="transform-origin:top left">
+      <div id="pm-rp-page" style="width:${W}px;min-height:${H}px;margin:0 auto;background:#fff;color:#0f172a;box-shadow:0 2px 10px rgba(0,0,0,.12);padding:40px 44px;box-sizing:border-box;font-family:Helvetica,Arial,sans-serif">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #1e5631;padding-bottom:6px;margin-bottom:6px">
+          <div><div style="font-size:18px;font-weight:700;color:#1e5631">${pmEsc(pmRpTitle(c))}</div>
+            <div style="font-size:10px;color:#64748b">${[c.from||c.to?`${c.from?pmFmt(c.from):'…'} – ${c.to?pmFmt(c.to):'…'}`:'', c.status?`Status: ${(statuses.find(x=>x[0]===c.status)||[,c.status])[1]}`:'', c.cat?`${c.type==='projects'?'Tag':'Category'}: ${c.cat}`:'', c.text?`“${c.text}”`:''].filter(Boolean).map(pmEsc).join(' · ')}</div></div>
+          <div style="font-size:10px;color:#64748b;text-align:right">Field Source<br>${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div></div>
+        ${pmRpBody(c)}
+      </div></div></div></div>`;
+}
+function pmRpFit(){
+  const wrap = document.getElementById('pm-rp-wrap'), sc = document.getElementById('pm-rp-scale'), page = document.getElementById('pm-rp-page'); if(!wrap || !sc || !page) return;
+  const W = Number(wrap.dataset.w)||page.offsetWidth, avail = wrap.clientWidth - 32, k = Math.min(1, avail / W);
+  sc.style.transform = k < 1 ? `scale(${k})` : ''; sc.style.width = W+'px'; sc.style.height = k < 1 ? (page.offsetHeight * k)+'px' : '';
+}
+window.addEventListener('resize', ()=>{ if(typeof pm!=='undefined' && pm.tab==='reports') pmRpFit(); });
+function pmReportPreset(k, projectId){
+  const today = pmToday(), mStart = today.slice(0,8)+'01', mEnd = new Date(new Date(mStart+'T12:00:00').getFullYear(), new Date(mStart+'T12:00:00').getMonth()+1, 0, 12).toLocaleDateString('en-CA');
+  const base = pmRpDefault();
+  pm.rp = k==='survey' ? { ...base, type:'survey', person:'Robert', layout:'table', group:'none', from:today, name:'Robert\u2019s survey schedule' }
+    : k==='drawings' ? { ...base, type:'drawings', projects: projectId?[projectId]:[], includeDone:true, layout:'table', group:'category', name: projectId ? `${(pmProject(projectId)||{}).name||''} · Drawing index` : 'Drawing index' }
+    : k==='hours' ? { ...base, type:'time', group:'person', layout:'summary', from:mStart, to:mEnd, name:`Hours by person · ${new Date(mStart+'T12:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'})}` }
+    : k==='questions' ? { ...base, type:'questions', group:'category', layout:'table', name:'Open questions by category' }
+    : k==='projects' ? { ...base, type:'projects', group:'category', layout:'table', name:'Projects by tag' } : base;
+  document.getElementById('pm-overlay')?.remove();
+  if(pm.tab!=='reports') pmShow('reports'); else pmRender();
+}
+async function pmRpSave(){
+  const name = prompt('Name this report:', pm.rp.name || pmRpTitle(pm.rp)); if(!name) return;
+  try{ const r = await sbFetch('POST','/rest/v1/pm_reports', { name, config:{ ...pm.rp, name }, created_by:(currentUser&&currentUser.email)||'' }); pm.reports = [...(pm.reports||[]), ...(r||[])].sort((a,b)=>a.name.localeCompare(b.name)); pm.rp.name = name; pmRender(); pmToast('Report saved'); }
+  catch(e){ alert('Could not save: '+e.message); }
+}
+async function pmRpDelete(id){ const r = (pm.reports||[]).find(x=>x.id===id); if(!r || !confirm(`Delete the saved report "${r.name}"?`)) return; try{ await sbFetch('DELETE', `/rest/v1/pm_reports?id=eq.${id}`); pm.reports = pm.reports.filter(x=>x.id!==id); pmRender(); }catch(e){ alert('Could not delete: '+e.message); } }
+async function pmRpExport(kind){
+  const page = document.getElementById('pm-rp-page'); if(!page) return;
+  const c = pm.rp, title = pmRpTitle(c), fname = (`Field Source - ${title}`).replace(/[\\/:*?"<>|]+/g,'-').slice(0,120);
+  if(kind==='doc'){
+    const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"><head><meta charset="utf-8"><title>${pmEsc(title)}</title>
+      <style>@page{size:${c.orient==='landscape'?'landscape':'portrait'};margin:0.6in} body{font-family:Arial,sans-serif} table{border-collapse:collapse;width:100%} td,th{border:1px solid #cbd5e1;padding:4px}</style></head><body>${page.innerHTML}</body></html>`;
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff', html], { type:'application/msword' })); a.download = fname+'.doc'; a.click(); return;
+  }
+  pmToast(kind==='pdf'?'Building the PDF…':'Building the image…');
+  try{
+    await qqLoadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+    const sc = document.getElementById('pm-rp-scale'), keep = sc ? sc.style.transform : '';
+    if(sc) sc.style.transform = '';
+    let canvas; try{ canvas = await html2canvas(page, { scale:2, backgroundColor:'#ffffff' }); } finally { if(sc) sc.style.transform = keep; }
+    if(kind==='png'){ const a = document.createElement('a'); a.href = canvas.toDataURL('image/png'); a.download = fname+'.png'; a.click(); return; }
+    await qqLoadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+    const { jsPDF } = window.jspdf, doc = new jsPDF({ unit:'pt', format: c.page==='tabloid'?'tabloid':c.page==='legal'?'legal':'letter', orientation: c.orient });
+    const PW = doc.internal.pageSize.getWidth(), PH = doc.internal.pageSize.getHeight(), scale = PW / canvas.width, sliceH = Math.floor(PH / scale);
+    for(let y = 0, pg = 0; y < canvas.height; y += sliceH, pg++){
+      if(pg) doc.addPage();
+      const h = Math.min(sliceH, canvas.height - y), part = document.createElement('canvas'); part.width = canvas.width; part.height = h;
+      part.getContext('2d').drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+      doc.addImage(part.toDataURL('image/png'), 'PNG', 0, 0, PW, h*scale);
+    }
+    doc.save(fname+'.pdf');
+  }catch(e){ alert('Could not build the file: '+e.message); }
 }
 
 // ── People, assignments, notifications, My Work ──
@@ -3765,7 +4169,7 @@ function pmMyWorkHtml(){
   const today = pmToday(), wkEnd = pmShift(today, 7 - pmD(today).getDay()), twoWk = pmShift(today, 14);
   const projs = new Map(pm.projects.filter(p=>p.status!=='Complete').map(p=>[p.id,p]));
   const leaf = it=>!pm.items.some(c=>c.parent_id===it.id);
-  const mine = pm.items.filter(it=>it.type!=='phase' && projs.has(it.project_id) && leaf(it) && (who ? it.owner===who : !!it.owner) && (pm.myShowDone || it.status!=='done')
+  const mine = pm.items.filter(it=>it.type!=='phase' && projs.has(it.project_id) && leaf(it) && (who ? (it.owner===who || it.assigned_to===who) : !!(it.owner||it.assigned_to)) && (pm.myShowDone || it.status!=='done')
     && (pm.myParty==='all' || !pm.myParty ? true : pm.myParty==='fs' ? !pmIsExternal(it) : pmIsExternal(it)));
   const dateOf = it=>it.due_date || it.start_date || null;
   const buckets = [
@@ -3797,7 +4201,7 @@ function pmMyWorkHtml(){
     </div>`;
   };
   const unread = who ? pmUnreadFor(who) : [];
-  const counts = PM_OWNERS.map(o=>[o.name, pm.items.filter(it=>it.owner===o.name && it.status!=='done' && it.type!=='phase' && projs.has(it.project_id) && leaf(it)).length]);
+  const counts = PM_OWNERS.map(o=>[o.name, pm.items.filter(it=>(it.owner===o.name || it.assigned_to===o.name) && it.status!=='done' && it.type!=='phase' && projs.has(it.project_id) && leaf(it)).length]);
   return `<div class="pm-narrow">
     <div class="pm-card" style="margin-bottom:12px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -3823,7 +4227,7 @@ function pmMyWorkHtml(){
         <div style="padding:8px 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:${color};background:var(--surface);border-bottom:1px solid var(--border)">${label} · ${list.length}</div>
         ${list.map(row).join('')}</div>`;
     }).join('') || `<div class="pm-card" style="color:var(--text-3);font-size:13px">${who?`Nothing assigned to ${pmEsc(who)} right now.`:'No tasks are assigned to anyone yet.'} Assign tasks with the Owner field on any task.</div>`}
-    ${(()=>{ const qs = pm.questions.filter(q=>q.status==='Open' && projs.has(q.project_id) && (who ? q.owner===who : !!q.owner)).sort((a,b)=>(a.due_date||'9').localeCompare(b.due_date||'9'));
+    ${(()=>{ const qs = pm.questions.filter(q=>pmQOpen(q) && projs.has(q.project_id) && (who ? q.owner===who : !!q.owner)).sort((a,b)=>(a.due_date||'9').localeCompare(b.due_date||'9'));
       return qs.length ? `<div class="pm-card" style="padding:0;overflow:hidden;margin-bottom:12px">
         <div style="padding:8px 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#1d4ed8;background:var(--surface);border-bottom:1px solid var(--border)">Questions ${who?'to chase':'being chased'} · ${qs.length}</div>
         ${qs.map(q=>{ const p = projs.get(q.project_id), late = q.due_date && q.due_date < today; return `<div class="pm-row" style="padding-left:10px">
@@ -3994,58 +4398,40 @@ function pmIsFsName(n){ return PM_OWNERS.some(o=>o.name===n); }
 
 // ===== 1. Open questions =====
 function pmQs(projectId){ return pm.questions.filter(q=>q.project_id===projectId); }
-function pmOpenQuestions(projectId){
-  const p = pmProject(projectId); if(!p) return;
-  pm._qShowAll = pm._qShowAll || false;
-  const list = pmQs(projectId).filter(q=>pm._qShowAll || q.status==='Open').sort((a,b)=>(a.status!=='Open')-(b.status!=='Open') || (a.due_date||'9').localeCompare(b.due_date||'9'));
-  const openN = pmQs(projectId).filter(q=>q.status==='Open').length;
-  pmModal(`
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
-      <div><div class="sheet-title" style="margin-bottom:2px">❓ Open questions</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)} · ${openN} open · things we're waiting to decide or hear back on</div></div>
-      <div style="display:flex;gap:6px"><button class="pm-btn primary" onclick="pmEditQuestion(null,'${projectId}')">+ Add a question</button><button class="pm-btn" onclick="document.getElementById('pm-overlay').remove()">✕</button></div>
-    </div>
-    <label style="font-size:12px;display:flex;gap:4px;align-items:center;margin:10px 0"><input type="checkbox" ${pm._qShowAll?'checked':''} onchange="pm._qShowAll=this.checked;pmOpenQuestions('${projectId}')"> Show answered and dropped</label>
-    <div style="max-height:60vh;overflow-y:auto">${list.map(q=>{
-      const late = q.status==='Open' && q.due_date && q.due_date < pmToday(), it = q.item_id && pmItem(q.item_id);
-      return `<div style="border:1px solid ${late?'#fca5a5':'var(--border)'};border-radius:8px;padding:9px 11px;margin-bottom:6px;${q.status!=='Open'?'opacity:.65':''}">
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-          <div style="font-size:14px;font-weight:600;white-space:pre-wrap">${pmEsc(q.question)}</div>
-          <div style="display:flex;gap:4px;flex-shrink:0;align-items:center">
-            ${q.status==='Open'?`<button class="pm-btn primary" style="font-size:11px;padding:3px 8px" onclick="pmAnswerQuestion('${q.id}')">Answer</button>`:`<span class="pm-chip" style="background:${q.status==='Answered'?'#dcfce7;color:#166534':'#f1f5f9;color:#64748b'}">${q.status}</span>`}
-            <button class="pm-ic" title="Edit" onclick="pmEditQuestion('${q.id}','${projectId}')">✎</button></div>
-        </div>
-        <div style="font-size:11px;color:${late?'#dc2626':'var(--text-3)'};margin-top:3px">${q.asked_of?'Waiting on <b>'+pmEsc(q.asked_of)+'</b>':'Who answers: not set'}${q.owner?' · '+pmEsc(q.owner)+' chasing':''}${q.due_date?` · ${late?'overdue, ':''}need by ${pmFmt(q.due_date)}`:''}${q.asked_on?' · asked '+pmFmt(q.asked_on):''}${it?' · re: '+pmEsc(it.title):''}</div>
-        ${q.status==='Answered'?`<div style="font-size:13px;margin-top:5px;padding:6px 8px;background:var(--bg);border-radius:6px"><b>Answer${q.answered_on?' ('+pmFmt(q.answered_on)+')':''}:</b> ${pmEsc(q.answer)}${q.decision_id?' <span class="pm-chip">📋 in decision log</span>':''}</div>`:''}
-      </div>`; }).join('') || `<div style="padding:14px;font-size:13px;color:var(--text-3)">${pmQs(projectId).length?'No open questions.':'Nothing yet. Add questions as they come up ("Does the AD want the cages inside the fence?") with who owes the answer and by when.'}</div>`}</div>`, 760);
-}
 function pmEditQuestion(id, projectId, prefill){
-  const q = id ? pm.questions.find(x=>x.id===id) : { question:'', asked_of:'', owner: pmMe()||'', asked_on: pmToday(), due_date:'', item_id:'', status:'Open', ...(prefill||{}) };
+  const q = id ? pm.questions.find(x=>x.id===id) : { question:'', asked_of:'', owner: pmMe()||'', asked_on: pmToday(), due_date:'', item_id:'', category:'', depends_on:'', status:'Not started', ...(prefill||{}) };
+  const qCats = [...new Set([...PM_Q_CATS, ...pm.questions.map(x=>x.category).filter(Boolean)])];
+  const others = pm.questions.filter(x=>x.project_id===projectId && x.id!==id);
   const p = pmProject(projectId);
   const items = pm.items.filter(i=>i.project_id===projectId).sort((a,b)=>(a.sort||0)-(b.sort||0));
   const askOpts = [...new Set([p&&p.client, ...PM_OWNERS.map(o=>o.name), ...pm.questions.map(x=>x.asked_of)].filter(Boolean))];
   pmModal(`<div class="sheet-title">${id?'Edit question':'Add a question'}</div>
     <div style="margin-top:8px"><div class="pm-lbl">Question</div><textarea id="pmq-q" class="pm-in" rows="2" placeholder="e.g. Does the AD want the batting cages inside the outfield fence?">${pmEsc(q.question)}</textarea></div>
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:10px">
-      <div><div class="pm-lbl">Who owes the answer</div><input id="pmq-of" class="pm-in" list="pmq-ofs" value="${pmEsc(q.asked_of||'')}" placeholder="Client, a sub, or one of us"><datalist id="pmq-ofs">${askOpts.map(n=>`<option value="${pmEsc(n)}">`).join('')}</datalist></div>
-      <div><div class="pm-lbl">Field Source person chasing it</div><select id="pmq-owner" class="pm-in"><option value="">—</option>${PM_OWNERS.map(o=>`<option${q.owner===o.name?' selected':''}>${o.name}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Category</div><input id="pmq-cat" class="pm-in" list="pmq-cats" value="${pmEsc(q.category||'')}" placeholder="Baseball, site utilities, grading…"><datalist id="pmq-cats">${qCats.map(c=>`<option value="${pmEsc(c)}">`).join('')}</datalist></div>
+      <div><div class="pm-lbl">Waits on (can't ask until this is answered)</div><select id="pmq-dep" class="pm-in"><option value="">Nothing</option>${others.map(x=>`<option value="${x.id}"${q.depends_on===x.id?' selected':''}>${pmQOpen(x)?'':'✓ '}${pmEsc(x.question.slice(0,70))}</option>`).join('')}</select></div>
+      <div><div class="pm-lbl">Who answers it</div><input id="pmq-of" class="pm-in" list="pmq-ofs" value="${pmEsc(q.asked_of||'')}" placeholder="Client, a sub, or one of us"><datalist id="pmq-ofs">${askOpts.map(n=>`<option value="${pmEsc(n)}">`).join('')}</datalist></div>
+      <div><div class="pm-lbl">Chased by (Field Source)</div><select id="pmq-owner" class="pm-in"><option value="">—</option>${PM_OWNERS.map(o=>`<option${q.owner===o.name?' selected':''}>${o.name}</option>`).join('')}</select></div>
       <div><div class="pm-lbl">Asked on</div><input id="pmq-on" type="date" class="pm-in" value="${pmEsc(q.asked_on||'')}"></div>
       <div><div class="pm-lbl">Need an answer by</div><input id="pmq-due" type="date" class="pm-in" value="${pmEsc(q.due_date||'')}"></div>
     </div>
     <div style="margin-top:10px"><div class="pm-lbl">Came up in (optional)</div><select id="pmq-item" class="pm-in"><option value="">Whole project</option>${items.map(i=>`<option value="${i.id}"${q.item_id===i.id?' selected':''}>${i.type==='phase'?'▤ ':'  '}${pmEsc(i.title)}</option>`).join('')}</select></div>
-    ${id?`<div style="margin-top:10px"><div class="pm-lbl">Status</div><select id="pmq-status" class="pm-in">${['Open','Answered','Dropped'].map(s=>`<option${q.status===s?' selected':''}>${s}</option>`).join('')}</select></div>`:''}
+    <div style="margin-top:10px"><div class="pm-lbl">Status</div><select id="pmq-status" class="pm-in">${PM_Q_STATUSES.map(s=>`<option${(pmQOpen(q)?'Not started':q.status==='Answered'?'Resolved':q.status)===s?' selected':''}>${s}</option>`).join('')}</select></div>
     <div id="pmq-err" style="color:#b91c1c;font-size:12px;margin-top:8px"></div>
     <div style="display:flex;justify-content:space-between;margin-top:14px"><div>${id?`<button class="pm-btn" style="color:#b91c1c" onclick="pmDeleteRow('pm_questions','questions','${id}',()=>pmOpenQuestions('${projectId}'))">Delete</button>`:''}</div>
     <div style="display:flex;gap:8px"><button class="pm-btn" onclick="pmOpenQuestions('${projectId}')">Back</button><button class="pm-btn primary" onclick="pmSaveQuestion(${id?`'${id}'`:'null'},'${projectId}')">Save</button></div></div>`, 640);
 }
 async function pmSaveQuestion(id, projectId){
   const g = k=>(document.getElementById(k)||{}).value;
-  const row = { project_id:projectId, question:(g('pmq-q')||'').trim(), asked_of:(g('pmq-of')||'').trim(), owner:g('pmq-owner')||'', asked_on:g('pmq-on')||null, due_date:g('pmq-due')||null, item_id:g('pmq-item')||null };
-  if(id && g('pmq-status')) row.status = g('pmq-status');
+  const row = { project_id:projectId, question:(g('pmq-q')||'').trim(), asked_of:(g('pmq-of')||'').trim(), owner:g('pmq-owner')||'', asked_on:g('pmq-on')||null, due_date:g('pmq-due')||null, item_id:g('pmq-item')||null,
+    category:(g('pmq-cat')||'').trim(), depends_on:g('pmq-dep')||null };
+  if(g('pmq-status')) row.status = g('pmq-status');
   if(!row.question){ document.getElementById('pmq-err').textContent='Type the question.'; return; }
   try{
     const old = id ? pm.questions.find(x=>x.id===id) : null;
     if(id){ await sbFetch('PATCH', `/rest/v1/pm_questions?id=eq.${id}`, row); Object.assign(old, row); }
-    else { const r = await sbFetch('POST','/rest/v1/pm_questions', { ...row, status:'Open', created_by:(currentUser&&currentUser.email)||'' }); pm.questions.push(r[0]); }
+    else { const r = await sbFetch('POST','/rest/v1/pm_questions', { status:'Not started', ...row, created_by:(currentUser&&currentUser.email)||'' }); pm.questions.push(r[0]); }
+    if(row.status==='Resolved' && (!old || pmQOpen(old)) && !(old && old.answer)){ const nq = old || pm.questions[pm.questions.length-1]; pmAnswerQuestion(nq.id); return; }
     if(row.owner && row.owner!==pmMe() && (!old || old.owner!==row.owner)) pmNotifyText(row.owner, projectId, `asked you to chase: ${row.question}`);
     pmOpenQuestions(projectId); pmRender();
   }catch(e){ document.getElementById('pmq-err').textContent = 'Could not save: '+e.message; }
@@ -4071,10 +4457,13 @@ async function pmSaveAnswer(id){
     let decision_id = null;
     if(document.getElementById('pma-dec').checked){
       const topic = q.question.replace(/\?+\s*$/,'').slice(0,120);
-      const r = await sbFetch('POST','/rest/v1/pm_decisions', { project_id:q.project_id, item_id:q.item_id||null, topic, decision:ans, category:'Other', decided_on:on, decided_by:by, source:'Question answered', status:'Final', notes:`From open question: ${q.question}`, created_by:(currentUser&&currentUser.email)||'' });
+      const hist = [`Question: ${q.question}`, q.category?`Category: ${q.category}`:'', q.asked_on?`Asked ${pmFmt(q.asked_on)}${q.owner?' by '+q.owner:''}`:'', q.asked_of?`Asked of: ${q.asked_of}`:'', `Answered ${pmFmt(on)}${by?' by '+by:''}`].filter(Boolean).join(' · ');
+      const r = await sbFetch('POST','/rest/v1/pm_decisions', { project_id:q.project_id, item_id:q.item_id||null, topic, decision:ans, category:'Other', decided_on:on, decided_by:by, source:'Question answered', status:'Final', notes:hist, created_by:(currentUser&&currentUser.email)||'' });
       pm.decisions.push(r[0]); decision_id = r[0].id;
     }
-    const upd = { status:'Answered', answer:ans, answered_on:on, decision_id };
+    const upd = { status:'Resolved', answer:ans, answered_on:on, decision_id };
+    const unblocked = pm.questions.filter(x=>x.depends_on===id && pmQOpen(x));
+    if(unblocked.length) setTimeout(()=>pmToast(`Now you can ask: ${unblocked.map(x=>x.question.slice(0,60)).join(' · ')}`), 400);
     await sbFetch('PATCH', `/rest/v1/pm_questions?id=eq.${id}`, upd); Object.assign(q, upd);
     pmOpenQuestions(q.project_id); pmRender();
     if(decision_id) pmToast('Answered and added to the decision log (set its category there)');
@@ -4301,7 +4690,7 @@ function pmClientUpdate(projectId){
     .sort((a,b)=>(a.due_date||a.start_date).localeCompare(b.due_date||b.start_date));
   const decs = pm.decisions.filter(d=>d.project_id===projectId && d.status!=='Superseded' && (d.decided_on||'') >= since);
   const onClient = its.filter(i=>i.party==='client' && i.status!=='done');
-  const qs = pm.questions.filter(q=>q.project_id===projectId && q.status==='Open' && q.asked_of && !pmIsFsName(q.asked_of));
+  const qs = pm.questions.filter(q=>q.project_id===projectId && pmQOpen(q) && q.asked_of && !pmIsFsName(q.asked_of));
   const cur = pmCurrentPhase(projectId);
   const b = arr=>arr.map(x=>'  - '+x).join('\n');
   const text = [
@@ -4341,7 +4730,7 @@ function pmHealth(p){
   const fees = pmKids(p.id,null).filter(ph=>Number(ph.fee)>0);
   return { p, pct: leaves.length ? Math.round(done/leaves.length*100) : 0, total: leaves.length, cur: pmCurrentPhase(p.id), next,
     overdue: leaves.filter(pmOverdue).length, client: its.filter(i=>i.party==='client'&&i.status!=='done').length, subs: its.filter(i=>i.party==='sub'&&i.status!=='done').length,
-    qs: pm.questions.filter(q=>q.project_id===p.id && q.status==='Open').length, qsLate: pm.questions.filter(q=>q.project_id===p.id && q.status==='Open' && q.due_date && q.due_date<pmToday()).length,
+    qs: pm.questions.filter(q=>q.project_id===p.id && pmQOpen(q)).length, qsLate: pm.questions.filter(q=>q.project_id===p.id && pmQOpen(q) && q.due_date && q.due_date<pmToday()).length,
     est, act, cost: act*(Number(p.hourly_rate)||0),
     toBill: fees.filter(ph=>!ph.billed && pmBillReady(ph)), feeTotal: fees.reduce((t,ph)=>t+Number(ph.fee),0),
     lastUpdate: p.last_update_at ? Math.floor((Date.now()-new Date(p.last_update_at))/864e5) : null };
@@ -4515,12 +4904,13 @@ function pmWorkspaceHtml(p){
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
       <button class="pm-btn" onclick="pmOpenDecisions('${p.id}')">📋 Decisions${pmDecs(p.id).filter(d=>d.status!=='Superseded').length?' ('+pmDecs(p.id).filter(d=>d.status!=='Superseded').length+')':''}</button>
-      <button class="pm-btn" onclick="pmOpenQuestions('${p.id}')">❓ Questions${pmQs(p.id).filter(q=>q.status==='Open').length?' ('+pmQs(p.id).filter(q=>q.status==='Open').length+')':''}</button>
+      <button class="pm-btn" onclick="pmOpenQuestions('${p.id}')">❓ Questions${pmQs(p.id).filter(q=>pmQOpen(q)).length?' ('+pmQs(p.id).filter(q=>pmQOpen(q)).length+')':''}</button>
       <button class="pm-btn" onclick="pmDeadlines('${p.id}')">⏰ Deadlines</button>
       <button class="pm-btn" onclick="pmOpenSubmittals('${p.id}')">📐 Submittals${pm.submittals.filter(x=>x.project_id===p.id).length?' ('+pm.submittals.filter(x=>x.project_id===p.id).length+')':''}</button>
       <button class="pm-btn" onclick="pmOpenTime('${p.id}')">⏱ Time${pmHoursLogged(t=>t.project_id===p.id)?' ('+pmH(pmHoursLogged(t=>t.project_id===p.id))+')':''}</button>
       <button class="pm-btn" onclick="pmOpenFees('${p.id}')">💲 Fees</button>
       <button class="pm-btn" onclick="pmOpenFiles('${p.id}')">📎 Files${files.length?' ('+files.length+')':''}</button>
+      <button class="pm-btn" onclick="pmOpenDrawings('${p.id}')">🗂 Drawing set${pmDwSummary(p.id)?' ('+pmDwSummary(p.id)+')':''}</button>
       <span style="margin-left:auto;display:flex;gap:10px;font-size:12px;align-items:center">
         <a style="cursor:pointer;color:var(--text-2)" onclick="pm.calProject='${p.id}';pmShow('calendar')">📅 Calendar</a>
         <a style="cursor:pointer;color:var(--text-2)" onclick="pm.ganttProject='${p.id}';pmShow('timeline')">📊 Timeline</a>
@@ -4535,7 +4925,7 @@ function pmWorkspaceHtml(p){
       ${its.filter(pmOverdue).length?`<span style="color:#dc2626"><b>${its.filter(pmOverdue).length}</b> past due</span>`:''}
       ${its.filter(i=>i.party==='client'&&i.status!=='done').length?`<span style="color:#9a3412">👤 <b>${its.filter(i=>i.party==='client'&&i.status!=='done').length}</b> on the client</span>`:''}
       ${its.filter(i=>i.party==='sub'&&i.status!=='done').length?`<span style="color:#5b21b6">🔧 <b>${its.filter(i=>i.party==='sub'&&i.status!=='done').length}</b> with subs</span>`:''}
-      ${pmQs(p.id).filter(q=>q.status==='Open').length?`<span style="color:#1d4ed8;cursor:pointer" onclick="pmOpenQuestions('${p.id}')">❓ <b>${pmQs(p.id).filter(q=>q.status==='Open').length}</b> open question${pmQs(p.id).filter(q=>q.status==='Open').length===1?'':'s'}</span>`:''}
+      ${pmQs(p.id).filter(q=>pmQOpen(q)).length?`<span style="color:#1d4ed8;cursor:pointer" onclick="pmOpenQuestions('${p.id}')">❓ <b>${pmQs(p.id).filter(q=>pmQOpen(q)).length}</b> open question${pmQs(p.id).filter(q=>pmQOpen(q)).length===1?'':'s'}</span>`:''}
     </div>
   </div>
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
@@ -4566,11 +4956,12 @@ function pmRowHtml(it, depth){
   else if(rng.end||rng.start) dates = (kids.length||isPhase?'':'Due ')+pmFmt(rng.end||rng.start);
   const pr = it.priority==='High' ? `<span class="pm-chip" style="background:#fee2e2;color:#991b1b">High</span>` : '';
   const tw = it.type==='milestone_ext' ? 'color:#b91c1c' : it.type==='milestone_int' ? 'color:#7c3aed' : it.type==='deliverable' ? 'color:#0369a1' : 'color:var(--text-3)';
-  return `<div class="pm-row" style="padding-left:${8+depth*22}px;${isPhase?'background:var(--surface);font-weight:600':''}${it.status==='done'&&!isPhase?';opacity:.55':''}">
+  return `<div class="pm-row${pm.selected && pm.selected.has(it.id)?' pm-sel':''}" data-id="${it.id}" data-dnd="item" data-group="g-${it.project_id}-${it.parent_id||'top'}" onclick="if(event.target===this)pmSelClick(event,'${it.id}',true)" style="padding-left:${8+depth*22}px;${isPhase?'background:var(--surface);font-weight:600':''}${it.status==='done'&&!isPhase?';opacity:.55':''}">
+      <span class="pm-grip" onmousedown="pmGripDown(this)" onclick="pmSelClick(event,'${it.id}',true)" title="Drag to reorder · click to select">⋮⋮</span>
       <span style="width:16px;flex-shrink:0;cursor:${kids.length?'pointer':'default'};color:var(--text-3)" onclick="${kids.length?`pm.collapsed['${it.id}']=${open};pmSaveCollapsed();pmRender()`:''}">${kids.length?(open?'▾':'▸'):''}</span>
       ${isPhase||kids.length ? '' : `<input type="checkbox" ${it.status==='done'?'checked':''} onclick="pmToggleDone('${it.id}')" style="cursor:pointer;flex-shrink:0">`}
       <span style="${tw};flex-shrink:0;width:12px;text-align:center" title="${PM_TYPES[it.type]?.label||''}">${isPhase?'':PM_TYPES[it.type]?.icon||'•'}</span>
-      <span onclick="pmEditItem('${it.id}')" style="cursor:pointer;flex:1;min-width:120px;${it.status==='done'&&!isPhase?'text-decoration:line-through':''}">${pmEsc(it.title)}
+      <span onclick="if(pmSelClick(event,'${it.id}'))return;pmEditItem('${it.id}')" style="cursor:pointer;flex:1;min-width:120px;${it.status==='done'&&!isPhase?'text-decoration:line-through':''}">${pmEsc(it.title)}
         ${it.status==='in_progress'?'<span class="pm-chip" style="background:#dbeafe;color:#1d4ed8;margin-left:4px">In progress</span>':''}
         ${dep?`<span style="font-size:11px;color:var(--text-3);font-weight:400;margin-left:4px">⚡ ${pmEsc(pmTriggerLabel(it, dep))}</span>`:''}
         ${(()=>{ const nx = pm.items.filter(x=>x.depends_on===it.id); return nx.length ? `<span style="font-size:11px;color:#a16207;font-weight:400;margin-left:4px" title="Sets off: ${pmEsc(nx.map(x=>x.title).join(', '))}">⚡ sets off ${nx.length===1?pmEsc(nx[0].title):nx.length+' tasks'}</span>` : ''; })()}</span>
@@ -4579,6 +4970,7 @@ function pmRowHtml(it, depth){
       ${!r && pmHoursLogged(t=>t.item_id===it.id) ? `<span class="pm-chip" title="Hours logged${it.est_hours?' / estimated':''}" style="${it.est_hours && pmHoursLogged(t=>t.item_id===it.id)>it.est_hours?'background:#fee2e2;color:#991b1b':''}">⏱ ${pmH(pmHoursLogged(t=>t.item_id===it.id))}${it.est_hours?'/'+pmH(it.est_hours):''}</span>` : ''}
       ${pmPartyChip(it)}
       ${it.owner?`<span class="pm-chip" title="${pmIsExternal(it)?'Field Source follow-up':'Owner'}">${pmIsExternal(it)?'↻ ':''}${pmEsc(it.owner)}</span>`:''}
+      ${it.assigned_to && it.assigned_to!==it.owner?`<span class="pm-chip" style="background:#e0f2fe;color:#075985" title="Assigned to (does the work)">→ ${pmEsc(it.assigned_to)}</span>`:''}
       ${r&&r.total?`<span class="pm-chip">${r.done}/${r.total}</span>`:''}
       ${r ? (r.hours?`<span class="pm-chip" title="Total estimated hours">${Math.round(r.hours)}h</span>`:'')
           : (!pmIsMilestone(it.type) ? `<span class="pm-chip${pmLenValue(it)?'':' pm-lenadd'}" style="cursor:pointer;${pmLenValue(it)?'':'opacity:.6'}" title="Length: click to change" onclick="pmQuickLength('${it.id}',this)">${pmLenLabel(it)||'+ length'}</span>` : '')}
@@ -4782,6 +5174,7 @@ function pmEditItem(id, defaults){
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px">
       <div><div class="pm-lbl" id="pmi-owner-lbl">${pmIsExternal(it)?'Field Source follow-up':'Owner'}</div>${pmOwnerSelect(it.owner||'')}</div>
+      <div><div class="pm-lbl" title="Who does the work, if not the owner">Assigned to (does the work)</div>${pmAssignSelect(it.assigned_to||'')}</div>
       <div><div class="pm-lbl">Priority</div><select id="pmi-priority" class="pm-in">${['High','Medium','Low'].map(x=>`<option${(it.priority||'Medium')===x?' selected':''}>${x}</option>`).join('')}</select></div>
       <div><div class="pm-lbl">Status</div><select id="pmi-status" class="pm-in">${[['todo','To do'],['in_progress','In progress'],['done','Done']].map(([k,l])=>`<option value="${k}"${it.status===k?' selected':''}>${l}</option>`).join('')}</select></div>
     </div>
@@ -4955,6 +5348,7 @@ async function pmSaveItem(id, base){
     depends_on: g('pmi-dep')||null, auto_schedule: document.getElementById('pmi-auto').checked || !g('pmi-dep'),
     dep_type: g('pmi-deptype'), dep_lag: Math.max(0, parseInt(g('pmi-deplag'))||0), dep_wait: document.getElementById('pmi-depwait').checked,
     party: (document.querySelector('input[name="pmi-party"]:checked')||{}).value || 'fs' };
+  if(document.getElementById('pmi-assigned')){ const a = g('pmi-assigned'); row.assigned_to = a==='__other' ? '' : a; }
   row.party_name = row.party==='fs' ? '' : g('pmi-partyname').trim();
   if(document.getElementById('pmi-fee')) row.fee = g('pmi-fee')===''?null:Number(g('pmi-fee'));
   if(row.start_date && row.due_date && row.due_date < row.start_date){ document.getElementById('pmi-err').textContent='Due date is before the start date.'; return; }

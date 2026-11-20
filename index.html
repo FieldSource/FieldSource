@@ -2938,11 +2938,39 @@ async function notifyTimesheetsPending(timeOffRecord) {
 
 async function markTimesheetsSynced(pendingId) {
   try {
+    // Find the pending entry
+    const pending = timesheetsPendingData.find(e => e.id === pendingId);
+    if (!pending) return;
+
+    // Update status
     await sbFetch("PATCH", `/rest/v1/timesheets_pending?id=eq.${pendingId}`, {
       status: "synced",
       synced_at: new Date().toISOString(),
     });
+
+    // Deduct from PTO balance
+    const hours = pending.hours || 0;
+    await sbFetch("PATCH", `/rest/v1/pto_balances?person=eq.${encodeURIComponent(pending.person)}`, {
+      hours_used_this_year: `hours_used_this_year+${hours}`,
+      hours_available_this_year: `hours_available_this_year-${hours}`,
+      total_available_hours: `total_available_hours-${hours}`,
+      updated_by: currentUser?.email || 'system'
+    }).catch(err => {
+      // Fallback: manually fetch and update if increment doesn't work
+      return sbFetch("GET", `/rest/v1/pto_balances?person=eq.${encodeURIComponent(pending.person)}`).then(data => {
+        if (data && data[0]) {
+          return sbFetch("PATCH", `/rest/v1/pto_balances?person=eq.${encodeURIComponent(pending.person)}`, {
+            hours_used_this_year: (data[0].hours_used_this_year || 0) + hours,
+            hours_available_this_year: (data[0].hours_available_this_year || 0) - hours,
+            total_available_hours: (data[0].total_available_hours || 0) - hours,
+            updated_by: currentUser?.email || 'system'
+          });
+        }
+      });
+    });
+
     await loadTimesheetsPending();
+    await loadPTOBalances();
   } catch (err) {
     console.error("Failed to mark as synced:", err);
   }
@@ -2988,11 +3016,129 @@ function showTimesheetsPending() {
 
 function initializeTimesheetsIntegration() {
   loadTimesheetsPending();
+  loadPTOBalances();
   setInterval(() => {
     if (view === "timeoff" && currentUser) {
       loadTimesheetsPending();
+      loadPTOBalances();
     }
   }, 120000);
+}
+
+// ===== PTO BALANCE TRACKING =====
+let ptoBalancesData = [];
+
+async function loadPTOBalances() {
+  try {
+    const data = await sbFetch('GET', '/rest/v1/pto_balances?order=person.asc');
+    ptoBalancesData = data || [];
+    return ptoBalancesData;
+  } catch (err) {
+    console.error("Failed to load PTO balances:", err);
+    return [];
+  }
+}
+
+function renderPTOBalancesPanel() {
+  if (!ptoBalancesData || ptoBalancesData.length === 0) {
+    return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;color:var(--text-3);font-size:12px">No PTO balances available</div>`;
+  }
+
+  return `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      ${ptoBalancesData.map((balance) => {
+        const totalUsed = balance.annual_allotment_hours - balance.hours_available_this_year;
+        const percentUsed = balance.annual_allotment_hours > 0 
+          ? Math.round((totalUsed / balance.annual_allotment_hours) * 100)
+          : 0;
+        const statusColor = balance.total_available_hours > 0 ? '#10b981' : '#ef4444';
+        
+        return `
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
+            <div style="font-weight:600;margin-bottom:8px">${balance.person}</div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+              <div style="font-size:13px;color:var(--text-3)">Total Available</div>
+              <div style="font-weight:600;color:${statusColor}">${(balance.total_available_hours || 0).toFixed(1)}h</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:2px;font-size:11px;color:var(--text-3)">
+              <div>  2024 Allotment</div>
+              <div>${(balance.hours_available_this_year || 0).toFixed(1)}h</div>
+            </div>
+            ${balance.rolled_over_hours > 0 ? `
+            <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:11px;color:#8b5cf6">
+              <div>  Rolled Over</div>
+              <div>${(balance.rolled_over_hours || 0).toFixed(1)}h</div>
+            </div>
+            ` : ''}
+            <div style="width:100%;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin-bottom:4px">
+              <div style="height:100%;background:#f59e0b;width:${percentUsed}%"></div>
+            </div>
+            <div style="font-size:10px;color:var(--text-3);text-align:right">${percentUsed}% of annual used</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function showPTOBalances() {
+  const content = document.getElementById('pto-balances-content');
+  if (content) {
+    content.innerHTML = renderPTOBalancesPanel();
+  }
+}
+
+async function processYearEndPTORollover(year) {
+  if (!confirm(`Process PTO rollover for year-end ${year}? This will:\n- Keep max 5 days (40h) of unused PTO\n- Forfeit anything over 5 days\n- Reset allotments for ${year + 1}\n\nThis cannot be undone.`)) return;
+
+  try {
+    // Calculate tenure-based allotments
+    function getAllotmentByTenure(hireDate) {
+      const hire = new Date(hireDate);
+      const yearsWorked = new Date(year + 1, 0, 1).getFullYear() - hire.getFullYear();
+      
+      if (yearsWorked < 3) return 40;      // 5 days
+      if (yearsWorked < 6) return 64;      // 8 days
+      return 80;                            // 10 days
+    }
+
+    const updates = [];
+    for (const balance of ptoBalancesData) {
+      const totalUnused = (balance.hours_available_this_year || 0) + (balance.rolled_over_hours || 0);
+      const rolledOver = Math.min(totalUnused, 40);  // Max 5 days (40 hours)
+      const forfeited = Math.max(0, totalUnused - 40);
+      
+      const nextYearAllotment = getAllotmentByTenure(balance.hire_date);
+      
+      updates.push({
+        person: balance.person,
+        updates: {
+          current_year: year + 1,
+          annual_allotment_hours: nextYearAllotment,
+          hours_used_this_year: 0,
+          hours_available_this_year: nextYearAllotment,
+          rolled_over_hours: rolledOver,
+          total_available_hours: nextYearAllotment + rolledOver,
+          hours_forfeited_on_jan_1: forfeited,
+          last_rollover_date: new Date(year + 1, 0, 1).toISOString().split('T')[0],
+          updated_by: currentUser?.email || 'system'
+        }
+      });
+    }
+
+    // Apply updates
+    for (const { person, updates: upd } of updates) {
+      await sbFetch('PATCH', `/rest/v1/pto_balances?person=eq.${encodeURIComponent(person)}`, upd);
+    }
+
+    console.log(`✓ PTO rollover processed for ${year}`);
+    await loadPTOBalances();
+    showPTOBalances();
+    alert('✓ Year-end PTO rollover complete. Balances reset for ' + (year + 1));
+  } catch (err) {
+    console.error("Error processing rollover:", err);
+    alert('Error: ' + (err.message || 'Failed to process rollover'));
+  }
 }
 // Keep the shared "Time off" Google Calendar in step. Never blocks the tracker: problems are logged, not shown.
 async function timeOffCalendar(action, id){
@@ -15719,6 +15865,19 @@ function renderTimeOff(){
     html += `<div id="past-timeoff" style="display:${showPastTimeOff?'block':'none'}">${past.map(e=>entryHtml(e,false)).join('')}</div>`;
   }
 
+  // PTO balances panel (for admins)
+  const TO_BALANCE_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+  if(TO_BALANCE_EMAILS.includes((currentUser&&currentUser.email||'').toLowerCase())){
+    const currentYear = new Date().getFullYear();
+    html += `<div id="pto-balances-panel" style="margin-top:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-weight:600;font-size:13px;color:var(--text-2)">PTO BALANCES</div>
+        <button onclick="processYearEndPTORollover(${currentYear - 1})" style="font-size:11px;padding:4px 8px;background:#8b5cf6;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:500">Year-End Rollover</button>
+      </div>
+      <div id="pto-balances-content">Loading...</div>
+    </div>`;
+  }
+
   // Timesheets pending panel
   html += `<div id="timesheets-pending-panel" style="margin-top:20px">
     <div style="font-weight:600;margin-bottom:12px;font-size:13px;color:var(--text-2)">PENDING TIMESHEETS ENTRIES</div>
@@ -15726,6 +15885,7 @@ function renderTimeOff(){
   </div>`;
 
   document.getElementById('main-content').innerHTML = html;
+  showPTOBalances();
   showTimesheetsPending();
 }
 

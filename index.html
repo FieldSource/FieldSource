@@ -2876,6 +2876,124 @@ async function dbDeleteTimeOff(id){
   await timeOffCalendar('delete', id);              // take it off Google Calendar before the entry is gone
   await sbFetch('DELETE', `/rest/v1/time_off?id=eq.${id}`);
 }
+
+// ===== TIMESHEETS.COM INTEGRATION =====
+let timesheetsPendingData = [];
+const TIMESHEETS_HOURLY_EMPLOYEES = {
+  "Cameron Jones": "394589",
+  "Will Alterman": "397667",
+};
+
+async function loadTimesheetsPending() {
+  try {
+    const data = await sbFetch('GET', '/rest/v1/timesheets_pending?status=eq.pending&order=created_at.desc');
+    timesheetsPendingData = data || [];
+    updateTimesheetsBadge();
+    return timesheetsPendingData;
+  } catch (err) {
+    console.error("Failed to load timesheets pending:", err);
+    return [];
+  }
+}
+
+function updateTimesheetsBadge() {
+  const badge = document.getElementById('timesheets-pending-badge');
+  if (badge && timesheetsPendingData.length > 0) {
+    badge.textContent = timesheetsPendingData.length;
+    badge.style.display = 'inline-block';
+  } else if (badge) {
+    badge.style.display = 'none';
+  }
+}
+
+async function notifyTimesheetsPending(timeOffRecord) {
+  if (!TIMESHEETS_HOURLY_EMPLOYEES[timeOffRecord.person]) return;
+  if (timeOffRecord.status !== "Approved") return;
+
+  try {
+    const payload = {
+      id: timeOffRecord.id,
+      person: timeOffRecord.person,
+      start_date: timeOffRecord.startDate,
+      end_date: timeOffRecord.endDate,
+      hours: timeOffRecord.hours,
+      status: timeOffRecord.status,
+      note: timeOffRecord.note,
+      requested_by: timeOffRecord.requestedBy
+    };
+    const response = await fetch("/.netlify/functions/notify-timesheets-approval", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.ok) {
+      console.log("✓ Timesheets notification created");
+      await loadTimesheetsPending();
+    }
+  } catch (err) {
+    console.error("Error notifying Timesheets:", err);
+  }
+}
+
+async function markTimesheetsSynced(pendingId) {
+  try {
+    await sbFetch("PATCH", `/rest/v1/timesheets_pending?id=eq.${pendingId}`, {
+      status: "synced",
+      synced_at: new Date().toISOString(),
+    });
+    await loadTimesheetsPending();
+  } catch (err) {
+    console.error("Failed to mark as synced:", err);
+  }
+}
+
+function renderTimesheetsPendingPanel() {
+  if (!timesheetsPendingData || timesheetsPendingData.length === 0) {
+    return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;color:var(--text-3);font-size:12px">No pending Timesheets entries</div>`;
+  }
+
+  return timesheetsPendingData.map((entry) => {
+    const dateRange = entry.start_date === entry.end_date
+      ? new Date(entry.start_date).toLocaleDateString()
+      : `${new Date(entry.start_date).toLocaleDateString()} to ${new Date(entry.end_date).toLocaleDateString()}`;
+
+    return `
+      <div style="background:var(--surface);border:1px solid #fef3c7;border-radius:8px;padding:12px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px">
+          <div>
+            <div style="font-weight:600">${entry.person}</div>
+            <div style="font-size:12px;color:var(--text-3)">${dateRange}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-weight:600;font-size:14px">${(entry.hours || 0).toFixed(1)}h</div>
+            <div style="font-size:11px;color:#f59e0b;font-weight:500">PENDING</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <a href="https://secure.timesheets.com/index.cfm" target="_blank" style="flex:1;padding:6px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:4px;text-align:center;font-size:12px;font-weight:500">Add to Timesheets →</a>
+          <button onclick="markTimesheetsSynced(${entry.id})" style="padding:6px 12px;background:#22c55e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:500">✓ Done</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function showTimesheetsPending() {
+  const content = document.getElementById('timesheets-pending-content');
+  if (content) {
+    content.innerHTML = renderTimesheetsPendingPanel();
+  }
+}
+
+function initializeTimesheetsIntegration() {
+  loadTimesheetsPending();
+  setInterval(() => {
+    if (view === "timeoff" && currentUser) {
+      loadTimesheetsPending();
+    }
+  }, 120000);
+}
 // Keep the shared "Time off" Google Calendar in step. Never blocks the tracker: problems are logged, not shown.
 async function timeOffCalendar(action, id){
   try{
@@ -15601,7 +15719,14 @@ function renderTimeOff(){
     html += `<div id="past-timeoff" style="display:${showPastTimeOff?'block':'none'}">${past.map(e=>entryHtml(e,false)).join('')}</div>`;
   }
 
+  // Timesheets pending panel
+  html += `<div id="timesheets-pending-panel" style="margin-top:20px">
+    <div style="font-weight:600;margin-bottom:12px;font-size:13px;color:var(--text-2)">PENDING TIMESHEETS ENTRIES</div>
+    <div id="timesheets-pending-content">Loading...</div>
+  </div>`;
+
   document.getElementById('main-content').innerHTML = html;
+  showTimesheetsPending();
 }
 
 async function approveTimeOff(id){
@@ -15610,7 +15735,10 @@ async function approveTimeOff(id){
   e.status = 'Approved';
   await dbSaveTimeOff(e, id);
   updateTimeOffBadge();
-  if(view==='timeoff') renderTimeOff();
+  if(view==='timeoff') {
+    renderTimeOff();
+    await notifyTimesheetsPending(e);
+  }
 }
 
 async function denyTimeOff(id){
@@ -16077,6 +16205,7 @@ function showApp(){
   // Time off loads alongside the jobs (not after), and the schedule redraws as soon as it arrives,
   // so "off" shows right away instead of at the next background refresh.
   const timeOffReady = Promise.all([loadTimeOff(), loadOfficeClosures()]);
+  initializeTimesheetsIntegration();
   let jobsReady = false;
   timeOffReady.then(()=>{ updateTimeOffBadge(); if(jobsReady && !document.querySelector('.modal-overlay') && typeof render==='function') render(); }).catch(()=>{});
   loadJobs().then(()=>{

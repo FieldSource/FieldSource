@@ -1,4 +1,7 @@
 // netlify/functions/notify-timesheets-approval.ts
+// Triggers when a time_off record is saved with status "Approved" for Cameron/Will
+// Creates an entry in timesheets_pending table to alert admins
+
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -6,6 +9,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ""
 );
 
+// Field Source hourly employees
 const TIMESHEETS_HOURLY_EMPLOYEES: Record<string, string> = {
   "Cameron Jones": "394589",
   "Will Alterman": "397667",
@@ -31,6 +35,7 @@ export const handler = async (event: any) => {
     const payload: TimeOffRecord = JSON.parse(event.body || "{}");
     const { id, person, start_date, end_date, hours, status, note, requested_by } = payload;
 
+    // Only create notification if Approved AND hourly employee
     if (status !== "Approved" || !TIMESHEETS_HOURLY_EMPLOYEES[person]) {
       return {
         statusCode: 200,
@@ -41,6 +46,7 @@ export const handler = async (event: any) => {
       };
     }
 
+    // Check if already exists
     const { data: existing } = await supabase
       .from("timesheets_pending")
       .select("id")
@@ -51,6 +57,7 @@ export const handler = async (event: any) => {
       return { statusCode: 200, body: JSON.stringify({ exists: true, id: existing.id }) };
     }
 
+    // Calculate hours if not provided
     let calculatedHours = hours || 8;
     if (!hours && start_date !== end_date) {
       const start = new Date(start_date);
@@ -63,6 +70,7 @@ export const handler = async (event: any) => {
       calculatedHours = count * 8;
     }
 
+    // Create pending entry
     const { error } = await supabase.from("timesheets_pending").insert({
       person,
       start_date,

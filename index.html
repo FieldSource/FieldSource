@@ -5179,52 +5179,96 @@ async function pmSaveSubmittal(id, projectId){
 
 function pmTeamDirectoryHtml(){
   const tmList = pm.teamMembers;
-  const sel = 'font-size:12px;padding:4px 6px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  
+  // Group by company
+  const grouped = {};
+  tmList.forEach(tm => {
+    const company = tm.company || '(No Company)';
+    if(!grouped[company]) grouped[company] = [];
+    grouped[company].push(tm);
+  });
+  
+  // Sort companies alphabetically
+  const companies = Object.keys(grouped).sort();
   
   return `<div style="max-width:1200px;margin:0 auto;padding:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
       <div>
         <div style="font-size:24px;font-weight:600">👥 Team Member Directory</div>
-        <div style="font-size:12px;color:var(--text-3);margin-top:4px">Central registry of clients, architects, contractors, and team members</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:4px">Central registry organized by company</div>
       </div>
       <button class="pm-btn" onclick="pmOpenTeamMemberForm()">➕ Add Team Member</button>
     </div>
     
     ${tmList.length===0 ? `<div style="color:var(--text-3);text-align:center;padding:40px">No team members yet. Add one to get started.</div>` : `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">
-      ${tmList.map(tm=>{
-        const docs = pmTeamMemberDocs(tm.id);
-        const docTypes = {w9: 'W-9', workers_comp: 'Workers Comp', coi: 'COI'};
-        const docStatus = docs.map(d=>`${docTypes[d.doc_type]||d.doc_type}: ${d.has_file?'✓':'⊘'}`).join(', ');
-        return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface)">
-          <div style="font-weight:600;cursor:pointer;color:var(--link)" onclick="pmOpenTeamMemberDetail('${tm.id}')">${pmEsc(tm.name)}</div>
-          <div style="font-size:11px;color:var(--text-3);margin-top:2px">${pmEsc(tm.firm_name||'Individual')}</div>
-          ${tm.role ? `<div style="font-size:11px;color:var(--text-2);margin-top:2px">📌 ${pmEsc(tm.role)}</div>` : ''}
-          <div style="font-size:10px;color:var(--text-3);margin-top:6px;padding-top:6px;border-top:1px solid var(--border-2)">Documents: ${docStatus || 'None'}</div>
-          <div style="display:flex;gap:6px;margin-top:6px">
-            <button class="pm-ic" onclick="pmOpenTeamMemberDetail('${tm.id}')">✎</button>
-            <button class="pm-ic" onclick="pmDeleteTeamMember('${tm.id}')">✕</button>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>`}
+    ${companies.map(company => {
+      const members = grouped[company];
+      return `<div style="margin-bottom:28px">
+        <div style="font-weight:600;font-size:15px;color:var(--green-dark);padding:12px 0 8px;border-bottom:2px solid var(--border)">
+          ${pmEsc(company)}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-top:12px">
+          ${members.map(tm => {
+            const docs = pmTeamMemberDocs(tm.id);
+            const docTypes = {w9: 'W-9', workers_comp: 'Workers Comp', coi: 'COI'};
+            const docStatus = docs.map(d=>\`\${docTypes[d.doc_type]||d.doc_type}: \${d.has_file?'✓':'⊘'}\`).join(', ');
+            const catBadges = (tm.category || []).map(c => \`<span style="display:inline-block;font-size:10px;padding:2px 6px;background:var(--green-light);color:var(--green-dark);border-radius:4px;margin-right:4px;white-space:nowrap">\${pmEsc(c)}</span>\`).join('');
+            return \`<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface)">
+              <div style="font-weight:600;cursor:pointer;color:var(--link)" onclick="pmOpenTeamMemberDetail('\${tm.id}')">\${pmEsc(tm.name)}</div>
+              \${tm.role ? \`<div style="font-size:11px;color:var(--text-2);margin-top:2px">📌 \${pmEsc(tm.role)}</div>\` : ''}
+              \${catBadges ? \`<div style="font-size:11px;margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">\${catBadges}</div>\` : ''}
+              <div style="font-size:10px;color:var(--text-3);margin-top:6px;padding-top:6px;border-top:1px solid var(--border-2)">Documents: \${docStatus || 'None'}</div>
+              <div style="display:flex;gap:6px;margin-top:6px">
+                <button class="pm-ic" onclick="pmOpenTeamMemberDetail('\${tm.id}')">✎</button>
+                <button class="pm-ic" onclick="pmDeleteTeamMember('\${tm.id}')">✕</button>
+              </div>
+            </div>\`;
+          }).join('')}
+        </div>
+      </div>\`;
+    }).join('')}
+    `}
   </div>`;
 }
 
 async function pmOpenTeamMemberForm(teamMemberId){
   const tm = teamMemberId ? pmTeamMember(teamMemberId) : {};
   const sel = 'font-size:12px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
+  const companies = [...new Set(pm.teamMembers.map(x=>x.company).filter(Boolean))].sort();
   
   pmModal(`<div style="margin-bottom:20px"><div class="sheet-title" style="margin-bottom:12px">${teamMemberId ? '✎ Edit Team Member' : '➕ Add Team Member'}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
       <input id="tm-name" style="${sel}" placeholder="Name" value="${pmEsc(tm.name||'')}" onkeydown="if(event.key==='Enter') pmSaveTeamMember()">
-      <input id="tm-firm" style="${sel}" placeholder="Firm/Company" value="${pmEsc(tm.firm_name||'')}">
-      <input id="tm-role" style="${sel}" placeholder="Role (e.g., Architect, Client)" value="${pmEsc(tm.role||'')}">
+      <div style="position:relative">
+        <input id="tm-company" style="${sel}" placeholder="Company" value="${pmEsc(tm.company||'')}" list="tm-company-list">
+        <datalist id="tm-company-list">
+          ${companies.map(c=>`<option value="${pmEsc(c)}"></option>`).join('')}
+        </datalist>
+      </div>
       <input id="tm-email" style="${sel}" placeholder="Email" value="${pmEsc(tm.email||'')}">
       <input id="tm-phone" style="${sel}" placeholder="Phone" value="${pmEsc(tm.phone||'')}">
       <input id="tm-website" style="${sel}" placeholder="Website" value="${pmEsc(tm.website||'')}">
+      <input id="tm-role" style="${sel}" placeholder="Role (e.g., Architect, Manager)" value="${pmEsc(tm.role||'')}">
       <textarea id="tm-addr" style="${sel};grid-column:1/-1;resize:none" placeholder="Address" rows="2">${pmEsc(tm.address||'')}</textarea>
       <textarea id="tm-poc" style="${sel};grid-column:1/-1;resize:none" placeholder="Point of Contact (name/notes)" rows="2">${pmEsc(tm.point_person||'')}</textarea>
+      
+      <div style="grid-column:1/-1;padding:12px;background:var(--surface);border-radius:6px;border:1px solid var(--border-2)">
+        <div style="font-weight:600;font-size:12px;margin-bottom:8px">Assign to Category</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+            <input type="checkbox" id="tm-cat-client" ${tm.category?.includes('Client')?'checked':''}>
+            <span>Client</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+            <input type="checkbox" id="tm-cat-design_team" ${tm.category?.includes('Design Team')?'checked':''}>
+            <span>Design Team</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+            <input type="checkbox" id="tm-cat-vendor" ${tm.category?.includes('Vendor')?'checked':''}>
+            <span>Vendor</span>
+          </label>
+        </div>
+      </div>
     </div>
     ${teamMemberId ? `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-2)"><div class="pm-lbl">Documents on File</div>
       ${['w9','workers_comp','coi'].map(dt=>{
@@ -5241,7 +5285,7 @@ async function pmOpenTeamMemberForm(teamMemberId){
       <button class="pm-btn" onclick="pmSaveTeamMember('${teamMemberId||''}')">Save</button>
       <button class="pm-btn-alt" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
     </div>
-  </div>`, 500);
+  </div>`, 540);
 }
 
 async function pmOpenTeamMemberDetail(teamMemberId){
@@ -5252,14 +5296,21 @@ async function pmSaveTeamMember(teamMemberId){
   const name = document.getElementById('tm-name').value.trim();
   if(!name) return alert('Name is required');
   
+  const categories = [];
+  if(document.getElementById('tm-cat-client').checked) categories.push('Client');
+  if(document.getElementById('tm-cat-design_team').checked) categories.push('Design Team');
+  if(document.getElementById('tm-cat-vendor').checked) categories.push('Vendor');
+  
   const data = {
-    name, firm_name: document.getElementById('tm-firm').value.trim() || null,
-    role: document.getElementById('tm-role').value.trim() || null,
+    name, 
+    company: document.getElementById('tm-company').value.trim() || null,
+    category: categories.length > 0 ? categories : null,
     email: document.getElementById('tm-email').value.trim() || null,
     phone: document.getElementById('tm-phone').value.trim() || null,
     website: document.getElementById('tm-website').value.trim() || null,
     address: document.getElementById('tm-addr').value.trim() || null,
     point_person: document.getElementById('tm-poc').value.trim() || null,
+    role: document.getElementById('tm-role').value.trim() || null,
     updated_by: (currentUser?.email)||'',
     updated_at: new Date().toISOString()
   };

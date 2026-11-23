@@ -4056,6 +4056,7 @@ async function pmAddPerson(name){
 
 // Drawing set: sheets and site details, standalone per project
 const PM_DW_STATUSES = ['Not started','In progress','Complete'];
+const SITE_DETAIL_CATEGORIES = ['Site Preparation','Drainage','Paving','Athletic Surfacing','Walls & Columns','Structures','Fencing & Railings','Athletic Equipment','Site Furnishings','Lighting','Signage','Planting'];
 function pmDw(projectId, kind){ return (pm.drawings||[]).filter(d=>d.project_id===projectId && d.kind===kind).sort((a,b)=>(a.sort||0)-(b.sort||0) || String(a.created_at).localeCompare(String(b.created_at))); }
 function pmDwSummary(projectId){ const all = (pm.drawings||[]).filter(d=>d.project_id===projectId); return all.length ? `${all.filter(d=>d.status==='Complete').length}/${all.length}` : ''; }
 function pmOpenDrawings(projectId){
@@ -4063,22 +4064,35 @@ function pmOpenDrawings(projectId){
   pm._dwOpen = pm._dwOpen || { sheet:true, detail:true };
   const sel = 'font-size:12px;padding:4px 6px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
   const col = { 'Not started':'#f1f5f9', 'In progress':'#dbeafe', 'Complete':'#dcfce7' };
-  const section = (kind, label, icon)=>{ const rows = pmDw(projectId, kind), done = rows.filter(d=>d.status==='Complete').length, open = pm._dwOpen[kind];
-    return `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:10px">
-      <div onclick="pm._dwOpen.${kind}=!pm._dwOpen.${kind};pmOpenDrawings('${projectId}')" style="cursor:pointer;padding:9px 12px;background:var(--surface);display:flex;gap:8px;align-items:center;font-weight:600;border-radius:8px">
-        <span style="color:var(--text-3)">${open?'▾':'▸'}</span>${icon} ${label} <span style="font-weight:400;font-size:12px;color:var(--text-3)">${rows.length?`${done}/${rows.length} complete`:'none yet'}</span></div>
-      ${open?`<div data-dnd-group="dw-${kind}">${rows.map((d,k)=>`<div class="pm-dw-row" data-dnd="dw" data-id="${d.id}" data-group="dw-${kind}" style="display:flex;gap:6px;align-items:flex-start;padding:6px 10px;border-top:1px solid var(--border);background:${d.status==='Complete'?'#f7fdf8':'transparent'}">
+  const section = (kind, label, icon)=>{ 
+    const rows = pmDw(projectId, kind), done = rows.filter(d=>d.status==='Complete').length, open = pm._dwOpen[kind];
+    // For site details (kind='detail'), group by category
+    let rowsByCategory = {};
+    if(kind==='detail'){
+      rows.forEach(d=>{
+        const cat = d.category || '(Uncategorized)';
+        if(!rowsByCategory[cat]) rowsByCategory[cat] = [];
+        rowsByCategory[cat].push(d);
+      });
+    }
+    const renderRow = (d)=>`<div class="pm-dw-row" data-dnd="dw" data-id="${d.id}" data-group="dw-${kind}" style="display:flex;gap:6px;align-items:flex-start;padding:6px 10px;border-top:1px solid var(--border);background:${d.status==='Complete'?'#f7fdf8':'transparent'}">
           <span class="pm-grip" onmousedown="pmGripDown(this)" title="Drag to reorder">⋮⋮</span>
           ${kind==='sheet'?`<input style="${sel};width:70px" value="${pmEsc(d.number||'')}" placeholder="Sheet #" onchange="pmDwSave('${d.id}',{number:this.value.trim()})">`:''}
           <div style="flex:1;min-width:140px"><input style="${sel};width:100%;box-sizing:border-box;font-size:13px;${d.status==='Complete'?'text-decoration:line-through;color:var(--text-3)':''}" value="${pmEsc(d.title)}" onchange="pmDwSave('${d.id}',{title:this.value.trim()||'${pmEsc(d.title).replace(/'/g,"\\'")}'})">
             ${pm._dwNotes===d.id?`<textarea style="${sel};width:100%;box-sizing:border-box;margin-top:4px" rows="2" placeholder="Notes: pull from this vendor, talk to Wes…" onchange="pmDwSave('${d.id}',{notes:this.value})">${pmEsc(d.notes||'')}</textarea>`:(d.notes?`<div style="font-size:11px;color:var(--text-2);margin-top:2px;white-space:pre-wrap;cursor:pointer" onclick="pm._dwNotes='${d.id}';pmOpenDrawings('${projectId}')">📝 ${pmEsc(d.notes)}</div>`:'')}</div>
+          ${kind==='detail'?`<select style="${sel};min-width:120px" onchange="pmDwSave('${d.id}',{category:this.value||null})"><option value="" ${!d.category?'selected':''}>Set category</option>${SITE_DETAIL_CATEGORIES.map(c=>`<option${d.category===c?' selected':''}>${c}</option>`).join('')}</select>`:''}
           <select style="${sel};background:${col[d.status]||'var(--bg)'}" onchange="pmDwSave('${d.id}',{status:this.value})">${PM_DW_STATUSES.map(s=>`<option${d.status===s?' selected':''}>${s}</option>`).join('')}</select>
           <input type="date" style="${sel};width:128px" value="${pmEsc(d.due_date||'')}" title="Optional date" onchange="pmDwSave('${d.id}',{due_date:this.value||null})">
           <button class="pm-ic" title="Notes" onclick="pm._dwNotes=pm._dwNotes==='${d.id}'?null:'${d.id}';pmOpenDrawings('${projectId}')" style="${d.notes?'':'opacity:.45'}">📝</button>
           <button class="pm-ic" title="Move up" onclick="pmDwMove('${d.id}',-1)">↑</button><button class="pm-ic" title="Move down" onclick="pmDwMove('${d.id}',1)">↓</button>
-          <button class="pm-ic" title="Remove" onclick="pmDwDelete('${d.id}')">✕</button></div>`).join('')}
+          <button class="pm-ic" title="Remove" onclick="pmDwDelete('${d.id}')">✕</button></div>`;
+    return `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:10px">
+      <div onclick="pm._dwOpen.${kind}=!pm._dwOpen.${kind};pmOpenDrawings('${projectId}')" style="cursor:pointer;padding:9px 12px;background:var(--surface);display:flex;gap:8px;align-items:center;font-weight:600;border-radius:8px">
+        <span style="color:var(--text-3)">${open?'▾':'▸'}</span>${icon} ${label} <span style="font-weight:400;font-size:12px;color:var(--text-3)">${rows.length?`${done}/${rows.length} complete`:'none yet'}</span></div>
+      ${open?`<div data-dnd-group="dw-${kind}">${kind==='detail' ? Object.entries(rowsByCategory).map(([cat, catRows])=>`<div style="margin-top:8px"><div style="font-size:11px;font-weight:600;color:var(--text-2);padding:4px 10px;text-transform:uppercase">${pmEsc(cat)}</div>${catRows.map(renderRow).join('')}</div>`).join('') : rows.map(renderRow).join('')}</div>`:''}
         <div style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border);align-items:center;flex-wrap:wrap">
           ${kind==='sheet'?`<input id="pmdw-num-${kind}" style="${sel};width:70px" placeholder="Sheet #">`:''}
+          ${kind==='detail'?`<select id="pmdw-cat-${kind}" style="${sel};min-width:160px"><option value="">Select category…</option>${SITE_DETAIL_CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>`:''}
           <input id="pmdw-title-${kind}" style="${sel};flex:1;min-width:160px;font-size:13px" placeholder="${kind==='sheet'?'Add a sheet (e.g. Grading plan)… Enter':'Add a site detail (e.g. Concrete profile)… Enter'}" onkeydown="if(event.key==='Enter'){event.preventDefault();pmDwAdd('${projectId}','${kind}');}">
           <button class="pm-btn" style="font-size:12px" onclick="pmDwAdd('${projectId}','${kind}')">Add</button>
           <button class="pm-btn" style="font-size:12px" onclick="pmDwPaste('${projectId}','${kind}')" title="Paste a list, one per line">Paste a list</button></div></div>`:''}
@@ -4089,9 +4103,9 @@ function pmOpenDrawings(projectId){
     ${section('sheet','Sheets','📄')}${section('detail','Site details','🔍')}`, 920);
 }
 async function pmDwAdd(projectId, kind){
-  const t = document.getElementById('pmdw-title-'+kind), n = document.getElementById('pmdw-num-'+kind), title = (t.value||'').trim(); if(!title) return;
+  const t = document.getElementById('pmdw-title-'+kind), n = document.getElementById('pmdw-num-'+kind), c = document.getElementById('pmdw-cat-'+kind), title = (t.value||'').trim(); if(!title) return;
   const rows = pmDw(projectId, kind);
-  try{ const r = await sbFetch('POST','/rest/v1/pm_drawings', { project_id:projectId, kind, title, number: n ? n.value.trim() : '', sort: rows.length ? Math.max(...rows.map(x=>x.sort||0))+1 : 0, created_by:(currentUser&&currentUser.email)||'' });
+  try{ const r = await sbFetch('POST','/rest/v1/pm_drawings', { project_id:projectId, kind, title, number: n ? n.value.trim() : '', category: kind==='detail' && c ? c.value||null : null, sort: rows.length ? Math.max(...rows.map(x=>x.sort||0))+1 : 0, created_by:(currentUser&&currentUser.email)||'' });
        pm.drawings = [...(pm.drawings||[]), ...(r||[])]; pmOpenDrawings(projectId); setTimeout(()=>document.getElementById('pmdw-title-'+kind)?.focus(), 30); }
   catch(e){ alert('Could not add: '+e.message+(/pm_drawings/.test(e.message)?' (the drawing set table isn\u2019t set up)':'')); }
 }
@@ -15865,9 +15879,12 @@ function renderTimeOff(){
     html += `<div id="past-timeoff" style="display:${showPastTimeOff?'block':'none'}">${past.map(e=>entryHtml(e,false)).join('')}</div>`;
   }
 
-  // PTO balances panel (for admins)
-  const TO_BALANCE_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com'];
-  if(TO_BALANCE_EMAILS.includes((currentUser&&currentUser.email||'').toLowerCase())){
+  // PTO balances panel (for admins only)
+  const userEmail = currentUser && currentUser.email ? currentUser.email.toLowerCase() : '';
+  const TO_BALANCE_EMAILS = ['jake@fieldsource','ryan@fieldsource','matt@fieldsource','ali@fieldsource','gibson@fieldsource','jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com','gibson@fieldsourceohio.com'];
+  const isAdmin = userEmail && (TO_BALANCE_EMAILS.includes(userEmail) || userEmail.includes('jake@') || userEmail.includes('ryan@') || userEmail.includes('matt@') || userEmail.includes('gibson@') || userEmail.includes('ali@'));
+  console.log('DEBUG PTO:', {userEmail, isAdmin, hasCurrentUser: !!currentUser});
+  if(isAdmin){
     const currentYear = new Date().getFullYear();
     html += `<div id="pto-balances-panel" style="margin-top:20px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">

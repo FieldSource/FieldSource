@@ -3032,8 +3032,11 @@ let ptoBalancesData = [];
 
 async function loadPTOBalances() {
   try {
+    console.log("DEBUG: loadPTOBalances() starting...");
     const data = await sbFetch('GET', '/rest/v1/pto_balances?order=person.asc');
+    console.log("DEBUG: loadPTOBalances() response:", data);
     ptoBalancesData = data || [];
+    console.log("DEBUG: ptoBalancesData set to:", ptoBalancesData);
     return ptoBalancesData;
   } catch (err) {
     console.error("Failed to load PTO balances:", err);
@@ -16354,7 +16357,17 @@ function renderTimeOff(){
   </div>`;
 
   document.getElementById('main-content').innerHTML = html;
-  showPTOBalances();
+  
+  // Ensure PTO data is loaded before showing balances
+  if (ptoBalancesData && ptoBalancesData.length > 0) {
+    showPTOBalances();
+  } else {
+    console.log("DEBUG: ptoBalancesData empty, waiting...");
+    loadPTOBalances().then(() => {
+      console.log("DEBUG: loadPTOBalances complete, now showing:", ptoBalancesData);
+      showPTOBalances();
+    });
+  }
   showTimesheetsPending();
 }
 

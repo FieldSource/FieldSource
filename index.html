@@ -615,7 +615,7 @@ function shortClientName(name){
   tails.push('Baseball','Softball','Soccer','Football','Track','Tennis','Athletics','Athletic Complex','LLC','L.L.C.','Inc','Inc.','Co','Co.','Company','Corp','Corporation');
   tails.sort((a,b)=>b.length-a.length);
   for(let pass=0, changed=true; changed && pass<4; pass++){ changed = false;
-    for(const t of tails){ const re = new RegExp('\\s*[-–,]?\\s*' + t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\s*$', 'i'); if(re.test(n) && n.replace(re,'').trim()){ n = n.replace(re,''); changed = true; break; } } }
+    for(const t of tails){ const re = new RegExp('\\s*[-–,]?\\s*' + t.replace(/[.*+?^${}()|[\]\\]/g,'\$&') + '\\s*$', 'i'); if(re.test(n) && n.replace(re,'').trim()){ n = n.replace(re,''); changed = true; break; } } }
   return n.replace(/^(The|City of)\s+/i, m=>/city of/i.test(m)?m:'').trim() || String(name||'').trim();
 }
 // Compare names on their meaningful words: generic words dropped, abbreviations evened out
@@ -5211,21 +5211,21 @@ function pmTeamDirectoryHtml(){
           ${members.map(tm => {
             const docs = pmTeamMemberDocs(tm.id);
             const docTypes = {w9: 'W-9', workers_comp: 'Workers Comp', coi: 'COI'};
-            const docStatus = docs.map(d=>\`\${docTypes[d.doc_type]||d.doc_type}: \${d.has_file?'✓':'⊘'}\`).join(', ');
-            const catBadges = (tm.category || []).map(c => \`<span style="display:inline-block;font-size:10px;padding:2px 6px;background:var(--green-light);color:var(--green-dark);border-radius:4px;margin-right:4px;white-space:nowrap">\${pmEsc(c)}</span>\`).join('');
-            return \`<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface)">
-              <div style="font-weight:600;cursor:pointer;color:var(--link)" onclick="pmOpenTeamMemberDetail('\${tm.id}')">\${pmEsc(tm.name)}</div>
-              \${tm.role ? \`<div style="font-size:11px;color:var(--text-2);margin-top:2px">📌 \${pmEsc(tm.role)}</div>\` : ''}
-              \${catBadges ? \`<div style="font-size:11px;margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">\${catBadges}</div>\` : ''}
-              <div style="font-size:10px;color:var(--text-3);margin-top:6px;padding-top:6px;border-top:1px solid var(--border-2)">Documents: \${docStatus || 'None'}</div>
+            const docStatus = docs.map(d=>`${docTypes[d.doc_type]||d.doc_type}: ${d.has_file?'✓':'⊘'}`).join(', ');
+            const catBadges = (tm.category || []).map(c => `<span style="display:inline-block;font-size:10px;padding:2px 6px;background:var(--green-light);color:var(--green-dark);border-radius:4px;margin-right:4px;white-space:nowrap">${pmEsc(c)}</span>`).join('');
+            return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface)">
+              <div style="font-weight:600;cursor:pointer;color:var(--link)" onclick="pmOpenTeamMemberDetail('${tm.id}')">${pmEsc(tm.name)}</div>
+              ${tm.role ? `<div style="font-size:11px;color:var(--text-2);margin-top:2px">📌 ${pmEsc(tm.role)}</div>` : ''}
+              ${catBadges ? `<div style="font-size:11px;margin-top:4px;display:flex;flex-wrap:wrap;gap:4px">${catBadges}</div>` : ''}
+              <div style="font-size:10px;color:var(--text-3);margin-top:6px;padding-top:6px;border-top:1px solid var(--border-2)">Documents: ${docStatus || 'None'}</div>
               <div style="display:flex;gap:6px;margin-top:6px">
-                <button class="pm-ic" onclick="pmOpenTeamMemberDetail('\${tm.id}')">✎</button>
-                <button class="pm-ic" onclick="pmDeleteTeamMember('\${tm.id}')">✕</button>
+                <button class="pm-ic" onclick="pmOpenTeamMemberDetail('${tm.id}')">✎</button>
+                <button class="pm-ic" onclick="pmDeleteTeamMember('${tm.id}')">✕</button>
               </div>
-            </div>\`;
+            </div>`;
           }).join('')}
         </div>
-      </div>\`;
+      </div>`;
     }).join('')}
     `}
   </div>`;

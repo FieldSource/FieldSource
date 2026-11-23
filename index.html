@@ -935,6 +935,7 @@ let mileageTripFilter = 'All';
 let reportSiteFilter = 'All';
 let reportEmployeeFilter = 'All';
 let showPastTimeOff = false;
+let ptoFilterPerson = null; // Click a PTO balance card to filter time off by that person
 let woSiteFilter = 'All';
 let woStatusFilter = 'open';
 
@@ -3039,7 +3040,6 @@ async function loadPTOBalances() {
     return [];
   }
 }
-
 function renderPTOBalancesPanel() {
   if (!ptoBalancesData || ptoBalancesData.length === 0) {
     return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center;color:var(--text-3);font-size:12px">No PTO balances available</div>`;
@@ -3053,10 +3053,11 @@ function renderPTOBalancesPanel() {
           ? Math.round((totalUsed / balance.annual_allotment_hours) * 100)
           : 0;
         const statusColor = balance.total_available_hours > 0 ? '#10b981' : '#ef4444';
+        const isSelected = ptoFilterPerson === balance.person;
         
         return `
-          <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px">
-            <div style="font-weight:600;margin-bottom:8px">${balance.person}</div>
+          <div style="background:var(--surface);border:2px solid ${isSelected?'#3b82f6':'var(--border)'};border-radius:8px;padding:12px;cursor:pointer;transition:all 0.2s" onclick="ptoFilterPerson==='${balance.person}'?ptoFilterPerson=null:ptoFilterPerson='${balance.person}';renderTimeOff()" title="Click to filter time off">
+            <div style="font-weight:600;margin-bottom:8px">${balance.person}${isSelected?' ✓':''}</div>
             <div style="display:flex;justify-content:space-between;margin-bottom:8px">
               <div style="font-size:13px;color:var(--text-3)">Total Available</div>
               <div style="font-weight:600;color:${statusColor}">${(balance.total_available_hours || 0).toFixed(1)}h</div>
@@ -3081,8 +3082,6 @@ function renderPTOBalancesPanel() {
     </div>
   `;
 }
-
-function showPTOBalances() {
   const content = document.getElementById('pto-balances-content');
   if (content) {
     content.innerHTML = renderPTOBalancesPanel();
@@ -16155,14 +16154,16 @@ setInterval(()=>{ if(currentUser && typeof canBillInvoices==='function' && canBi
 setInterval(()=>{ if(currentUser && TO_NOTIFY_RULES[(currentUser.email||'').toLowerCase()] && typeof loadTimeOff==='function') loadTimeOff().then(updateTimeOffBadge).catch(()=>{}); }, 120000);
 
 let toSummaryYear = null;   // null = the current year
-function renderTimeOff(){
+async function renderTimeOff(){
+  await loadPTOBalances(); // Load PTO data before rendering
   const today = isoDate(new Date());
   const TO_ADMIN_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const canApprove = TO_ADMIN_EMAILS.includes((currentUser&&currentUser.email||'').toLowerCase());
   const myName = getDisplayName(currentUser&&currentUser.email);
 
-  // What this user can see
-  const visible = canApprove ? timeOffEntries : timeOffEntries.filter(e=>e.person===myName||e.requestedBy===myName);
+  // What this user can see (optionally filtered by ptoFilterPerson)
+  let visible = canApprove ? timeOffEntries : timeOffEntries.filter(e=>e.person===myName||e.requestedBy===myName);
+  if(ptoFilterPerson) visible = visible.filter(e=>e.person===ptoFilterPerson);
   const pending = visible.filter(e=>e.status==='Pending').sort((a,b)=>a.startDate.localeCompare(b.startDate));
   const approved = visible.filter(e=>e.status==='Approved'&&e.endDate>=today).sort((a,b)=>a.startDate.localeCompare(b.startDate));
   const past = visible.filter(e=>(e.status==='Approved'&&e.endDate<today)||e.status==='Denied').sort((a,b)=>b.startDate.localeCompare(a.startDate));
@@ -16296,6 +16297,11 @@ function renderTimeOff(){
       </div>` : `<div style="font-size:13px;color:var(--text-3)">No approved time off ${yr===thisYear?'so far this year':'in '+yr}.</div>`}
       <div style="font-size:11px;color:var(--text-3);margin-top:8px">Work days only: weekends and office closed days aren't counted. Part of a day counts as hours ÷ 8 (Noon–4 PM = 0.5 day).</div>
     </div>`;
+  }
+
+  // Clear filter button (if active)
+  if(ptoFilterPerson){
+    html += `<div style="margin-bottom:16px"><button onclick="ptoFilterPerson=null;renderTimeOff()" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:8px 12px;font-size:12px;cursor:pointer;font-family:inherit">Clear filter: showing only ${ptoFilterPerson}</button></div>`;
   }
 
   // Pending requests

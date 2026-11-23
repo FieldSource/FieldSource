@@ -480,6 +480,7 @@ main{padding:12px 16px 100px}
     <button class="vtab" data-pm="overview" onclick="pmShow('overview')">Overview</button>
     <button class="vtab" data-pm="mywork" onclick="pmShow('mywork')">My Work</button>
     <button class="vtab" data-pm="projects" onclick="pmShow('projects')">Projects</button>
+    <button class="vtab" data-pm="team" onclick="pmShow('team')">Team</button>
     <button class="vtab" data-pm="calendar" onclick="pmShow('calendar')">Calendar</button>
     <button class="vtab" data-pm="timeline" onclick="pmShow('timeline')">Timeline</button>
     <button class="vtab" data-pm="workload" onclick="pmShow('workload')">Workload</button>
@@ -3589,6 +3590,8 @@ const pm = {
   calMonth: new Date().toISOString().slice(0,7), calProject:'', calKeyOnly:false, calHideDone:true,
   ganttProject:'', ganttZoom:'week', ganttHideDone:false,
   notes:[], myShowDone:false, decisions:[], questions:[], time:[], submittals:[],
+  // NEW: Team Members, Coordination, Design
+  teamMembers:[], teamMemberDocs:[], projectTeam:[], coordinationItems:[], designDeliverables:[],
 };
 const PM_TYPES = {
   phase:        { label:'Phase',              icon:'▤' },
@@ -3697,11 +3700,47 @@ async function pmLoad(force){
     ]);
     pm.projects = p||[]; pm.items = i||[]; pm.templates = t||[]; pm.closures = c||[]; pm.files = f||[]; pm.notes = (await notesQ)||[]; pm.decisions = (await decQ)||[]; pm.questions = (await qQ)||[]; pm.time = (await tQ)||[]; pm.submittals = (await sQ)||[]; pm.drawings = (await dwQ)||[]; pm.people = (await peQ)||[]; pm.reports = (await rpQ)||[];
     pm.loaded = true; pm.error = '';
+    // Load new features
+    pmLoadTeamMembers();
+    pmLoadCoordinationItems();
+    pmLoadDesignDeliverables();
     if(!pm.sel || !pmProject(pm.sel)){ const first = pm.projects.find(x=>x.status!=='Complete'); pm.sel = first ? first.id : (pm.projects[0]||{}).id || null; }
   }catch(e){
     pm.error = /does not exist|relation|PGRST/i.test(e.message) ? 'setup' : e.message;
   }
 }
+
+// ── TEAM MEMBERS DIRECTORY ──
+async function pmLoadTeamMembers(){
+  try{
+    const tm = await sbFetch('GET','/rest/v1/team_members?select=*&order=name.asc');
+    const tmd = await sbFetch('GET','/rest/v1/team_member_documents?select=*');
+    const pt = await sbFetch('GET','/rest/v1/project_team?select=*');
+    pm.teamMembers = tm||[];
+    pm.teamMemberDocs = tmd||[];
+    pm.projectTeam = pt||[];
+  }catch(e){ console.error('Load team members failed:', e); }
+}
+
+async function pmLoadCoordinationItems(){
+  try{
+    const ci = await sbFetch('GET','/rest/v1/coordination_items?select=*&order=sort.asc');
+    pm.coordinationItems = ci||[];
+  }catch(e){ console.error('Load coordination failed:', e); }
+}
+
+async function pmLoadDesignDeliverables(){
+  try{
+    const dd = await sbFetch('GET','/rest/v1/design_deliverables?select=*&order=sort.asc');
+    pm.designDeliverables = dd||[];
+  }catch(e){ console.error('Load design deliverables failed:', e); }
+}
+
+function pmTeamMember(id){ return pm.teamMembers.find(t=>t.id===id); }
+function pmTeamMembersForProject(projectId){ return pm.projectTeam.filter(pt=>pt.project_id===projectId).map(pt=>pmTeamMember(pt.team_member_id)).filter(Boolean); }
+function pmCoordinationForProject(projectId){ return pm.coordinationItems.filter(c=>c.project_id===projectId); }
+function pmDesignForProject(projectId){ return pm.designDeliverables.filter(d=>d.project_id===projectId); }
+function pmTeamMemberDocs(teamMemberId){ return pm.teamMemberDocs.filter(d=>d.team_member_id===teamMemberId); }
 
 // ── saving ──
 const PM_ITEM_FIELDS = ['project_id','parent_id','type','title','description','owner','priority','status','start_date','due_date','duration_days','length_unit','est_hours','dep_type','dep_lag','dep_wait','started_at','party','party_name','meeting_notes','attendees','fee','billed','invoice_no','billed_on','budget','depends_on','auto_schedule','done_at','sort'];
@@ -3972,6 +4011,7 @@ function pmRender(){
   else if(pm.tab==='overview') el.innerHTML = pmOverviewHtml();
   else if(pm.tab==='workload') el.innerHTML = pmWorkloadHtml();
   else if(pm.tab==='reports'){ el.innerHTML = pmReportsHtml(); setTimeout(pmRpFit, 0); }
+  else if(pm.tab==='team') el.innerHTML = pmTeamDirectoryHtml();
   else el.innerHTML = pmProjectsHtml();
   window.scrollTo(sx, sy);
   if(pm.tab==='timeline') pmGanttAfter(gl, gt);
@@ -5133,6 +5173,354 @@ async function pmSaveSubmittal(id, projectId){
 }
 
 // ── Projects workspace ──
+// ═════════════════════════════════════════════════════════════════════════════
+// TEAM MEMBERS DIRECTORY
+// ═════════════════════════════════════════════════════════════════════════════
+
+function pmTeamDirectoryHtml(){
+  const tmList = pm.teamMembers;
+  const sel = 'font-size:12px;padding:4px 6px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  
+  return `<div style="max-width:1200px;margin:0 auto;padding:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <div>
+        <div style="font-size:24px;font-weight:600">👥 Team Member Directory</div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:4px">Central registry of clients, architects, contractors, and team members</div>
+      </div>
+      <button class="pm-btn" onclick="pmOpenTeamMemberForm()">➕ Add Team Member</button>
+    </div>
+    
+    ${tmList.length===0 ? `<div style="color:var(--text-3);text-align:center;padding:40px">No team members yet. Add one to get started.</div>` : `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">
+      ${tmList.map(tm=>{
+        const docs = pmTeamMemberDocs(tm.id);
+        const docTypes = {w9: 'W-9', workers_comp: 'Workers Comp', coi: 'COI'};
+        const docStatus = docs.map(d=>`${docTypes[d.doc_type]||d.doc_type}: ${d.has_file?'✓':'⊘'}`).join(', ');
+        return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--surface)">
+          <div style="font-weight:600;cursor:pointer;color:var(--link)" onclick="pmOpenTeamMemberDetail('${tm.id}')">${pmEsc(tm.name)}</div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:2px">${pmEsc(tm.firm_name||'Individual')}</div>
+          ${tm.role ? `<div style="font-size:11px;color:var(--text-2);margin-top:2px">📌 ${pmEsc(tm.role)}</div>` : ''}
+          <div style="font-size:10px;color:var(--text-3);margin-top:6px;padding-top:6px;border-top:1px solid var(--border-2)">Documents: ${docStatus || 'None'}</div>
+          <div style="display:flex;gap:6px;margin-top:6px">
+            <button class="pm-ic" onclick="pmOpenTeamMemberDetail('${tm.id}')">✎</button>
+            <button class="pm-ic" onclick="pmDeleteTeamMember('${tm.id}')">✕</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`}
+  </div>`;
+}
+
+async function pmOpenTeamMemberForm(teamMemberId){
+  const tm = teamMemberId ? pmTeamMember(teamMemberId) : {};
+  const sel = 'font-size:12px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
+  
+  pmModal(`<div style="margin-bottom:20px"><div class="sheet-title" style="margin-bottom:12px">${teamMemberId ? '✎ Edit Team Member' : '➕ Add Team Member'}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <input id="tm-name" style="${sel}" placeholder="Name" value="${pmEsc(tm.name||'')}" onkeydown="if(event.key==='Enter') pmSaveTeamMember()">
+      <input id="tm-firm" style="${sel}" placeholder="Firm/Company" value="${pmEsc(tm.firm_name||'')}">
+      <input id="tm-role" style="${sel}" placeholder="Role (e.g., Architect, Client)" value="${pmEsc(tm.role||'')}">
+      <input id="tm-email" style="${sel}" placeholder="Email" value="${pmEsc(tm.email||'')}">
+      <input id="tm-phone" style="${sel}" placeholder="Phone" value="${pmEsc(tm.phone||'')}">
+      <input id="tm-website" style="${sel}" placeholder="Website" value="${pmEsc(tm.website||'')}">
+      <textarea id="tm-addr" style="${sel};grid-column:1/-1;resize:none" placeholder="Address" rows="2">${pmEsc(tm.address||'')}</textarea>
+      <textarea id="tm-poc" style="${sel};grid-column:1/-1;resize:none" placeholder="Point of Contact (name/notes)" rows="2">${pmEsc(tm.point_person||'')}</textarea>
+    </div>
+    ${teamMemberId ? `<div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-2)"><div class="pm-lbl">Documents on File</div>
+      ${['w9','workers_comp','coi'].map(dt=>{
+        const doc = pm.teamMemberDocs.find(d=>d.team_member_id===tm.id && d.doc_type===dt);
+        const labels = {w9:'W-9',workers_comp:'Workers Compensation',coi:'Certificate of Insurance'};
+        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0">
+          <input type="checkbox" id="tm-doc-${dt}" ${doc?.has_file?'checked':''} onchange="pmSaveTeamMemberDoc('${tm.id}','${dt}',this.checked)">
+          <label for="tm-doc-${dt}" style="cursor:pointer;flex:1">${labels[dt]}</label>
+          <span style="font-size:10px;color:var(--text-3)">${doc?.uploaded_at ? '✓ '+new Date(doc.uploaded_at).toLocaleDateString() : '—'}</span>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+    <div style="display:flex;gap:8px;margin-top:16px">
+      <button class="pm-btn" onclick="pmSaveTeamMember('${teamMemberId||''}')">Save</button>
+      <button class="pm-btn-alt" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
+    </div>
+  </div>`, 500);
+}
+
+async function pmOpenTeamMemberDetail(teamMemberId){
+  await pmOpenTeamMemberForm(teamMemberId);
+}
+
+async function pmSaveTeamMember(teamMemberId){
+  const name = document.getElementById('tm-name').value.trim();
+  if(!name) return alert('Name is required');
+  
+  const data = {
+    name, firm_name: document.getElementById('tm-firm').value.trim() || null,
+    role: document.getElementById('tm-role').value.trim() || null,
+    email: document.getElementById('tm-email').value.trim() || null,
+    phone: document.getElementById('tm-phone').value.trim() || null,
+    website: document.getElementById('tm-website').value.trim() || null,
+    address: document.getElementById('tm-addr').value.trim() || null,
+    point_person: document.getElementById('tm-poc').value.trim() || null,
+    updated_by: (currentUser?.email)||'',
+    updated_at: new Date().toISOString()
+  };
+  
+  try{
+    if(teamMemberId){
+      await sbFetch('PATCH', `/rest/v1/team_members?id=eq.${teamMemberId}`, data);
+    } else {
+      data.created_by = (currentUser?.email)||'';
+      data.created_at = new Date().toISOString();
+      await sbFetch('POST', '/rest/v1/team_members', data);
+    }
+    document.getElementById('pm-overlay').remove();
+    pmLoadTeamMembers();
+    pmRender();
+  }catch(e){ alert('Error saving: '+e.message); }
+}
+
+async function pmSaveTeamMemberDoc(teamMemberId, docType, hasFile){
+  try{
+    const existing = pm.teamMemberDocs.find(d=>d.team_member_id===teamMemberId && d.doc_type===docType);
+    if(existing){
+      await sbFetch('PATCH', `/rest/v1/team_member_documents?id=eq.${existing.id}`, {
+        has_file: hasFile, uploaded_at: hasFile ? new Date().toISOString() : null, updated_at: new Date().toISOString()
+      });
+    } else {
+      await sbFetch('POST', '/rest/v1/team_member_documents', {
+        team_member_id: teamMemberId, doc_type: docType, has_file: hasFile,
+        uploaded_at: hasFile ? new Date().toISOString() : null, created_by: (currentUser?.email)||''
+      });
+    }
+    pmLoadTeamMembers();
+  }catch(e){ alert('Error: '+e.message); }
+}
+
+async function pmDeleteTeamMember(teamMemberId){
+  if(!confirm('Delete this team member?')) return;
+  try{
+    await sbFetch('DELETE', `/rest/v1/team_members?id=eq.${teamMemberId}`);
+    pmLoadTeamMembers();
+    pmRender();
+  }catch(e){ alert('Error: '+e.message); }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// COORDINATION ITEMS (per project)
+// ═════════════════════════════════════════════════════════════════════════════
+
+function pmCoordinationHtml(projectId){
+  const items = pmCoordinationForProject(projectId);
+  const sel = 'font-size:12px;padding:4px 6px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  const colMap = { open: '#fef3c7', in_progress: '#dbeafe', complete: '#dcfce7' };
+  
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-weight:600;font-size:14px">📋 Coordination</div>
+      <button class="pm-btn" style="font-size:11px" onclick="pmOpenCoordinationForm('${projectId}')">➕ Add</button>
+    </div>
+    ${items.length===0 ? `<div style="color:var(--text-3);font-size:12px">No coordination items yet.</div>` : `
+    ${items.map(c=>`<div style="display:flex;gap:8px;padding:8px;background:${colMap[c.status]||'var(--surface)'};border-radius:6px;margin-bottom:6px;align-items:flex-start">
+      <input type="checkbox" ${c.status==='complete'?'checked':''} onchange="pmSaveCoordination('${c.id}',{status:this.checked?'complete':'open'})" style="margin-top:3px">
+      <div style="flex:1">
+        <div style="font-weight:500;cursor:pointer" onclick="pmOpenCoordinationForm('${projectId}','${c.id}')">${pmEsc(c.title)}</div>
+        ${c.description ? `<div style="font-size:11px;color:var(--text-2);margin-top:2px">${pmEsc(c.description)}</div>` : ''}
+        ${c.due_date ? `<div style="font-size:10px;color:var(--text-3);margin-top:2px">📅 ${c.due_date}</div>` : ''}
+      </div>
+      <button class="pm-ic" style="font-size:10px" onclick="pmDeleteCoordination('${c.id}')">✕</button>
+    </div>`).join('')}
+    `}
+  </div>`;
+}
+
+async function pmOpenCoordinationForm(projectId, coordinationId){
+  const c = coordinationId ? pm.coordinationItems.find(x=>x.id==coordinationId) : {};
+  const sel = 'font-size:12px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
+  
+  pmModal(`<div style="margin-bottom:16px"><div class="sheet-title" style="margin-bottom:12px">${coordinationId ? '✎ Edit Coordination' : '➕ Add Coordination Item'}</div>
+    <input id="ci-title" style="${sel};margin-bottom:8px" placeholder="Task (e.g., Send proposal to architect)" value="${pmEsc(c.title||'')}">
+    <textarea id="ci-desc" style="${sel};margin-bottom:8px;resize:none" placeholder="Description or notes" rows="2">${pmEsc(c.description||'')}</textarea>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <input type="date" id="ci-due" style="${sel}" value="${pmEsc(c.due_date||'')}">
+      <select id="ci-pri" style="${sel}">
+        <option value="low" ${c.priority==='low'?'selected':''}>Low Priority</option>
+        <option value="medium" ${c.priority==='medium'?'selected':''}>Medium Priority</option>
+        <option value="high" ${c.priority==='high'?'selected':''}>High Priority</option>
+      </select>
+    </div>
+    <select id="ci-contact" style="${sel};margin-bottom:8px">
+      <option value="">—— No specific contact ——</option>
+      ${pmTeamMembersForProject(projectId).map(tm=>`<option value="${tm.id}" ${c.contact_person_id==tm.id?'selected':''}>${pmEsc(tm.name)}</option>`).join('')}
+    </select>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="pm-btn" onclick="pmSaveCoordination('${coordinationId||''}','${projectId}')">Save</button>
+      <button class="pm-btn-alt" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
+    </div>
+  </div>`, 450);
+}
+
+async function pmSaveCoordination(coordinationId, projectId){
+  if(typeof projectId !== 'string'){
+    // Called from checkbox with just status update
+    const data = projectId; // it's the data object
+    try{
+      await sbFetch('PATCH', `/rest/v1/coordination_items?id=eq.${coordinationId}`, {
+        ...data, completed_at: data.status==='complete'?new Date().toISOString():null, updated_at: new Date().toISOString()
+      });
+      pmLoadCoordinationItems();
+      pmRender();
+    }catch(e){ alert('Error: '+e.message); }
+    return;
+  }
+  
+  const title = document.getElementById('ci-title').value.trim();
+  if(!title) return alert('Task is required');
+  
+  const data = {
+    project_id: projectId,
+    title, description: document.getElementById('ci-desc').value.trim() || null,
+    due_date: document.getElementById('ci-due').value || null,
+    priority: document.getElementById('ci-pri').value,
+    contact_person_id: document.getElementById('ci-contact').value ? parseInt(document.getElementById('ci-contact').value) : null,
+    updated_by: (currentUser?.email)||'',
+    updated_at: new Date().toISOString()
+  };
+  
+  try{
+    if(coordinationId){
+      await sbFetch('PATCH', `/rest/v1/coordination_items?id=eq.${coordinationId}`, data);
+    } else {
+      data.created_by = (currentUser?.email)||'';
+      data.created_at = new Date().toISOString();
+      await sbFetch('POST', '/rest/v1/coordination_items', data);
+    }
+    document.getElementById('pm-overlay').remove();
+    pmLoadCoordinationItems();
+    pmRender();
+  }catch(e){ alert('Error: '+e.message); }
+}
+
+async function pmDeleteCoordination(coordinationId){
+  if(!confirm('Delete this coordination item?')) return;
+  try{
+    await sbFetch('DELETE', `/rest/v1/coordination_items?id=eq.${coordinationId}`);
+    pmLoadCoordinationItems();
+    pmRender();
+  }catch(e){ alert('Error: '+e.message); }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// DESIGN DELIVERABLES WITH BILLING (per project)
+// ═════════════════════════════════════════════════════════════════════════════
+
+function pmDesignHtml(projectId){
+  const items = pmDesignForProject(projectId);
+  const sel = 'font-size:12px;padding:4px 6px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit';
+  const colMap = { not_started: '#f3f4f6', in_progress: '#dbeafe', complete: '#dcfce7', billed: '#d1fae5' };
+  const labels = { not_started: 'Not Started', in_progress: 'In Progress', complete: 'Complete', billed: '✓ Billed' };
+  const totalBilling = items.reduce((s,d)=>s+(parseFloat(d.billing_amount)||0),0);
+  const billedTotal = items.filter(d=>d.status==='billed').reduce((s,d)=>s+(parseFloat(d.billing_amount)||0),0);
+  
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-weight:600;font-size:14px">🎨 Design & Billing</div>
+      <button class="pm-btn" style="font-size:11px" onclick="pmOpenDesignForm('${projectId}')">➕ Add Deliverable</button>
+    </div>
+    <div style="display:flex;gap:12px;padding:8px;background:var(--surface);border-radius:6px;margin-bottom:12px;font-size:12px">
+      <div>Total Value: <span style="font-weight:600">$${totalBilling.toFixed(2)}</span></div>
+      <div>Billed: <span style="font-weight:600">$${billedTotal.toFixed(2)}</span></div>
+      <div>Outstanding: <span style="font-weight:600">$${(totalBilling-billedTotal).toFixed(2)}</span></div>
+    </div>
+    ${items.length===0 ? `<div style="color:var(--text-3);font-size:12px">No deliverables yet.</div>` : `
+    ${items.map(d=>`<div style="display:flex;gap:8px;padding:8px;background:${colMap[d.status]||'var(--surface)'};border-radius:6px;margin-bottom:6px;align-items:flex-start">
+      <div style="flex:1">
+        <div style="font-weight:500;cursor:pointer" onclick="pmOpenDesignForm('${projectId}','${d.id}')">${pmEsc(d.title)}</div>
+        ${d.description ? `<div style="font-size:11px;color:var(--text-2);margin-top:2px">${pmEsc(d.description)}</div>` : ''}
+        <div style="font-size:11px;color:var(--text-3);margin-top:4px;display:flex;gap:12px">
+          <span>💰 $${parseFloat(d.billing_amount||0).toFixed(2)}</span>
+          ${d.due_date ? `<span>📅 ${d.due_date}</span>` : ''}
+          <span>${labels[d.status]||d.status}</span>
+        </div>
+      </div>
+      <select style="${sel};width:120px;font-size:11px" value="${d.status}" onchange="pmSaveDesign('${d.id}',{status:this.value})">
+        <option value="not_started">Not Started</option>
+        <option value="in_progress">In Progress</option>
+        <option value="complete">Complete</option>
+        <option value="billed">✓ Billed</option>
+      </select>
+      <button class="pm-ic" style="font-size:10px" onclick="pmDeleteDesign('${d.id}')">✕</button>
+    </div>`).join('')}
+    `}
+  </div>`;
+}
+
+async function pmOpenDesignForm(projectId, designId){
+  const d = designId ? pm.designDeliverables.find(x=>x.id==designId) : {};
+  const sel = 'font-size:12px;padding:6px 8px;border:1px solid var(--border-2);border-radius:6px;background:var(--bg);color:var(--text);font-family:inherit;width:100%;box-sizing:border-box';
+  
+  pmModal(`<div style="margin-bottom:16px"><div class="sheet-title" style="margin-bottom:12px">${designId ? '✎ Edit Deliverable' : '➕ Add Design Deliverable'}</div>
+    <input id="dd-title" style="${sel};margin-bottom:8px" placeholder="Deliverable (e.g., Concept Design)" value="${pmEsc(d.title||'')}">
+    <textarea id="dd-desc" style="${sel};margin-bottom:8px;resize:none" placeholder="Description" rows="2">${pmEsc(d.description||'')}</textarea>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <input type="number" id="dd-amt" step="0.01" style="${sel}" placeholder="Billing Amount ($)" value="${d.billing_amount||''}">
+      <input type="date" id="dd-due" style="${sel}" value="${pmEsc(d.due_date||'')}">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="pm-btn" onclick="pmSaveDesign('${designId||''}','${projectId}')">Save</button>
+      <button class="pm-btn-alt" onclick="document.getElementById('pm-overlay').remove()">Cancel</button>
+    </div>
+  </div>`, 450);
+}
+
+async function pmSaveDesign(designId, projectId){
+  if(typeof projectId !== 'string'){
+    // Called from dropdown with just status update
+    const data = projectId; // it's the data object
+    try{
+      await sbFetch('PATCH', `/rest/v1/design_deliverables?id=eq.${designId}`, {
+        ...data, billed_date: data.status==='billed'?new Date().toISOString():null, updated_at: new Date().toISOString()
+      });
+      pmLoadDesignDeliverables();
+      pmRender();
+    }catch(e){ alert('Error: '+e.message); }
+    return;
+  }
+  
+  const title = document.getElementById('dd-title').value.trim();
+  if(!title) return alert('Title is required');
+  const amt = parseFloat(document.getElementById('dd-amt').value);
+  if(isNaN(amt) || amt<0) return alert('Enter a valid billing amount');
+  
+  const data = {
+    project_id: projectId,
+    title, description: document.getElementById('dd-desc').value.trim() || null,
+    billing_amount: amt, due_date: document.getElementById('dd-due').value || null,
+    updated_by: (currentUser?.email)||'',
+    updated_at: new Date().toISOString()
+  };
+  
+  try{
+    if(designId){
+      await sbFetch('PATCH', `/rest/v1/design_deliverables?id=eq.${designId}`, data);
+    } else {
+      data.created_by = (currentUser?.email)||'';
+      data.created_at = new Date().toISOString();
+      await sbFetch('POST', '/rest/v1/design_deliverables', data);
+    }
+    document.getElementById('pm-overlay').remove();
+    pmLoadDesignDeliverables();
+    pmRender();
+  }catch(e){ alert('Error: '+e.message); }
+}
+
+async function pmDeleteDesign(designId){
+  if(!confirm('Delete this deliverable?')) return;
+  try{
+    await sbFetch('DELETE', `/rest/v1/design_deliverables?id=eq.${designId}`);
+    pmLoadDesignDeliverables();
+    pmRender();
+  }catch(e){ alert('Error: '+e.message); }
+}
+
 function pmProjectsHtml(){
   const list = pm.projects.filter(p=>pm.projFilter==='All' || (pm.projFilter==='Active' ? p.status!=='Complete' : p.status===pm.projFilter));
   const group = (kind,label)=>{
@@ -5206,6 +5594,8 @@ function pmWorkspaceHtml(p){
       ${pmQs(p.id).filter(q=>pmQOpen(q)).length?`<span style="color:#1d4ed8;cursor:pointer" onclick="pmOpenQuestions('${p.id}')">❓ <b>${pmQs(p.id).filter(q=>pmQOpen(q)).length}</b> open question${pmQs(p.id).filter(q=>pmQOpen(q)).length===1?'':'s'}</span>`:''}
     </div>
   </div>
+  ${pmCoordinationHtml(p.id)}
+  ${pmDesignHtml(p.id)}
   <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;align-items:center">
     <button class="pm-btn primary" onclick="pmEditItem(null,{project_id:'${p.id}',parent_id:null,type:'phase'})">+ Phase</button>
     <button class="pm-btn" onclick="pmAddFromTemplate('${p.id}')">+ Phases from a template</button>

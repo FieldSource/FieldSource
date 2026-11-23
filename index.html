@@ -3056,7 +3056,7 @@ function renderPTOBalancesPanel() {
         const isSelected = ptoFilterPerson === balance.person;
         
         return `
-          <div style="background:var(--surface);border:2px solid ${isSelected?'#3b82f6':'var(--border)'};border-radius:8px;padding:12px;cursor:pointer;transition:all 0.2s" onclick="ptoFilterPerson==='${balance.person}'?ptoFilterPerson=null:ptoFilterPerson='${balance.person}';renderTimeOff()" title="Click to filter time off">
+          <div style="background:var(--surface);border:2px solid ${isSelected?'#3b82f6':'var(--border)'};border-radius:8px;padding:12px;cursor:pointer;transition:all 0.2s" onclick="togglePTOFilter('${balance.person}')" title="Click to filter time off">
             <div style="font-weight:600;margin-bottom:8px">${balance.person}${isSelected?' ✓':''}</div>
             <div style="display:flex;justify-content:space-between;margin-bottom:8px">
               <div style="font-size:13px;color:var(--text-3)">Total Available</div>
@@ -3082,10 +3082,16 @@ function renderPTOBalancesPanel() {
     </div>
   `;
 }
+function showPTOBalances() {
   const content = document.getElementById('pto-balances-content');
   if (content) {
     content.innerHTML = renderPTOBalancesPanel();
   }
+}
+
+function togglePTOFilter(person) {
+  ptoFilterPerson = (ptoFilterPerson === person) ? null : person;
+  renderTimeOff();
 }
 
 async function processYearEndPTORollover(year) {

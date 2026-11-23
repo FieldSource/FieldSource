@@ -16160,8 +16160,7 @@ setInterval(()=>{ if(currentUser && typeof canBillInvoices==='function' && canBi
 setInterval(()=>{ if(currentUser && TO_NOTIFY_RULES[(currentUser.email||'').toLowerCase()] && typeof loadTimeOff==='function') loadTimeOff().then(updateTimeOffBadge).catch(()=>{}); }, 120000);
 
 let toSummaryYear = null;   // null = the current year
-async function renderTimeOff(){
-  await loadPTOBalances(); // Load PTO data before rendering
+function renderTimeOff(){
   const today = isoDate(new Date());
   const TO_ADMIN_EMAILS = ['jake@fieldsourceohio.com','ryan@fieldsourceohio.com','matt@fieldsourceohio.com'];
   const canApprove = TO_ADMIN_EMAILS.includes((currentUser&&currentUser.email||'').toLowerCase());
@@ -16743,7 +16742,7 @@ async function doLogin(){
     currentUser = data.user;
     currentToken = data.access_token;
     refreshToken = data.refresh_token;
-    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); if(typeof RECEIPTS_ENABLED!=='undefined' && RECEIPTS_ENABLED && typeof canReviewReceipts==='function' && canReviewReceipts()) loadReceipts(false).then(()=>{ receiptsLoaded = true; updateApprovalBell(); }); });
+    isAdmin = ADMIN_EMAILS.includes(currentUser.email.toLowerCase()); loadServiceList(); loadClientList(); loadCostCategories(); loadWeekViewDefault(); loadPTOBalances().then(()=>{ loadBillRequests().then(()=>{ updateApprovalBell(true); setTimeout(()=>runRecurringBillRequests(), 4000); if(typeof canBillInvoices==='function' && canBillInvoices()) loadVendors().then(()=>updateApprovalBell()); if(typeof RECEIPTS_ENABLED!=='undefined' && RECEIPTS_ENABLED && typeof canReviewReceipts==='function' && canReviewReceipts()) loadReceipts(false).then(()=>{ receiptsLoaded = true; updateApprovalBell(); }); }); });
     isScheduler = isAdmin || SCHEDULER_EMAILS.includes(currentUser.email.toLowerCase());
     isReportOnly = !isScheduler && REPORT_ONLY_EMAILS.includes(currentUser.email.toLowerCase());
     localStorage.setItem('fs_token', currentToken);

@@ -4130,12 +4130,12 @@ function pmOpenDrawings(projectId){
       <div onclick="pm._dwOpen.${kind}=!pm._dwOpen.${kind};pmOpenDrawings('${projectId}')" style="cursor:pointer;padding:9px 12px;background:var(--surface);display:flex;gap:8px;align-items:center;font-weight:600;border-radius:8px">
         <span style="color:var(--text-3)">${open?'▾':'▸'}</span>${icon} ${label} <span style="font-weight:400;font-size:12px;color:var(--text-3)">${rows.length?`${done}/${rows.length} complete`:'none yet'}</span></div>
       ${open?`<div data-dnd-group="dw-${kind}">${kind==='detail' ? Object.entries(rowsByCategory).map(([cat, catRows])=>`<div style="margin-top:8px"><div style="font-size:11px;font-weight:600;color:var(--text-2);padding:4px 10px;text-transform:uppercase">${pmEsc(cat)}</div>${catRows.map(renderRow).join('')}</div>`).join('') : rows.map(renderRow).join('')}</div>`:''}
-        <div style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border);align-items:center;flex-wrap:wrap">
-          ${kind==='sheet'?`<input id="pmdw-num-${kind}" style="${sel};width:70px" placeholder="Sheet #">`:''}
-          ${kind==='detail'?`<select id="pmdw-cat-${kind}" style="${sel};min-width:160px"><option value="">Select category…</option>${SITE_DETAIL_CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>`:''}
-          <input id="pmdw-title-${kind}" style="${sel};flex:1;min-width:160px;font-size:13px" placeholder="${kind==='sheet'?'Add a sheet (e.g. Grading plan)… Enter':'Add a site detail (e.g. Concrete profile)… Enter'}" onkeydown="if(event.key==='Enter'){event.preventDefault();pmDwAdd('${projectId}','${kind}');}">
-          <button class="pm-btn" style="font-size:12px" onclick="pmDwAdd('${projectId}','${kind}')">Add</button>
-          <button class="pm-btn" style="font-size:12px" onclick="pmDwPaste('${projectId}','${kind}')" title="Paste a list, one per line">Paste a list</button></div></div>`:''}
+      <div style="display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border);align-items:center;flex-wrap:wrap">
+        ${kind==='sheet'?`<input id="pmdw-num-${kind}" style="${sel};width:70px" placeholder="Sheet #">`:''}
+        ${kind==='detail'?`<select id="pmdw-cat-${kind}" style="${sel};min-width:160px"><option value="">Select category…</option>${SITE_DETAIL_CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>`:''}
+        <input id="pmdw-title-${kind}" style="${sel};flex:1;min-width:160px;font-size:13px" placeholder="${kind==='sheet'?'Add a sheet (e.g. Grading plan)… Enter':'Add a site detail (e.g. Concrete profile)… Enter'}" onkeydown="if(event.key==='Enter'){event.preventDefault();pmDwAdd('${projectId}','${kind}');}">
+        <button class="pm-btn" style="font-size:12px" onclick="pmDwAdd('${projectId}','${kind}')">Add</button>
+        <button class="pm-btn" style="font-size:12px" onclick="pmDwPaste('${projectId}','${kind}')" title="Paste a list, one per line">Paste a list</button></div>
     </div>`; };
   pmModal(`<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
       <div><div class="sheet-title" style="margin-bottom:2px">🗂 Drawing set</div><div style="font-size:12px;color:var(--text-3)">${pmEsc(p.name)} · the sheet index and site details, separate from phases and tasks</div></div>
